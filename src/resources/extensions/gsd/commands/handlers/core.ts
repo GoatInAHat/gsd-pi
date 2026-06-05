@@ -18,6 +18,14 @@ import { getVisualBriefOutputDir } from "../../../visual-brief/artifact-policy.j
 import { buildVisualBriefPrompt, parseVisualBriefArgs, VISUAL_BRIEF_USAGE } from "../../../visual-brief/prompts.js";
 import { GSD_CORE_IMPLEMENTED_CATALOG } from "../../commands-gsd-core.js";
 import { GSD_CORE_ALIAS_CATALOG } from "../gsd-core-aliases.js";
+import {
+  buildGsdPlannerLaunchPlan,
+  formatGsdPlannerLaunchTarget,
+  formatPlannerLaunchUnavailable,
+  LEGACY_GSD_PLANNER_COMMAND,
+  launchGsdPlanner,
+  markPlannerHandoffOffered,
+} from "../../planner-handoff.js";
 
 export function showHelp(ctx: ExtensionCommandContext, args = ""): void {
   const summaryLines = [
@@ -33,6 +41,7 @@ export function showHelp(ctx: ExtensionCommandContext, args = ""): void {
     `  /gsd status         Status dashboard  (${formattedShortcutPair("dashboard")})`,
     `  /gsd parallel watch Parallel monitor  (${formattedShortcutPair("parallel")})`,
     `  /gsd notifications  Notification history  (${formattedShortcutPair("notifications")})`,
+    "  /gsd planner        Open Planner to review the current plan",
     "  /gsd visualize      Workflow visualizer",
     "  /gsd report         Generate all HTML reports and open browser",
     "  /gsd brief <mode>   Visual HTML brief (diagram, plan, diff, recap, table, slides)",
@@ -81,6 +90,7 @@ export function showHelp(ctx: ExtensionCommandContext, args = ""): void {
     "  /gsd stop           Stop auto-mode gracefully",
     "  /gsd pause          Pause auto-mode (preserves state, /gsd auto to resume)",
     "  /gsd discuss        Start guided milestone/slice discussion",
+    "  /gsd planner        Open Planner to customize a planned milestone before implementation",
     "  /gsd new-milestone  Create milestone from headless context (used by gsd headless)",
     "  /gsd new-project    Bootstrap a new project (use --deep for staged project-level discovery)",
     "  /gsd quick          Execute a quick task without full planning overhead",
@@ -92,6 +102,7 @@ export function showHelp(ctx: ExtensionCommandContext, args = ""): void {
     "VISIBILITY",
     `  /gsd status         Status dashboard  (${formattedShortcutPair("dashboard")})`,
     `  /gsd parallel watch Open parallel worker monitor  (${formattedShortcutPair("parallel")})`,
+    "  /gsd planner        Open Planner for plan review/customization  [Mxxx] [--dry-run]",
     "  /gsd widget         Cycle status widget  [full|small|min|off]",
     "  /gsd visualize      Workflow visualizer (progress, timeline, deps, metrics, health, agent, changes, knowledge, captures, export)",
     "  /gsd brief <mode>   Generate a visual HTML brief  [diagram|plan|diff|recap|table|slides] [topic] [--slides]",
@@ -504,6 +515,101 @@ async function handleModel(
 
   const pinNote = pinSession ? "" : " (default updated; per-phase prefs still apply in auto)";
   ctx.ui.notify(`Model: ${targetModel.provider}/${targetModel.id}${pinNote}`, "info");
+}
+
+const PLANNER_MILESTONE_RE = /^M\d+(?:-[a-z0-9]{6})?$/i;
+
+function normalizePlannerMilestone(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed && PLANNER_MILESTONE_RE.test(trimmed) ? trimmed.toUpperCase() : null;
+}
+
+function plannerArgValue(parts: string[], idx: number): string | undefined {
+  const value = parts[idx + 1];
+  return value && !value.startsWith("--") ? value : undefined;
+}
+
+function parsePlannerArgs(args: string): { dryRun: boolean; milestoneId: string | null } {
+  const parts = args.trim().split(/\s+/).filter(Boolean);
+  let dryRun = false;
+  let milestoneId: string | null = null;
+
+  for (let idx = 0; idx < parts.length; idx++) {
+    const part = parts[idx];
+    if (!part) continue;
+    if (idx === 0 && part === LEGACY_GSD_PLANNER_COMMAND) {
+      continue;
+    }
+    if (part === "--dry-run") {
+      dryRun = true;
+      continue;
+    }
+    if (part === "--project") {
+      if (plannerArgValue(parts, idx)) idx++;
+      continue;
+    }
+    if (part.startsWith("--project=")) {
+      continue;
+    }
+    if (part === "--milestone") {
+      const value = plannerArgValue(parts, idx);
+      const parsedMilestoneId = normalizePlannerMilestone(value);
+      if (!milestoneId && parsedMilestoneId) milestoneId = parsedMilestoneId;
+      if (value) idx++;
+      continue;
+    }
+    if (part.startsWith("--milestone=")) {
+      const parsedMilestoneId = normalizePlannerMilestone(part.slice("--milestone=".length));
+      if (!milestoneId && parsedMilestoneId) milestoneId = parsedMilestoneId;
+      continue;
+    }
+    const parsedMilestoneId = normalizePlannerMilestone(part);
+    if (!milestoneId && parsedMilestoneId) {
+      milestoneId = parsedMilestoneId;
+      continue;
+    }
+  }
+
+  return { dryRun, milestoneId };
+}
+
+async function handlePlanner(args: string, ctx: ExtensionCommandContext): Promise<void> {
+  const basePath = projectRoot();
+  const parsed = parsePlannerArgs(args);
+  let milestoneId = parsed.milestoneId;
+  if (!milestoneId) {
+    const state = await deriveState(basePath);
+    milestoneId = state.activeMilestone?.id ?? null;
+  }
+  const plan = buildGsdPlannerLaunchPlan({
+    basePath,
+    milestoneId,
+  });
+
+  if (parsed.dryRun) {
+    ctx.ui.notify(formatGsdPlannerLaunchTarget(plan), "info");
+    return;
+  }
+
+  const result = await launchGsdPlanner({
+    basePath,
+    milestoneId,
+  });
+
+  if (result.status === "failed") {
+    ctx.ui.notify(formatPlannerLaunchUnavailable(result.plan, result.error), "warning");
+    return;
+  }
+
+  if (milestoneId) {
+    markPlannerHandoffOffered(basePath, milestoneId, "command");
+  }
+  ctx.ui.notify(
+    milestoneId
+      ? `Opened Planner for ${milestoneId}. Run /gsd auto when you are ready to continue.`
+      : "Opened Planner. Run /gsd auto when you are ready to continue.",
+    "info",
+  );
 }
 
 export async function handleCoreCommand(

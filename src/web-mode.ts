@@ -46,6 +46,8 @@ export interface WebModeLaunchOptions {
   packageRoot?: string
   host?: string
   port?: number
+  /** Initial browser path to open after the local web host is ready. */
+  initialPath?: string
   /** Additional allowed origins for CORS (forwarded as GSD_WEB_ALLOWED_ORIGINS). */
   allowedOrigins?: string[]
   /** Disable web bearer-token auth for externally protected deployments. */
@@ -407,6 +409,24 @@ function isLoopbackHost(host: string): boolean {
   return h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '[::1]' || (isIP(h) === 4 && h.startsWith('127.'))
 }
 
+export function normalizeWebInitialPath(initialPath?: string): string {
+  const trimmed = initialPath?.trim()
+  if (!trimmed) return '/'
+
+  const path = trimmed.startsWith('/') ? trimmed : `/${trimmed}`
+  try {
+    const parsed = new URL(path, 'http://local.gsd')
+    if (parsed.origin !== 'http://local.gsd') return '/'
+    return `${parsed.pathname}${parsed.search}`
+  } catch {
+    return '/'
+  }
+}
+
+export function buildAuthenticatedWebUrl(baseUrl: string, authToken: string, initialPath?: string): string {
+  return `${baseUrl}${normalizeWebInitialPath(initialPath)}#token=${authToken}`
+}
+
 function buildSpawnSpec(
   resolution: ResolvedWebHostBootstrap,
   host: string,
@@ -676,6 +696,9 @@ export async function launchWebMode(
   const port = options.port ?? await (deps.resolvePort ?? reserveWebPort)(host)
   const authToken = noAuth ? null : randomBytes(32).toString('hex')
   const url = `http://${host}:${port}`
+  const browserUrl = authToken
+    ? buildAuthenticatedWebUrl(url, authToken, options.initialPath)
+    : `${url}${normalizeWebInitialPath(options.initialPath)}`
   const env: NodeJS.ProcessEnv = {
     ...baseEnv,
     HOSTNAME: host,
@@ -849,7 +872,6 @@ export async function launchWebMode(
       // Register in multi-instance registry
       registerInstance(options.cwd, { pid, port, url }, deps.registryPath)
     }
-    const browserUrl = authToken ? `${url}/#token=${authToken}` : url
     try {
       ;(deps.openBrowser ?? openBrowser)(browserUrl)
     } catch (browserError) {
@@ -873,7 +895,7 @@ export async function launchWebMode(
     return failure
   }
 
-  const readyUrl = authToken ? `${url}/#token=${authToken}` : url
+  const readyUrl = browserUrl
   const success: WebModeLaunchSuccess = {
     mode: 'web',
     ok: true,
