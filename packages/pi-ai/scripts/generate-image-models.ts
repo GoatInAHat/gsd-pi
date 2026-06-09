@@ -119,6 +119,15 @@ ${providerEntries}
 
 async function main(): Promise<void> {
 	const models = await fetchOpenRouterImageModels();
+	if (models.length === 0) {
+		console.error(
+			"OpenRouter image-models fetch returned no models; refusing to overwrite src/image-models.generated.ts.",
+		);
+		console.error(
+			"Retry when network is available, or build with the committed catalog (skip generate-image-models).",
+		);
+		process.exit(1);
+	}
 	const output = generateImageModelsFile(models);
 	const outputPath = join(packageRoot, "src", "image-models.generated.ts");
 	writeFileSync(outputPath, output, "utf-8");
