@@ -29,7 +29,9 @@ interface OpenRouterModelRecord {
 async function fetchOpenRouterImageModels(): Promise<ImagesModel<"openrouter-images">[]> {
 	try {
 		console.log("Fetching image models from OpenRouter API...");
-		const response = await fetch(`${OPENROUTER_BASE_URL}/models?output_modalities=image`);
+		const url =
+			process.env["OPENROUTER_MODELS_URL"] ?? `${OPENROUTER_BASE_URL}/models?output_modalities=image`;
+		const response = await fetch(url);
 		const data = (await response.json()) as { data?: OpenRouterModelRecord[] };
 		const models: ImagesModel<"openrouter-images">[] = [];
 
@@ -76,7 +78,7 @@ async function fetchOpenRouterImageModels(): Promise<ImagesModel<"openrouter-ima
 	}
 }
 
-function generateImageModelsFile(models: ImagesModel<"openrouter-images">[]): string {
+export function generateImageModelsFile(models: ImagesModel<"openrouter-images">[]): string {
 	const imageModelsByProvider = {
 		openrouter: Object.fromEntries(
 			models
@@ -134,7 +136,9 @@ async function main(): Promise<void> {
 	console.log(`Generated ${outputPath}`);
 }
 
-main().catch((error) => {
-	console.error(error);
-	process.exit(1);
-});
+if (process.argv[1] === __filename) {
+	main().catch((error) => {
+		console.error(error);
+		process.exit(1);
+	});
+}
