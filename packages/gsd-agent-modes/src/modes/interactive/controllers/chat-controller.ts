@@ -170,10 +170,8 @@ const HANDOFF_WAIT_RESTATE_RE =
 
 function isHandoffWaitRestatement(next: string): boolean {
 	if (!HANDOFF_WAIT_RESTATE_RE.test(next)) return false;
-	// Keep follow-ups that add a new substantive question, not just a wait ack.
-	if (/\?/.test(next) && !/\b(?:holding|waiting|no\s+need\s+for\s+anything\s+else|until\s+you)\b/i.test(next)) {
-		return false;
-	}
+	// Any question mark means the text may be adding a new substantive question; keep it.
+	if (/\?/.test(next)) return false;
 	return true;
 }
 
@@ -310,6 +308,12 @@ function shouldSuppressRedundantHandoffText(
 ): boolean {
 	const next = currentText.trim();
 	if (!next) return false;
+
+	// Text identical to an already-rendered orphaned sub-turn must not re-appear
+	// when message_end restores it as a new content block.
+	if (orphaned.some((seg) => seg.kind === "text-run" && (seg.cachedText ?? "").trim() === next)) {
+		return true;
+	}
 
 	const priorInline = latestPriorUserFacingText(orphaned, rendered);
 	if (priorInline && isRedundantDiscussRestatement(priorInline, next)) {
