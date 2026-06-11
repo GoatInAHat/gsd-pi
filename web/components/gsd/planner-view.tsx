@@ -222,6 +222,8 @@ export function PlannerView() {
     setDocStates((current) => {
       const next = { ...current }
       for (const entry of loaded) {
+        const existing = current[entry.key]
+        if (existing && !existing.loading && existing.content !== existing.savedContent) continue
         next[entry.key] = entry.state
       }
       return next
@@ -255,7 +257,7 @@ export function PlannerView() {
   const saveDocument = useCallback(async (doc: PlannerDocDescriptor) => {
     if (!projectCwd) return
     const state = docStates[doc.key]
-    if (!state || state.loading) return
+    if (!state || state.loading || state.saving) return
 
     setDocStates((current) => ({
       ...current,

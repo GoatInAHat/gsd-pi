@@ -118,7 +118,7 @@ function WorkspaceChrome() {
 
   // Restore persisted view once boot provides projectCwd
   useEffect(() => {
-    if (getInitialRouteView()) return
+    if (initialRouteViewRef.current) return
     if (viewRestored || !projectPath) return
     const restoreTimer = window.setTimeout(() => {
       try {
