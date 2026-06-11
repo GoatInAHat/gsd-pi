@@ -47,7 +47,7 @@ export const BUNDLED_SKILL_TRIGGERS: Array<{ trigger: string; skill: string }> =
   { trigger: "TDD - red-green-refactor vertical slices, never refactor while red, tests survive refactors", skill: "tdd" },
   { trigger: "Draft a milestone brief (M###-CONTEXT.md) or PRD from current conversation context", skill: "write-milestone-brief" },
   { trigger: "Break a plan into vertical-slice roadmap slices (M###-ROADMAP.md) or GitHub issues with dependency ordering", skill: "decompose-into-slices" },
-  { trigger: "Package spike findings into a reusable project-local skill at .claude/skills/", skill: "spike-wrap-up" },
+  { trigger: "Package spike findings into a reusable project-local skill at .agents/skills/", skill: "spike-wrap-up" },
   { trigger: "Block completion claims until verification evidence has been produced in this message", skill: "verify-before-complete" },
   { trigger: "Create a Model Context Protocol (MCP) server — tool design, error handling, Inspector testing, evals", skill: "create-mcp-server" },
   { trigger: "Write documentation, proposals, specs, RFCs, or READMEs for a fresh reader", skill: "write-docs" },
