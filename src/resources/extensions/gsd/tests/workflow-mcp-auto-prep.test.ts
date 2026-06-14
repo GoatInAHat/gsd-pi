@@ -57,31 +57,7 @@ test("prepareWorkflowMcpForProject uses the selected unit model when session pro
   assert.match(notifications.map((entry) => entry.message).join("\n"), /GSD MCP Server Prepared/);
 });
 
-test("shouldAutoPrepareWorkflowMcp stays disabled for non-Claude active provider even when claude-code is ready", () => {
-  const result = shouldAutoPrepareWorkflowMcp({
-    model: { provider: "openai", baseUrl: "https://api.openai.com" },
-    modelRegistry: {
-      getProviderAuthMode: () => "apiKey",
-      isProviderRequestReady: (provider: string) => provider === "claude-code",
-    },
-  });
-
-  assert.equal(result, false);
-});
-
-test("shouldAutoPrepareWorkflowMcp stays disabled for non-Claude active provider even when claude-code is registered", () => {
-  const result = shouldAutoPrepareWorkflowMcp({
-    model: { provider: "openai", baseUrl: "https://api.openai.com" },
-    modelRegistry: {
-      getProviderAuthMode: (provider: string) => provider === "claude-code" ? "externalCli" : "apiKey",
-      isProviderRequestReady: () => false,
-    },
-  });
-
-  assert.equal(result, false);
-});
-
-test("shouldAutoPrepareWorkflowMcp stays disabled when neither transport nor provider readiness match", () => {
+test("shouldAutoPrepareWorkflowMcp enables prep for any provider (.mcp.json useful for direct claude CLI)", () => {
   const result = shouldAutoPrepareWorkflowMcp({
     model: { provider: "openai", baseUrl: "https://api.openai.com" },
     modelRegistry: {
@@ -90,7 +66,7 @@ test("shouldAutoPrepareWorkflowMcp stays disabled when neither transport nor pro
     },
   });
 
-  assert.equal(result, false);
+  assert.equal(result, true);
 });
 
 test("prepareWorkflowMcpForProject warns with /gsd mcp init guidance when prep fails", () => {
