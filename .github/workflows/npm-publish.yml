@@ -203,6 +203,36 @@ jobs:
           echo "::error::Publish step succeeded but @opengsd/gsd-pi@${VERSION} was not installable from npm after retries. Check registry tarball propagation before continuing."
           exit 1
 
+      - name: Post @dev release to Discord
+        if: github.event.inputs.channel == 'dev'
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_CHANGELOG_WEBHOOK }}
+          PUBLISH_REF: ${{ github.event.inputs.ref || 'main' }}
+          PUBLISH_VERSION: ${{ steps.stamp.outputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "::error::DISCORD_CHANGELOG_WEBHOOK is not configured."
+            exit 1
+          fi
+          node <<'NODE' | curl -fsS -X POST "$DISCORD_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            --data @-
+          const content = [
+            `**GSD Pi v${process.env.PUBLISH_VERSION} Dev Release**`,
+            "",
+            `Published to npm as \`@opengsd/gsd-pi@${process.env.PUBLISH_VERSION}\` on the \`dev\` dist-tag from \`${process.env.PUBLISH_REF}\`.`,
+            "",
+            "`npx @opengsd/gsd-pi@dev`",
+            process.env.RUN_URL,
+          ].join("\n");
+          process.stdout.write(JSON.stringify({
+            username: "Repo Changelog",
+            content,
+            allowed_mentions: { parse: [] },
+          }));
+          NODE
+
   prerelease-verify:
     name: Verify @${{ github.event.inputs.channel == 'latest' && 'dev' || github.event.inputs.channel }} package
     needs: prerelease-publish

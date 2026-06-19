@@ -153,6 +153,29 @@ test("main package publish verifies native engine packages first", () => {
   assert.ok(prodVerifyIndex > -1 && prodVerifyIndex < prodPublishIndex);
 });
 
+test("standalone dev publish posts a Discord announcement after publish verification", () => {
+  const prereleaseSteps = workflow.jobs["prerelease-publish"].steps;
+  const prereleasePublishIndex = prereleaseSteps.findIndex(
+    (step) => step.name === prereleasePublishStep,
+  );
+  const discordPost = prereleaseSteps.find(
+    (step) => step.name === "Post @dev release to Discord",
+  );
+
+  assert.ok(discordPost, "standalone dev publish must announce to Discord");
+  assert.equal(discordPost.if, "github.event.inputs.channel == 'dev'");
+  assert.equal(
+    discordPost.env.DISCORD_WEBHOOK,
+    "${{ secrets.DISCORD_CHANGELOG_WEBHOOK }}",
+  );
+  assert.match(discordPost.run, /@opengsd\/gsd-pi@\$\{process\.env\.PUBLISH_VERSION\}/);
+  assert.match(discordPost.run, /npx @opengsd\/gsd-pi@dev/);
+  assert.ok(
+    prereleaseSteps.indexOf(discordPost) > prereleasePublishIndex,
+    "Discord announcement must run after publish/install verification",
+  );
+});
+
 test("main package publish validates tarball before publishing", () => {
   const prereleaseSteps = workflow.jobs["prerelease-publish"].steps;
   const prereleaseValidate = prereleaseSteps.find(
