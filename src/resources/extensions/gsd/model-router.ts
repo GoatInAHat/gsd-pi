@@ -558,8 +558,10 @@ export function defaultRoutingConfig(): DynamicRoutingConfig {
  *
  * Precedence (resolveModelForTier):
  *   1. configured `tier_models[tier]` (via getEligibleModels) — exact/bare match
- *   2. cheapest available model whose tier matches `tier`
- *   3. CANONICAL_TIER_MODELS[tier] as last-resort fallback
+ *   2. selected/session model when it is available and matches `tier`
+ *   3. cheapest available model whose tier matches `tier`
+ *   4. selected/session model as provider-local fallback
+ *   5. CANONICAL_TIER_MODELS[tier] as last-resort fallback
  */
 const CANONICAL_TIER_MODELS: Record<ComplexityTier, string> = {
   light: "claude-haiku-4-5",
@@ -586,9 +588,15 @@ function findModelForTier(
   routingConfig: DynamicRoutingConfig,
   availableModelIds: string[],
   crossProvider: boolean,
+  selectedModelId?: string,
 ): string | undefined {
   const eligible = getEligibleModels(tier, availableModelIds, routingConfig);
   if (eligible.length === 0) return undefined;
+
+  if (!routingConfig.tier_models?.[tier]) {
+    const selected = findAvailableSelectedModelForTier(tier, selectedModelId, eligible);
+    if (selected) return selected;
+  }
 
   if (crossProvider) {
     return eligible[0];
@@ -610,8 +618,10 @@ function findModelForTier(
  *
  * Precedence:
  *   1. configured `tier_models[tier]`, if provided and available
- *   2. tier-matching model from any provider in `availableModelIds`
- *   3. canonical Anthropic ID as a fallback only when nothing else matches
+ *   2. selected/session model when available and tier-matching
+ *   3. tier-matching model from any provider in `availableModelIds`
+ *   4. selected/session model when no tier match exists on this provider
+ *   5. canonical Anthropic ID as a fallback only when nothing else matches
  *      (or `availableModelIds` is empty, e.g., during early bootstrap)
  *
  * @param tier              The capability tier to resolve
@@ -620,6 +630,7 @@ function findModelForTier(
  *                          the model registry is genuinely unavailable)
  * @param routingConfig     Optional routing config, or legacy crossProvider boolean
  * @param crossProvider     Whether to consider models from other providers
+ * @param selectedModelId   Optional selected/session model to prefer when available
  */
 export function resolveModelForTier(
   tier: ComplexityTier,
@@ -631,12 +642,14 @@ export function resolveModelForTier(
   availableModelIds: string[],
   routingConfig?: DynamicRoutingConfig,
   crossProvider?: boolean,
+  selectedModelId?: string,
 ): string;
 export function resolveModelForTier(
   tier: ComplexityTier,
   availableModelIds: string[],
   routingConfigOrCrossProvider: DynamicRoutingConfig | boolean = defaultRoutingConfig(),
   crossProvider?: boolean,
+  selectedModelId?: string,
 ): string {
   const routingConfig = typeof routingConfigOrCrossProvider === "boolean"
     ? defaultRoutingConfig()
@@ -644,6 +657,9 @@ export function resolveModelForTier(
   const allowCrossProvider = typeof routingConfigOrCrossProvider === "boolean"
     ? routingConfigOrCrossProvider
     : crossProvider ?? routingConfig.cross_provider !== false;
+  const preferredModelId = typeof routingConfigOrCrossProvider === "boolean"
+    ? undefined
+    : selectedModelId;
 
   // No available models known — return canonical fallback
   if (availableModelIds.length === 0) {
@@ -652,9 +668,14 @@ export function resolveModelForTier(
   }
 
   // Cross-provider tier search
-  const resolved = findModelForTier(tier, routingConfig, availableModelIds, allowCrossProvider);
+  const resolved = findModelForTier(tier, routingConfig, availableModelIds, allowCrossProvider, preferredModelId);
   if (resolved) {
     return normalizeResolvedTierModelId(resolved, tier, routingConfig);
+  }
+
+  const selectedFallback = findAvailableSelectedModel(preferredModelId, availableModelIds);
+  if (selectedFallback) {
+    return selectedFallback;
   }
 
   incrementLegacyTelemetry("legacy.providerDefaultUsed");
@@ -675,6 +696,42 @@ function isModelAvailable(modelId: string, availableModelIds: string[]): boolean
   const bare = bareModelId(modelId);
   if (!bare) return false;
   return availableModelIds.some(id => bareModelId(id) === bare);
+}
+
+function findAvailableSelectedModel(
+  selectedModelId: string | undefined,
+  availableModelIds: string[],
+): string | undefined {
+  if (!selectedModelId) return undefined;
+  const selectedLower = selectedModelId.toLowerCase();
+  const exact = availableModelIds.find(id => id.toLowerCase() === selectedLower);
+  if (exact) return exact;
+
+  const slash = selectedModelId.indexOf("/");
+  const selectedBare = bareModelId(selectedModelId).toLowerCase();
+  if (!selectedBare) return undefined;
+
+  if (slash > 0) {
+    const selectedProvider = selectedModelId.slice(0, slash).toLowerCase();
+    return availableModelIds.find(id => {
+      const availableSlash = id.indexOf("/");
+      if (availableSlash <= 0) return false;
+      return id.slice(0, availableSlash).toLowerCase() === selectedProvider
+        && bareModelId(id).toLowerCase() === selectedBare;
+    });
+  }
+
+  return availableModelIds.find(id => bareModelId(id).toLowerCase() === selectedBare);
+}
+
+function findAvailableSelectedModelForTier(
+  tier: ComplexityTier,
+  selectedModelId: string | undefined,
+  availableModelIds: string[],
+): string | undefined {
+  const selected = findAvailableSelectedModel(selectedModelId, availableModelIds);
+  if (!selected) return undefined;
+  return getModelTier(selected) === tier ? selected : undefined;
 }
 
 function getModelTier(modelId: string): ComplexityTier {

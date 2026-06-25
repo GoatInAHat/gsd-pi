@@ -408,7 +408,10 @@ export function resolvePreferredModelConfig(
   basePath?: string,
   availableModelIds?: string[],
 ): PreferredModelConfig | undefined {
-  const explicitConfig = resolveModelWithFallbacksForUnit(unitType, basePath, availableModelIds);
+  const selectedModelId = autoModeStartModel
+    ? `${autoModeStartModel.provider}/${autoModeStartModel.id}`
+    : undefined;
+  const explicitConfig = resolveModelWithFallbacksForUnit(unitType, basePath, availableModelIds, selectedModelId);
   if (explicitConfig) {
     return {
       ...explicitConfig,

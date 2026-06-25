@@ -350,6 +350,22 @@ test("resolveModelForTier: picks standard-tier cross-provider model", () => {
   assert.equal(result, "gpt-4o");
 });
 
+test("resolveModelForTier: prefers selected session model when it matches the requested tier", () => {
+  const available = [
+    "zai/glm-4.5-air",
+    "zai/glm-5.1",
+    "zai/glm-5.2",
+  ];
+  const result = resolveModelForTier(
+    "standard",
+    available,
+    defaultRoutingConfig(),
+    undefined,
+    "zai/glm-5.2",
+  );
+  assert.equal(result, "zai/glm-5.2");
+});
+
 test("resolveModelForTier: picks light-tier cross-provider model", () => {
   const result = resolveModelForTier("light", ["gpt-4o", "gpt-4o-mini"]);
   assert.equal(result, "gpt-4o-mini");
@@ -379,6 +395,28 @@ test("resolveModelForTier: picks Gemini models when only Google available", () =
   assert.equal(result, "gemini-2.0-flash");
 });
 
+test("resolveModelForTier: falls back to selected session model when provider has no requested tier", () => {
+  try {
+    resetLegacyTelemetry();
+    const available = [
+      "zai/glm-4.5-air",
+      "zai/glm-5.1",
+      "zai/glm-5.2",
+    ];
+    const result = resolveModelForTier(
+      "light",
+      available,
+      defaultRoutingConfig(),
+      undefined,
+      "zai/glm-5.2",
+    );
+    assert.equal(result, "zai/glm-5.2");
+    assert.equal(getLegacyTelemetry()["legacy.providerDefaultUsed"], 0);
+  } finally {
+    resetLegacyTelemetry();
+  }
+});
+
 // ─── Behavioral: profile defaults are provider-agnostic at runtime ──────────
 
 test("resolveProfileDefaults: balanced with only OpenAI models returns OpenAI IDs", async () => {
@@ -406,6 +444,22 @@ test("resolveProfileDefaults: budget with only OpenAI models picks gpt-4o-mini f
   // standard-tier slots: planning, execution
   assert.equal(defaults.models?.planning, "gpt-4o");
   assert.equal(defaults.models?.execution, "gpt-4o");
+});
+
+test("resolveProfileDefaults: selected standard provider model wins standard slots and light fallback", async () => {
+  const { resolveProfileDefaults } = await import("../preferences-models.js");
+  const defaults = resolveProfileDefaults(
+    "balanced",
+    ["zai/glm-4.5-air", "zai/glm-5.1", "zai/glm-5.2"],
+    defaultRoutingConfig(),
+    "zai/glm-5.2",
+  );
+
+  assert.equal(defaults.models?.planning, "zai/glm-5.2");
+  assert.equal(defaults.models?.research, "zai/glm-5.2");
+  assert.equal(defaults.models?.execution, "zai/glm-5.2");
+  assert.equal(defaults.models?.completion, "zai/glm-5.2");
+  assert.equal(defaults.models?.subagent, "zai/glm-5.2");
 });
 
 test("resolveProfileDefaults: honors dynamic routing tier_models pins", async () => {
@@ -489,6 +543,40 @@ test("loadEffectiveGSDPreferences: implicit balanced (D046) resolves tiers from 
       undefined,
       "implicit balanced model defaults must not silently skip slice research",
     );
+  } finally {
+    if (oldHome === undefined) delete process.env.GSD_HOME;
+    else process.env.GSD_HOME = oldHome;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("loadEffectiveGSDPreferences: implicit balanced prefers selected session model on provider", async () => {
+  const oldHome = process.env.GSD_HOME;
+  const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const home = mkdtempSync(join(tmpdir(), "gsd-profile-selected-model-"));
+  try {
+    process.env.GSD_HOME = home;
+    writeFileSync(join(home, "PREFERENCES.md"), "---\nmode: solo\n---\n");
+    const { loadEffectiveGSDPreferencesWithRegistry } = await import("../preferences.ts");
+    const registry = {
+      getAvailable: () => [
+        { provider: "zai", id: "glm-4.5-air" },
+        { provider: "zai", id: "glm-5.1" },
+        { provider: "zai", id: "glm-5.2" },
+      ],
+    };
+    const loaded = loadEffectiveGSDPreferencesWithRegistry(
+      registry,
+      undefined,
+      "zai",
+      "zai/glm-5.2",
+    );
+    const models = loaded?.preferences.models as Record<string, string> | undefined;
+    assert.equal(models?.planning, "zai/glm-5.2");
+    assert.equal(models?.execution, "zai/glm-5.2");
+    assert.equal(models?.completion, "zai/glm-5.2");
   } finally {
     if (oldHome === undefined) delete process.env.GSD_HOME;
     else process.env.GSD_HOME = oldHome;

@@ -1017,14 +1017,24 @@ export async function bootstrapAutoSession(
   // run /login" before pausing and resetting to claude-code/claude-sonnet-4-6.
   const manualSessionOverride = getSessionModelOverride(ctx.sessionManager.getSessionId());
   const sessionProviderIsCustom = isCustomProvider(ctx.model?.provider);
+  const selectedForProfileDefaults = manualSessionOverride
+    ?? (ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined);
+  const selectedModelIdForProfileDefaults = selectedForProfileDefaults
+    ? `${selectedForProfileDefaults.provider}/${selectedForProfileDefaults.id}`
+    : undefined;
   const profileModelIds = modelIdsForProfileResolution(
     ctx.modelRegistry,
-    resolveProfileAnchorProvider(ctx.model?.provider),
+    resolveProfileAnchorProvider(ctx.model?.provider, selectedForProfileDefaults?.provider),
     resolveDisabledModelProvidersFromPreferences(),
   );
   const preferredModel = sessionProviderIsCustom
     ? null
-    : resolveDefaultSessionModel(ctx.model?.provider, base, profileModelIds);
+    : resolveDefaultSessionModel(
+        selectedForProfileDefaults?.provider ?? ctx.model?.provider,
+        base,
+        profileModelIds,
+        selectedModelIdForProfileDefaults,
+      );
   // Validate the preferred model against the live registry + provider auth so
   // an unconfigured PREFERENCES.md entry (no API key / OAuth) can't become the
   // start-model snapshot. Without this, every subsequent unit would try to
@@ -1470,6 +1480,7 @@ export async function bootstrapAutoSession(
       ctx.modelRegistry,
       base,
       resolveProfileAnchorProvider(ctx.model?.provider, startModelSnapshot?.provider),
+      startModelSnapshot ? `${startModelSnapshot.provider}/${startModelSnapshot.id}` : undefined,
     )?.preferences;
     const { shouldRunDeepProjectSetup } = await import("./auto-dispatch.js");
     const deepProjectStagePending = shouldRunDeepProjectSetup(
@@ -1826,6 +1837,7 @@ export async function bootstrapAutoSession(
       ctx.modelRegistry,
       base,
       resolveProfileAnchorProvider(ctx.model?.provider, s.autoModeStartModel?.provider),
+      s.autoModeStartModel ? `${s.autoModeStartModel.provider}/${s.autoModeStartModel.id}` : undefined,
     )?.preferences;
     const effectiveProvider = s.autoModeStartModel?.provider ?? ctx.model?.provider;
     const effectivelyEnabled = routingConfig.enabled

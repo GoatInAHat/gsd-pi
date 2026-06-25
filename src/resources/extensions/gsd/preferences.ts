@@ -220,6 +220,7 @@ export function loadEffectiveGSDPreferencesWithRegistry(
   registry: PreferencesModelRegistry | undefined,
   basePath?: string,
   anchorProvider?: string,
+  selectedModelId?: string,
 ): LoadedGSDPreferences | null {
   if (!registry) {
     return loadEffectiveGSDPreferences(basePath);
@@ -229,7 +230,7 @@ export function loadEffectiveGSDPreferencesWithRegistry(
   if (!availableModelIds) {
     return loadEffectiveGSDPreferences(basePath);
   }
-  return loadEffectiveGSDPreferences(basePath, { availableModelIds });
+  return loadEffectiveGSDPreferences(basePath, { availableModelIds, selectedModelId });
 }
 
 /**
@@ -280,7 +281,7 @@ export function loadProjectGSDPreferences(basePath?: string): LoadedGSDPreferenc
 
 export function loadEffectiveGSDPreferences(
   basePath?: string,
-  opts?: { availableModelIds?: string[] },
+  opts?: { availableModelIds?: string[]; selectedModelId?: string },
 ): LoadedGSDPreferences | null {
   const globalPreferences = loadGlobalGSDPreferences();
   const projectPreferences = loadProjectGSDPreferences(basePath);
@@ -323,6 +324,7 @@ export function loadEffectiveGSDPreferences(
       profileForDefaults,
       opts?.availableModelIds,
       result.preferences.dynamic_routing,
+      opts?.selectedModelId,
     );
     const defaultsToApply = explicitProfile
       ? profileDefaults

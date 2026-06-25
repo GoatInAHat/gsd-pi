@@ -98,8 +98,9 @@ export function resolveModelWithFallbacksForUnit(
   unitType: string,
   basePath?: string,
   availableModelIds?: string[],
+  selectedModelId?: string,
 ): ResolvedModelConfig | undefined {
-  const loadOpts = availableModelIds !== undefined ? { availableModelIds } : undefined;
+  const loadOpts = availableModelIds !== undefined ? { availableModelIds, selectedModelId } : undefined;
   const prefs = loadEffectiveGSDPreferences(basePath, loadOpts);
   const chain = phaseChainForUnit(unitType);
   if (!chain) return undefined;
@@ -197,8 +198,9 @@ export function resolveDefaultSessionModel(
   sessionProvider?: string,
   basePath?: string,
   availableModelIds?: string[],
+  selectedModelId?: string,
 ): { provider: string; id: string } | undefined {
-  const loadOpts = availableModelIds !== undefined ? { availableModelIds } : undefined;
+  const loadOpts = availableModelIds !== undefined ? { availableModelIds, selectedModelId } : undefined;
   const prefs = loadEffectiveGSDPreferences(basePath, loadOpts);
   const models = prefs?.preferences?.models;
   if (!models) return undefined;
@@ -489,6 +491,7 @@ export function resolveProfileDefaults(
   profile: TokenProfile,
   availableModelIds?: string[],
   routingConfig: DynamicRoutingConfig = defaultRoutingConfig(),
+  selectedModelId?: string,
 ): Partial<GSDPreferences> {
   // burn-max never writes model defaults — preserve user-selected models.
   // For the other three profiles, derive concrete model IDs from the tier map
@@ -496,7 +499,7 @@ export function resolveProfileDefaults(
   // omit the registry entirely, use canonical fallbacks explicitly.
   const tierMap = PROFILE_TIER_MAP[profile];
   const resolveTierModel = (tier: ComplexityTier): string => Array.isArray(availableModelIds)
-    ? resolveModelForTier(tier, availableModelIds, routingConfig)
+    ? resolveModelForTier(tier, availableModelIds, routingConfig, undefined, selectedModelId)
     : canonicalModelForTier(tier);
   const models: GSDModelConfigV2 | undefined = profile === "burn-max"
     ? undefined
