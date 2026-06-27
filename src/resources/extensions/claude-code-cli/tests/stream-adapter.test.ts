@@ -602,6 +602,22 @@ describe("stream-adapter — no transcript fabrication (#4102)", () => {
 		assert.ok(prompt.includes("Do not call native AskUserQuestion"));
 	});
 
+	test("buildPromptFromContext omits structured user input guidance when the question tool is unavailable", () => {
+		const context: Context = {
+			messages: [{ role: "user", content: "Plan the slice" } as Message],
+		};
+
+		const prompt = buildPromptFromContext(context, {
+			workflowMcpServerName: "gsd-workflow",
+			questionToolAvailable: false,
+		});
+
+		assert.ok(prompt.includes("mcp__gsd-workflow__<tool_name>"));
+		assert.ok(!prompt.includes("mcp__gsd-workflow__ask_user_questions"));
+		assert.ok(!prompt.includes("Do not call bare ask_user_questions"));
+		assert.ok(prompt.includes("ToolSearch is available only for Claude Code deferred workflow MCP hydration"));
+	});
+
 	test("buildPromptFromContext allows ToolSearch only for deferred workflow MCP hydration", () => {
 		const context: Context = {
 			messages: [{ role: "user", content: "Plan the slice" } as Message],
@@ -1704,6 +1720,72 @@ describe("stream-adapter — session persistence (#2859)", () => {
 				"workflow MCP ask_user_questions should remain enabled by default",
 			);
 		} finally {
+			process.chdir(originalCwd);
+			rmSync(emptyDir, { recursive: true, force: true });
+			restore();
+		}
+	});
+
+	test("streamViaClaudeCode does not advertise unavailable question tool for strict slice phases", async () => {
+		const originalCwd = process.cwd();
+		const emptyDir = mkdtempSync(join(tmpdir(), "claude-mcp-plan-slice-prompt-"));
+		const restore = setWorkflowMcpEnv({
+			GSD_WORKFLOW_MCP_COMMAND: "node",
+			GSD_WORKFLOW_MCP_NAME: "gsd-workflow",
+			GSD_WORKFLOW_MCP_ARGS: JSON.stringify(["packages/mcp-server/dist/cli.js"]),
+			GSD_WORKFLOW_MCP_ENV: JSON.stringify({ GSD_CLI_PATH: "/tmp/gsd" }),
+			GSD_WORKFLOW_MCP_CWD: emptyDir,
+		});
+		let capturedPrompt: string | undefined;
+		_setAutoActiveForTest(true);
+		autoSession.currentUnit = { type: "plan-slice", id: "M001/S001", startedAt: 0, workspaceRoot: emptyDir } as never;
+		try {
+			process.chdir(emptyDir);
+			const stream = streamViaClaudeCode(
+				{ id: "claude-sonnet-4-20250514" } as any,
+				{
+					systemPrompt: "UNIT: Plan Slice",
+					messages: [{ role: "user", content: "Plan the slice." } as Message],
+				},
+				{
+					cwd: emptyDir,
+					_skipWorkflowMcpPreflightForTest: true,
+					async *_sdkQueryForTest(args) {
+						assert.equal(typeof args.prompt, "string");
+						capturedPrompt = args.prompt as string;
+						yield {
+							type: "result",
+							subtype: "success",
+							uuid: "result-1",
+							session_id: "session-1",
+							duration_ms: 1,
+							duration_api_ms: 1,
+							is_error: false,
+							num_turns: 1,
+							result: "planned",
+							stop_reason: "end_turn",
+							total_cost_usd: 0,
+							usage: {
+								input_tokens: 0,
+								output_tokens: 0,
+								cache_read_input_tokens: 0,
+								cache_creation_input_tokens: 0,
+							},
+						};
+					},
+				} as any,
+			);
+
+			const message = await stream.result();
+
+			assert.deepEqual(message.content, [{ type: "text", text: "planned" }]);
+			assert.ok(capturedPrompt?.includes("mcp__gsd-workflow__<tool_name>"));
+			assert.ok(!capturedPrompt?.includes("mcp__gsd-workflow__ask_user_questions"));
+			assert.ok(!capturedPrompt?.includes("Do not call bare ask_user_questions"));
+			assert.ok(capturedPrompt?.includes("ToolSearch is available only for Claude Code deferred workflow MCP hydration"));
+		} finally {
+			autoSession.currentUnit = null;
+			_setAutoActiveForTest(false);
 			process.chdir(originalCwd);
 			rmSync(emptyDir, { recursive: true, force: true });
 			restore();
