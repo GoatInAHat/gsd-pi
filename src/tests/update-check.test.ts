@@ -276,6 +276,32 @@ test('checkForGsdBrowserUpdates treats a newer PATH browser as the current versi
   assert.equal(readUpdateCache(cachePath, GSD_BROWSER_PACKAGE_NAME)?.latestVersion, '0.2.2')
 })
 
+test('checkForGsdBrowserUpdates skips default current-version resolution when browser cache is fresh', async (t) => {
+  const tmp = mkdtempSync(join(tmpdir(), 'gsd-browser-update-'))
+  const cachePath = join(tmp, '.update-check-gsd-browser')
+  const originalPathVersion = process.env.GSD_BROWSER_PATH_VERSION
+  t.after(() => {
+    if (originalPathVersion === undefined) {
+      delete process.env.GSD_BROWSER_PATH_VERSION
+    } else {
+      process.env.GSD_BROWSER_PATH_VERSION = originalPathVersion
+    }
+    rmSync(tmp, { recursive: true, force: true })
+  });
+
+  writeUpdateCache({ lastCheck: Date.now(), latestVersion: '9.9.9' }, cachePath, GSD_BROWSER_PACKAGE_NAME)
+  process.env.GSD_BROWSER_PATH_VERSION = '0.0.1'
+  let called = false
+
+  await checkForGsdBrowserUpdates({
+    cachePath,
+    checkIntervalMs: 60 * 60 * 1000,
+    onUpdate: () => { called = true },
+  })
+
+  assert.equal(called, false, 'fresh browser cache must not force PATH version resolution')
+})
+
 test('checkForUpdates uses cache and skips fetch when checked recently', async (t) => {
   const tmp = mkdtempSync(join(tmpdir(), 'gsd-update-'))
   const cachePath = join(tmp, '.update-check')

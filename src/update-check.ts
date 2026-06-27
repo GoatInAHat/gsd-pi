@@ -240,23 +240,24 @@ function defaultRegistryUrl(packageName: string): string {
  */
 export async function checkForUpdates(options: UpdateCheckOptions = {}): Promise<void> {
   const packageName = options.packageName || GSD_PI_PACKAGE_NAME
-  const currentVersion = options.currentVersion || defaultCurrentVersion(packageName)
-  if (!currentVersion) return
-
   const cachePath = options.cachePath || defaultCachePath(packageName)
   const registryUrl = options.registryUrl || defaultRegistryUrl(packageName)
   const checkIntervalMs = options.checkIntervalMs ?? CHECK_INTERVAL_MS
   const fetchTimeoutMs = options.fetchTimeoutMs ?? FETCH_TIMEOUT_MS
   const onUpdate = options.onUpdate || printUpdateBanner
+  const providedCurrentVersion = options.currentVersion
 
   // Check cache — skip network if checked recently
   const cache = readUpdateCache(cachePath, packageName)
   if (cache && Date.now() - cache.lastCheck < checkIntervalMs) {
-    if (compareSemver(cache.latestVersion, currentVersion) > 0) {
-      onUpdate(currentVersion, cache.latestVersion, packageName)
+    if (providedCurrentVersion && compareSemver(cache.latestVersion, providedCurrentVersion) > 0) {
+      onUpdate(providedCurrentVersion, cache.latestVersion, packageName)
     }
     return
   }
+
+  const currentVersion = providedCurrentVersion || defaultCurrentVersion(packageName)
+  if (!currentVersion) return
 
   try {
     const latestVersion = await fetchLatestVersionFromRegistry(registryUrl, fetchTimeoutMs)
