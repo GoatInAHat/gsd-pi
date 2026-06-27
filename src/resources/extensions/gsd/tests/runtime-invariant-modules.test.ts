@@ -171,7 +171,7 @@ test("auto Unit tool scope allows plan-slice to reassess invalid roadmap assumpt
 });
 
 test("auto Unit tool scope allows status/read helpers named by closeout prompts", () => {
-  for (const unitType of ["plan-milestone", "validate-milestone", "complete-milestone", "reassess-roadmap"]) {
+  for (const unitType of ["plan-milestone", "validate-milestone", "complete-slice", "complete-milestone", "reassess-roadmap"]) {
     const result = shouldBlockAutoUnitToolCall(unitType, "gsd_milestone_status");
     assert.equal(result.block, false, `${unitType} should be able to call gsd_milestone_status`);
   }
