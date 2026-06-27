@@ -24,6 +24,7 @@ import {
   resetMetrics,
   getLedger,
   snapshotUnitMetrics,
+  METRICS_LEDGER_KEEP_UNITS,
 } from "../metrics.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -266,6 +267,68 @@ test("initMetrics creates ledger, snapshotUnitMetrics persists across resets", (
     const emptyUnit = snapshotUnitMetrics(mockCtx([]), "plan-slice", "M001/S01", Date.now(), "test-model");
     assert.equal(emptyUnit, null);
     assert.equal(getLedger()!.units.length, 1);
+  } finally {
+    resetMetrics();
+    rmSync(tmpBase, { recursive: true, force: true });
+  }
+});
+
+test("snapshotUnitMetrics caps an overgrown ledger on write", () => {
+  const tmpBase = mkdtempSync(join(tmpdir(), "gsd-metrics-cap-"));
+  mkdirSync(join(tmpBase, ".gsd"), { recursive: true });
+
+  try {
+    resetMetrics();
+
+    const oldUnits = Array.from({ length: METRICS_LEDGER_KEEP_UNITS + 5 }, (_, i) =>
+      makeUnit({
+        id: `M001/S01/T${String(i).padStart(4, "0")}`,
+        startedAt: 10_000 + i,
+        finishedAt: 20_000 + i,
+      }),
+    );
+    writeFileSync(
+      join(tmpBase, ".gsd", "metrics.json"),
+      JSON.stringify({ version: 1, projectStartedAt: 1700000000000, units: oldUnits }, null, 2),
+    );
+
+    initMetrics(tmpBase);
+    const unit = snapshotUnitMetrics(
+      mockCtx([
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Done" }],
+          usage: {
+            input: 1000,
+            output: 500,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 1500,
+            cost: 0.01,
+          },
+        },
+      ]),
+      "execute-task",
+      "M001/S99/T01",
+      30_000,
+      "test-model",
+    );
+
+    assert.ok(unit);
+    assert.equal(getLedger()!.units.length, METRICS_LEDGER_KEEP_UNITS);
+    const firstRetainedOldIndex = oldUnits.length + 1 - METRICS_LEDGER_KEEP_UNITS;
+
+    const diskRaw = readFileSync(join(tmpBase, ".gsd", "metrics.json"), "utf-8");
+    const diskLedger: MetricsLedger = JSON.parse(diskRaw);
+    assert.equal(diskLedger.units.length, METRICS_LEDGER_KEEP_UNITS);
+
+    const ids = diskLedger.units.map((u) => u.id);
+    assert.ok(!ids.includes("M001/S01/T0000"), "oldest unit should be pruned during the write");
+    assert.ok(
+      ids.includes(`M001/S01/T${String(firstRetainedOldIndex).padStart(4, "0")}`),
+      "most recent historical units should be retained",
+    );
+    assert.ok(ids.includes("M001/S99/T01"), "new snapshot unit should be retained");
   } finally {
     resetMetrics();
     rmSync(tmpBase, { recursive: true, force: true });
