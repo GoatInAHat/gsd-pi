@@ -2,7 +2,8 @@ import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import type { DoctorIssue } from "./doctor-types.js";
-import { isDbAvailable, _getAdapter } from "./gsd-db.js";
+import { isDbAvailable, isMemoriesFtsAvailable, _getAdapter } from "./gsd-db.js";
+import { MEMORIES_FTS_REBUILT_KEY } from "./db-memory-fts-schema.js";
 import { isAfter, latestExplicitReopenAt } from "./milestone-reopen-events.js";
 import { resolveGsdPathContract, resolveMilestoneFile } from "./paths.js";
 import { deriveState } from "./state.js";
@@ -33,6 +34,34 @@ export async function checkEngineHealth(
   try {
     if (isDbAvailable()) {
       const adapter = _getAdapter()!;
+
+      // Memory FTS can exist without the one-shot rebuild marker on upgraded DBs.
+      // In that state search quality silently degrades, so surface it in doctor.
+      try {
+        if (isMemoriesFtsAvailable(adapter)) {
+          let marker: unknown = null;
+          try {
+            marker = adapter.prepare(
+              "SELECT 1 as present FROM runtime_kv WHERE scope = 'global' AND scope_id = '' AND key = :key",
+            ).get({ ":key": MEMORIES_FTS_REBUILT_KEY });
+          } catch {
+            marker = null;
+          }
+          if (!marker) {
+            issues.push({
+              severity: "warning",
+              code: "memories_fts_desynced",
+              scope: "project",
+              unitId: "project",
+              message: "Memory FTS index exists but the rebuild marker is missing. Memory search may be desynced and degraded to the LIKE fallback until the index is rebuilt.",
+              file: ".gsd/gsd.db",
+              fixable: false,
+            });
+          }
+        }
+      } catch {
+        // Non-fatal — FTS marker check failed
+      }
 
       // a. Orphaned tasks (task.slice_id points to non-existent slice)
       try {
