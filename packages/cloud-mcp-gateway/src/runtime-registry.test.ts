@@ -176,6 +176,7 @@ test("socket close event calls onOffline callback", () => {
   socket.close();
 
   assert.deepEqual(offlineCalls, ["rt1"], "onOffline should be called on socket close");
+});
 
 test("runtime registry accepts later tool advertisements", () => {
   const registry = new RuntimeRegistry();
