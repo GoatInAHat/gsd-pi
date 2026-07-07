@@ -696,9 +696,10 @@ export async function launchWebMode(
   const port = options.port ?? await (deps.resolvePort ?? reserveWebPort)(host)
   const authToken = noAuth ? null : randomBytes(32).toString('hex')
   const url = `http://${host}:${port}`
+  const initialPath = options.initialPath?.trim() ? normalizeWebInitialPath(options.initialPath) : ''
   const browserUrl = authToken
     ? buildAuthenticatedWebUrl(url, authToken, options.initialPath)
-    : `${url}${normalizeWebInitialPath(options.initialPath)}`
+    : `${url}${initialPath}`
   const env: NodeJS.ProcessEnv = {
     ...baseEnv,
     HOSTNAME: host,
