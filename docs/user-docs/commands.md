@@ -549,17 +549,23 @@ For an auto-mode run, call `gsd_execute` first with an absolute `projectDir`. It
 
 ## Cloud MCP Gateway Runtime
 
-`gsd-cloud-mcp-gateway` starts an HTTP gateway for remote MCP clients. `gsd-daemon cloud` pairs and connects a local runtime to that gateway.
+`gsd-cloud-mcp-gateway` starts an HTTP gateway for remote MCP clients. `gsd-daemon cloud` pairs and connects a local runtime to that gateway. The gateway exposes `/mcp` for MCP clients, `/admin` for operators, and optional `/account` self-service accounts when Clerk is configured.
 
 ```bash
-GSD_CLOUD_USER_TOKEN="replace-with-a-long-random-token" gsd-cloud-mcp-gateway --port 8787
+GSD_CLOUD_USER_TOKEN="$(openssl rand -hex 32)" \
+GSD_CLOUD_ADMIN_TOKEN="$(openssl rand -hex 32)" \
+gsd-cloud-mcp-gateway \
+  --port 8787 \
+  --auth-store /secure/path/gsd-cloud-auth.json \
+  --usage-store /secure/path/gsd-cloud-usage.json
+
 gsd-daemon cloud status
 gsd-daemon cloud pair --gateway "https://gateway.example.com" --code "PAIRING_CODE" --runtime-name "Laptop"
 gsd-daemon cloud connect --verbose
 gsd-daemon cloud disconnect
 ```
 
-See [Cloud MCP Gateway](./cloud-mcp-gateway.md) for the full operator setup flow, token model, ports, and failure modes.
+See [Cloud MCP Gateway](./cloud-mcp-gateway.md) for the full operator setup flow, token model, account registration, usage quotas, runtime-advertised MCP tools, ports, and failure modes.
 
 ## In-Session Update
 
