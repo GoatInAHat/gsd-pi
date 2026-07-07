@@ -74,6 +74,7 @@
     "generate-image-models": "node scripts/generate-image-models.ts",
     "generate": "pnpm run generate-models && pnpm run generate-image-models",
     "build": "pnpm run generate && pnpm run clean && tsc -p tsconfig.json --incremental false",
+    "pretest": "pnpm run generate",
     "test": "vitest --run",
     "prepublishOnly": "pnpm run clean && pnpm run build"
   },
