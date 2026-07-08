@@ -14,6 +14,7 @@
 | `/gsd discuss` | 讨论架构和决策（需先用 `/gsd stop` 停止自动模式） |
 | `/gsd status` | 进度仪表板 |
 | `/gsd widget` | 循环切换仪表板组件：full / small / min / off |
+| `/gsd planner [MID]` | 打开 Planner，在实施前审查或自定义已规划的 milestone |
 | `/gsd queue` | 给未来 milestones 排队和重排（自动模式中也安全） |
 | `/gsd capture` | 随手记录一个想法，不打断当前流程（自动模式中可用） |
 | `/gsd triage` | 手动触发待处理 captures 的 triage |
