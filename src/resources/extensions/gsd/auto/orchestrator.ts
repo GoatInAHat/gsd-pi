@@ -185,7 +185,7 @@ function shouldAdoptActiveMilestone(
   }
 
   const currentMilestone = state.registry.find((milestone) => milestone.id === currentMilestoneId);
-  return !!currentMilestone && isClosedStatus(currentMilestone.status);
+  return !!currentMilestone && (isClosedStatus(currentMilestone.status) || currentMilestone.status === "parked");
 }
 
 /**

@@ -1504,6 +1504,61 @@ test("decideOrchestratorDispatch adopts next active milestone after the session 
   }
 });
 
+test("decideOrchestratorDispatch adopts next active milestone after the session milestone is parked", async (t) => {
+  const base = mkdtempSync(join(tmpdir(), "gsd-orchestrator-parked-milestone-adopt-"));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  openDispatchDecisionDatabase(t, [
+    { id: "M001", title: "First", status: "parked" },
+    { id: "M002", title: "Next", status: "active" },
+  ]);
+
+  const stateSnapshot: GSDState = {
+    ...makeState(),
+    activeMilestone: { id: "M002", title: "Next" },
+    registry: [
+      { id: "M001", title: "First", status: "parked" },
+      { id: "M002", title: "Next", status: "active" },
+    ],
+  };
+  const captured: DispatchContext[] = [];
+  const captureRule: UnifiedRule = {
+    name: "test-parked-milestone-adoption",
+    when: "dispatch",
+    evaluation: "first-match",
+    where: async (ctx: DispatchContext) => {
+      captured.push(ctx);
+      return {
+        action: "dispatch" as const,
+        unitType: "execute-task",
+        unitId: "M002/S01/T01",
+        prompt: "adopted-parked-milestone-fixture",
+      };
+    },
+    then: (r: unknown) => r,
+  };
+  setRegistry(new RuleRegistry([captureRule]));
+
+  try {
+    const ctx = { model: {}, modelRegistry: { getAll: () => [], getAvailable: () => [] } } as never;
+    const pi = { getActiveTools: () => [] } as never;
+    const session = {
+      basePath: base,
+      originalBasePath: base,
+      currentMilestoneId: "M001",
+    } as never;
+
+    const result = await decideOrchestratorDispatch(ctx, pi, base, session, { stateSnapshot });
+
+    assert.ok(result);
+    if (!result || !("unitType" in result)) assert.fail(`expected dispatch decision, got ${JSON.stringify(result)}`);
+    assert.equal(result.unitId, "M002/S01/T01");
+    assert.equal((session as { currentMilestoneId: string }).currentMilestoneId, "M002");
+    assert.equal(captured[0]?.session?.currentMilestoneId, "M002");
+  } finally {
+    resetRegistry();
+  }
+});
+
 test("decideOrchestratorDispatch keeps blocking stale milestone worktree scope", async (t) => {
   const base = mkdtempSync(join(tmpdir(), "gsd-orchestrator-worktree-block-"));
   t.after(() => rmSync(base, { recursive: true, force: true }));
