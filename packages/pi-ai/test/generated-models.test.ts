@@ -268,4 +268,13 @@ describe("models.generated.ts", () => {
 			expect((model.compat as { zaiToolStream?: boolean }).zaiToolStream ?? false).toBe(zaiToolStream);
 		}
 	});
+
+	test("keeps the ZAI catalog keys in deterministic sorted order", () => {
+		// The generator writes ZAI models via Object.keys(models).sort(), and the
+		// provider carries no curated ordering, so the keys must stay
+		// lexicographically sorted. Guards against hand-edited insertions landing
+		// out of order (e.g. glm-4.6 after glm-4.7), which produced noisy diffs.
+		const ids = Object.keys(MODELS.zai);
+		expect(ids).toEqual([...ids].sort());
+	});
 });
