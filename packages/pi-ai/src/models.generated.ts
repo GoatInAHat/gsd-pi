@@ -17111,9 +17111,9 @@ export const MODELS = {
 			contextWindow: 131072,
 			maxTokens: 98304,
 		} satisfies Model<"openai-completions">,
-		"glm-4.7": {
-			id: "glm-4.7",
-			name: "GLM-4.7",
+		"glm-4.6": {
+			id: "glm-4.6",
+			name: "GLM-4.6",
 			api: "openai-completions",
 			provider: "zai",
 			baseUrl: "https://api.z.ai/api/coding/paas/v4",
@@ -17129,9 +17129,9 @@ export const MODELS = {
 			contextWindow: 204800,
 			maxTokens: 131072,
 		} satisfies Model<"openai-completions">,
-		"glm-4.6": {
-			id: "glm-4.6",
-			name: "GLM-4.6",
+		"glm-4.7": {
+			id: "glm-4.7",
+			name: "GLM-4.7",
 			api: "openai-completions",
 			provider: "zai",
 			baseUrl: "https://api.z.ai/api/coding/paas/v4",
