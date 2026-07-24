@@ -169,6 +169,45 @@ describe('registerMcpInstance', () => {
     assert.equal(readOwnEntry(registryPath, tmp)?.pid, process.pid);
   });
 
+  // Regression for #1516: a daemon-spawned workflow server runs in non-exclusive
+  // (client-managed) mode and never registers, so it is absent from the registry.
+  // When an extension-owned server registers/restarts, exclusivity cleanup must
+  // target ONLY the recorded entry — never the live, unregistered daemon child —
+  // so the two owners do not kill each other over one registry slot.
+  test('does not signal an unregistered non-exclusive (daemon-spawned) child for the same project', () => {
+    const daemonChildPid = 7777;
+    // Registry holds only the previous extension-owned server's entry.
+    writeFileSync(registryPath, JSON.stringify({
+      [tmp]: { pid: 5555, projectDir: tmp, startedAt: '2026-01-01T00:00:00.000Z' },
+    }));
+
+    const signals: Array<{ pid: number; signal: NodeJS.Signals | 0 | undefined }> = [];
+    registerMcpInstance(tmp, registryPath, {
+      kill(pid, signal) {
+        signals.push({ pid, signal });
+      },
+      getProcessCommand() {
+        return 'node /workspace/packages/mcp-server/dist/cli.js';
+      },
+      getProcessCwd() {
+        return tmp;
+      },
+      getProcessStartTime() {
+        return Date.parse('2025-12-31T23:59:59.000Z');
+      },
+      waitForExit() {},
+    });
+
+    // Only the recorded stale extension PID is ever signalled; the concurrently
+    // running daemon child (never registered) is untouched.
+    assert.ok(
+      signals.every((s) => s.pid !== daemonChildPid),
+      'daemon-spawned child must never be signalled by an extension-owned register',
+    );
+    assert.deepEqual(new Set(signals.map((s) => s.pid)), new Set([5555]));
+    assert.equal(readOwnEntry(registryPath, tmp)?.pid, process.pid);
+  });
+
   test('does not terminate a recycled PID that started after the entry was recorded', () => {
     writeFileSync(registryPath, JSON.stringify({
       [tmp]: { pid: 6666, projectDir: tmp, startedAt: '2026-01-01T00:00:00.000Z' },
