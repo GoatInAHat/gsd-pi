@@ -1,0 +1,200 @@
+{
+  "index_settings": {
+    "docstore_compression": "lz4",
+    "docstore_blocksize": 16384
+  },
+  "segments": [
+    {
+      "segment_id": "bb394955-6e25-4a9b-a424-60f35ff6685e",
+      "max_doc": 2,
+      "deletes": null
+    },
+    {
+      "segment_id": "fd724b0d-b062-4912-8a0c-bff3bdfcfd93",
+      "max_doc": 1,
+      "deletes": null
+    },
+    {
+      "segment_id": "0e6c090a-ae5b-458e-b5a8-32ab14cf226d",
+      "max_doc": 1,
+      "deletes": null
+    },
+    {
+      "segment_id": "7c6ed3c7-0ca4-450d-b4ed-5c7eee11aa87",
+      "max_doc": 1,
+      "deletes": null
+    }
+  ],
+  "schema": [
+    {
+      "name": "rid",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "basic",
+          "fieldnorms": true,
+          "tokenizer": "raw"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "repo_id",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "basic",
+          "fieldnorms": true,
+          "tokenizer": "raw"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "name",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "position",
+          "fieldnorms": true,
+          "tokenizer": "memtrace_code"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "name_exact",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "basic",
+          "fieldnorms": true,
+          "tokenizer": "raw"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "name_ngrams",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "freq",
+          "fieldnorms": true,
+          "tokenizer": "memtrace_ngram_3_4"
+        },
+        "stored": false,
+        "fast": false
+      }
+    },
+    {
+      "name": "name_fuzzy",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "freq",
+          "fieldnorms": true,
+          "tokenizer": "memtrace_code"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "scope_path",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "position",
+          "fieldnorms": true,
+          "tokenizer": "memtrace_code"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "file_path",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "position",
+          "fieldnorms": true,
+          "tokenizer": "memtrace_code"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "signature",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "position",
+          "fieldnorms": true,
+          "tokenizer": "memtrace_code"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "kind",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "position",
+          "fieldnorms": true,
+          "tokenizer": "memtrace_code"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "language",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "position",
+          "fieldnorms": true,
+          "tokenizer": "memtrace_code"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "content",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "position",
+          "fieldnorms": true,
+          "tokenizer": "memtrace_code"
+        },
+        "stored": true,
+        "fast": false
+      }
+    },
+    {
+      "name": "splade_terms",
+      "type": "text",
+      "options": {
+        "indexing": {
+          "record": "freq",
+          "fieldnorms": true,
+          "tokenizer": "memtrace_splade_terms"
+        },
+        "stored": false,
+        "fast": false
+      }
+    }
+  ],
+  "opstamp": 9
+}
