@@ -136,14 +136,19 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
     chunks.push(buffer);
   }
   if (chunks.length === 0) return {};
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {};
+    parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   } catch {
     throw new BadRequestError('Invalid JSON request body');
   }
+  // Reject non-object JSON (arrays, strings, numbers, null) with a 400 instead of
+  // silently coercing it to {}, so a malformed request surfaces a clear error
+  // rather than being reshaped into a different (empty) request.
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new BadRequestError('Request body must be a JSON object');
+  }
+  return parsed as Record<string, unknown>;
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {

@@ -64,15 +64,24 @@ export class UsageLimiter {
     if (!status.allowed) return status;
     this.noteAccepted(user.userId, now);
     this.reserveBillable(user.userId, now);
+    // Reflect the accepted call's own reservation in the returned status so it is
+    // consistent with the limiter's internal state: the minute window counted it
+    // (noteAccepted) and the day/month billable reservation counted it
+    // (reserveBillable). Otherwise callers surfacing this status under-report
+    // day/month usage by 1 until the call is later recorded in the usage store.
     return {
       ...status,
       usage: {
         ...status.usage,
         minute: minute + 1,
+        day: status.usage.day + 1,
+        month: status.usage.month + 1,
       },
       remaining: {
         ...status.remaining,
         ...(status.remaining.minute !== undefined ? { minute: Math.max(0, status.remaining.minute - 1) } : {}),
+        ...(status.remaining.day !== undefined ? { day: Math.max(0, status.remaining.day - 1) } : {}),
+        ...(status.remaining.month !== undefined ? { month: Math.max(0, status.remaining.month - 1) } : {}),
       },
     };
   }
