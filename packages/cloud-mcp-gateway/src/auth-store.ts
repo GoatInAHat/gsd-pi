@@ -630,7 +630,11 @@ function normalizeLimit(value: unknown): number | undefined {
   if (value === null || value === undefined || value === "") return undefined;
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0) return undefined;
-  return Math.floor(parsed);
+  // 0 is the explicit "unlimited" sentinel; any positive value clamps to a
+  // minimum of 1 so fractional inputs (e.g. 0.5) don't floor to 0 and
+  // accidentally disable the quota, matching readLimit() in usage-limits.ts.
+  if (parsed === 0) return 0;
+  return Math.max(1, Math.floor(parsed));
 }
 
 function cleanOptionalString(value: unknown): string | undefined {
