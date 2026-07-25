@@ -224,6 +224,15 @@ export async function listenGateway(options: GatewayServerOptions = {}): Promise
   };
 }
 
+function decodePathSegments(pathname: string): string[] | undefined {
+  try {
+    return pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  } catch {
+    // Malformed percent-encoding (URIError): treat as a client error, not a 500.
+    return undefined;
+  }
+}
+
 async function handleAdminApi(params: {
   req: IncomingMessage;
   res: ServerResponse;
@@ -234,7 +243,8 @@ async function handleAdminApi(params: {
   usageLimiter: UsageLimiter;
 }): Promise<void> {
   const { req, res, pathname, auth, registry, usage, usageLimiter } = params;
-  const segments = pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  const segments = decodePathSegments(pathname);
+  if (!segments) return sendJson(res, 400, { error: "Invalid path encoding" });
 
   if (req.method === "GET" && pathname === "/admin/api/overview") {
     const users = auth.listUsers();
@@ -334,8 +344,9 @@ async function handleAccountApi(params: {
   clerkUser: ClerkAuthenticatedUser;
 }): Promise<void> {
   const { req, res, pathname, auth, usage, usageLimiter, clerkUser } = params;
+  const segments = decodePathSegments(pathname);
+  if (!segments) return sendJson(res, 400, { error: "Invalid path encoding" });
   const user = syncClerkGatewayUser(auth, clerkUser);
-  const segments = pathname.split("/").filter(Boolean).map(decodeURIComponent);
 
   if (req.method === "GET" && pathname === "/account/api/me") {
     return sendJson(res, 200, buildAccountResponse(auth, usage, usageLimiter, user.userId));

@@ -111,7 +111,11 @@ export class CloudRuntime {
     // Re-advertise projects/tools (async: hello is sent on a later microtask), then
     // drain messages buffered while disconnected. tool_results route by requestId
     // on the authenticated connection, so drain order vs hello is not significant.
-    void this.advertiseState();
+    void this.advertiseState().catch((err) => {
+      this.logger.warn("cloud runtime advertise state failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
     const pending = this.outbox;
     this.outbox = [];
     for (const text of pending) {
