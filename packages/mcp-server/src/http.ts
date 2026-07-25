@@ -94,10 +94,15 @@ export function validateHttpMcpOptions(options: HttpMcpServerOptions): void {
 
 export function isLoopbackHost(host: string): boolean {
   const normalized = host.trim().replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
+  // Reduce an IPv4-mapped IPv6 loopback (::ffff:127.x.x.x) to its IPv4 form so the
+  // 127.0.0.0/8 check below also covers the mapped representation.
+  const v4 = normalized.startsWith('::ffff:') ? normalized.slice('::ffff:'.length) : normalized;
   return normalized === 'localhost'
-    || normalized === '127.0.0.1'
     || normalized === '::1'
-    || normalized.startsWith('127.');
+    // Full (uncompressed) IPv6 loopback form.
+    || normalized === '0:0:0:0:0:0:0:1'
+    || v4 === '127.0.0.1'
+    || v4.startsWith('127.');
 }
 
 function authorize(req: IncomingMessage, options: HttpMcpServerOptions): boolean {

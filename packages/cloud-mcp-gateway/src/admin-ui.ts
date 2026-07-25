@@ -462,7 +462,7 @@ export function renderAdminUi(): string {
   <script>
     (function () {
       var state = {
-        token: localStorage.getItem("gsdCloudAdminToken") || "",
+        token: sessionStorage.getItem("gsdCloudAdminToken") || "",
         tab: "users",
         users: [],
         runtimes: [],
@@ -477,14 +477,14 @@ export function renderAdminUi(): string {
       document.getElementById("auth-form").addEventListener("submit", function (event) {
         event.preventDefault();
         state.token = tokenInput.value.trim();
-        if (state.token) localStorage.setItem("gsdCloudAdminToken", state.token);
+        if (state.token) sessionStorage.setItem("gsdCloudAdminToken", state.token);
         refresh();
       });
 
       document.getElementById("clear-token").addEventListener("click", function () {
         state.token = "";
         tokenInput.value = "";
-        localStorage.removeItem("gsdCloudAdminToken");
+        sessionStorage.removeItem("gsdCloudAdminToken");
         state.users = [];
         state.runtimes = [];
         state.usage = null;
