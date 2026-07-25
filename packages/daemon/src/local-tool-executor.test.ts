@@ -8,7 +8,13 @@ import type { SessionManager } from "./session-manager.js";
 import type { ProjectInfo } from "./types.js";
 
 test("local tool executor rejects unsupported user-controlled tool names", async () => {
-  const executor = new LocalToolExecutor({} as SessionManager, async () => []);
+  // Inject an inert external MCP bridge so the unknown-tool path stays hermetic:
+  // the default bridge would spawn the configured external MCP server (gsd-browser)
+  // and, left unclosed, leak that child process and hang the test runner.
+  const executor = new LocalToolExecutor({} as SessionManager, async () => [], {
+    advertisedTools: async () => [],
+    executeIfAvailable: async () => ({ handled: false }),
+  });
 
   await assert.rejects(
     executor.execute("constructor", {}),
