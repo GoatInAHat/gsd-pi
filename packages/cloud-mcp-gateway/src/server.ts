@@ -142,6 +142,11 @@ export function createGatewayServer(options: GatewayServerOptions = {}) {
           usageLimiter,
           getUser: (id) => auth.getUser(id),
         });
+        // The MCP server is created per request; close it once the response
+        // finishes so its transport/listeners don't leak under load.
+        res.on("finish", () => {
+          void mcp.close().catch(() => undefined);
+        });
         await mcp.connect(transport);
         await transport.handleRequest(req, res, body);
         return;
@@ -191,7 +196,7 @@ export async function listenGateway(options: GatewayServerOptions = {}): Promise
   close: () => Promise<void>;
   url: string;
 }> {
-  const { server, usage } = createGatewayServer(options);
+  const { server, auth, usage } = createGatewayServer(options);
   const port = options.port ?? Number(process.env.PORT ?? 8787);
   const host = options.host ?? "0.0.0.0";
   await new Promise<void>((resolve) => server.listen(port, host, resolve));
@@ -199,6 +204,7 @@ export async function listenGateway(options: GatewayServerOptions = {}): Promise
     url: `http://${host === "0.0.0.0" ? "localhost" : host}:${port}`,
     close: () => new Promise((resolve, reject) => server.close((err) => {
       usage.close();
+      auth.close();
       if (err) reject(err); else resolve();
     })),
   };

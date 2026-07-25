@@ -9,7 +9,14 @@
     "declaration": true,
     "incremental": true,
     "esModuleInterop": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    // sharp 0.35.0 ships type declarations at lib/index.d.ts but its package.json
+    // "exports" map has no "types" condition, so under NodeNext resolution tsc
+    // reports TS7016 for `import("sharp")`. Point the type resolver straight at the
+    // bundled declarations; runtime still resolves sharp via Node's real exports map.
+    "paths": {
+      "sharp": ["./node_modules/sharp/lib/index.d.ts"]
+    }
   },
   "include": ["src"],
   "exclude": ["src/resources/extensions", "src/resources/skills", "src/resources/agents", "src/tests", "src/web"]

@@ -24,6 +24,7 @@ const DEFAULT_BROWSER_MCP_ID = "gsd-browser";
 
 export class ExternalMcpToolBridge {
   private readonly connections = new Map<string, ExternalMcpConnection>();
+  private readonly connecting = new Map<string, Promise<ExternalMcpConnection>>();
   private readonly toolRoutes = new Map<string, string>();
 
   constructor(private readonly configs: ExternalMcpToolConfig[]) {}
@@ -54,7 +55,14 @@ export class ExternalMcpToolBridge {
   }
 
   async executeIfAvailable(toolName: string, args: Record<string, unknown>): Promise<ExternalMcpToolExecution> {
-    const configId = this.toolRoutes.get(toolName);
+    let configId = this.toolRoutes.get(toolName);
+    if (!configId) {
+      // Routes are only populated by advertisedTools(); a call can arrive before
+      // that has run (or after the routes were cleared). Refresh once before
+      // deciding the tool is not ours so a valid forwarded tool isn't rejected.
+      await this.advertisedTools().catch(() => undefined);
+      configId = this.toolRoutes.get(toolName);
+    }
     if (!configId) return { handled: false };
 
     const config = this.configs.find((candidate) => candidate.id === configId);
@@ -82,6 +90,28 @@ export class ExternalMcpToolBridge {
     const existing = this.connections.get(config.id);
     if (existing) return existing;
 
+    // Share one connect attempt across concurrent callers for the same config so
+    // two simultaneous tool calls cannot each spawn a child process (and leak the
+    // loser's transport). The in-flight entry is cleared on success and failure.
+    const inFlight = this.connecting.get(config.id);
+    if (inFlight) return inFlight;
+
+    const attempt = this.openConnection(config).then(
+      (connection) => {
+        this.connecting.delete(config.id);
+        this.connections.set(config.id, connection);
+        return connection;
+      },
+      (err) => {
+        this.connecting.delete(config.id);
+        throw err;
+      },
+    );
+    this.connecting.set(config.id, attempt);
+    return attempt;
+  }
+
+  private async openConnection(config: ExternalMcpToolConfig): Promise<ExternalMcpConnection> {
     const transport = new StdioClientTransport({
       command: config.command,
       args: config.args ?? [],
@@ -99,9 +129,7 @@ export class ExternalMcpToolBridge {
       await transport.close().catch(() => undefined);
       throw err;
     }
-    const connection = { client, transport };
-    this.connections.set(config.id, connection);
-    return connection;
+    return { client, transport };
   }
 
   private async closeConnection(id: string): Promise<void> {

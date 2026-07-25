@@ -81,8 +81,11 @@ export function isLoopbackHost(host: string): boolean {
 }
 
 function authorize(req: IncomingMessage, options: HttpMcpServerOptions): boolean {
-  // Match validateHttpMcpOptions(): a whitespace-only token means "no auth",
-  // so an empty-after-trim token must not silently require callers to send it.
+  // Match validateHttpMcpOptions(): a configured token that is empty after trim
+  // counts as "no token configured", so we don't require callers to send a blank
+  // token. This does not make a blank token a way to disable auth on a
+  // non-loopback host: validateHttpMcpOptions() already refuses to start there
+  // unless the host is loopback or --no-auth was passed explicitly.
   const expected = options.authToken?.trim();
   if (options.allowNoAuth || !expected) return true;
   const provided = extractBearerToken(req.headers.authorization);

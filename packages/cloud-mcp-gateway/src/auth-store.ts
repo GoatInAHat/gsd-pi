@@ -103,6 +103,7 @@ interface SeedUserToken {
 
 const USER_TOKEN_PREFIX = "gsd_usr_";
 const ACCESS_PERSIST_INTERVAL_MS = 60 * 1000;
+const ACCESS_FLUSH_DELAY_MS = 5 * 1000;
 
 export class InMemoryAuthStore {
   protected readonly users = new Map<string, UserRecord>();
@@ -150,9 +151,7 @@ export class InMemoryAuthStore {
       ...(input.role !== undefined ? { role: normalizeRole(input.role) } : {}),
       ...(input.plan !== undefined ? { plan: normalizePlan(input.plan) } : {}),
       ...(input.quotaOverrides !== undefined
-        ? optionalQuotaOverrides(input.quotaOverrides)
-          ? { quotaOverrides: optionalQuotaOverrides(input.quotaOverrides) }
-          : { quotaOverrides: undefined }
+        ? { quotaOverrides: optionalQuotaOverrides(input.quotaOverrides) }
         : {}),
       ...(input.disabled !== undefined ? { disabled: input.disabled } : {}),
     };
@@ -266,7 +265,7 @@ export class InMemoryAuthStore {
     record.lastUsedAt = now;
     if (user) user.lastSeenAt = now;
     this.persistAccessIfDue(secretHash, now);
-    return { ...record };
+    return publicDeviceTokenRecord(record);
   }
 
   createPairingCode(userId: string, ttlMs = 10 * 60 * 1000): { code: string; expiresAt: number } {
@@ -352,6 +351,18 @@ export class InMemoryAuthStore {
     // Extension point for persistent stores.
   }
 
+  // Access-timestamp updates (lastUsedAt/lastSeenAt) are best-effort telemetry on
+  // the hot auth path. Persistent stores debounce these instead of doing a full
+  // synchronous snapshot write per authenticated request; the default falls back
+  // to afterMutation() so the in-memory store keeps its no-op behavior.
+  protected afterAccessMutation(): void {
+    this.afterMutation();
+  }
+
+  close(): void {
+    // No persistence to flush for the in-memory store.
+  }
+
   // Drop expired pairing codes so a long-lived gateway does not accumulate codes
   // that were generated but never redeemed. Best-effort: callers persist via their
   // own afterMutation() after the create/exchange that triggered the sweep.
@@ -398,7 +409,7 @@ export class InMemoryAuthStore {
     const lastPersistedAt = this.lastAccessPersistedAt.get(secretHash) ?? 0;
     if (now - lastPersistedAt < ACCESS_PERSIST_INTERVAL_MS) return;
     this.lastAccessPersistedAt.set(secretHash, now);
-    this.afterMutation();
+    this.afterAccessMutation();
   }
 
   private loadSnapshot(snapshot: AuthStoreSnapshot): void {
@@ -448,13 +459,17 @@ export class InMemoryAuthStore {
 
 export class FileAuthStore extends InMemoryAuthStore {
   private readonly filePath: string;
+  private readonly accessFlushDelayMs: number;
+  private accessFlushTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     filePath: string,
     seedUserToken?: SeedUserToken,
+    options: { accessFlushDelayMs?: number } = {},
   ) {
     super(undefined, readSnapshot(filePath));
     this.filePath = filePath;
+    this.accessFlushDelayMs = Math.max(0, options.accessFlushDelayMs ?? ACCESS_FLUSH_DELAY_MS);
     if (seedUserToken) {
       this.createUser({
         userId: seedUserToken.userId,
@@ -471,7 +486,33 @@ export class FileAuthStore extends InMemoryAuthStore {
   }
 
   protected override afterMutation(): void {
+    // A structural mutation writes the full snapshot (which already includes the
+    // latest access timestamps), so drop any pending access-only flush.
+    this.clearAccessFlush();
     this.persist();
+  }
+
+  protected override afterAccessMutation(): void {
+    // Coalesce per-request access-timestamp writes into a single debounced flush
+    // so the hot auth path isn't blocked by a synchronous write+rename each time.
+    if (this.accessFlushTimer) return;
+    this.accessFlushTimer = setTimeout(() => {
+      this.accessFlushTimer = undefined;
+      this.persist();
+    }, this.accessFlushDelayMs);
+    this.accessFlushTimer.unref?.();
+  }
+
+  override close(): void {
+    if (!this.accessFlushTimer) return;
+    this.clearAccessFlush();
+    this.persist();
+  }
+
+  private clearAccessFlush(): void {
+    if (!this.accessFlushTimer) return;
+    clearTimeout(this.accessFlushTimer);
+    this.accessFlushTimer = undefined;
   }
 
   private persist(): void {
@@ -504,6 +545,19 @@ export function deriveSecretHash(secret: string, secretSalt = randomBytes(16).to
   return {
     secretHash: scryptSync(secret, secretSalt, 32).toString("hex"),
     secretSalt,
+  };
+}
+
+function publicDeviceTokenRecord(record: DeviceTokenRecord & SecretHashRecord): DeviceTokenRecord {
+  // Never spread the stored record: it carries secretHash/secretSalt, and a raw
+  // spread makes it trivial to log or serialize hash material downstream.
+  return {
+    userId: record.userId,
+    runtimeId: record.runtimeId,
+    ...(record.runtimeName ? { runtimeName: record.runtimeName } : {}),
+    ...(record.createdAt !== undefined ? { createdAt: record.createdAt } : {}),
+    ...(record.lastUsedAt !== undefined ? { lastUsedAt: record.lastUsedAt } : {}),
+    ...(record.revoked ? { revoked: true } : {}),
   };
 }
 
