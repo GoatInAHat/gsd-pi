@@ -67,7 +67,17 @@ export async function listenHttpMcpServer(
     }
   });
 
-  await new Promise<void>((resolve) => server.listen(options.port, options.host, resolve));
+  await new Promise<void>((resolve, reject) => {
+    // A listen error (e.g. EADDRINUSE) fires the server's 'error' event, not the
+    // listen callback, so tie it into the promise to fail startup fast instead of
+    // awaiting forever.
+    const onError = (err: Error) => reject(err);
+    server.once('error', onError);
+    server.listen(options.port, options.host, () => {
+      server.removeListener('error', onError);
+      resolve();
+    });
+  });
   const displayHost = options.host === '0.0.0.0' ? 'localhost' : options.host;
   return {
     url: `http://${displayHost}:${options.port}/mcp`,

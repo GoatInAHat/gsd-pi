@@ -206,7 +206,17 @@ export async function listenGateway(options: GatewayServerOptions = {}): Promise
   const { server, auth, usage } = createGatewayServer(options);
   const port = options.port ?? Number(process.env.PORT ?? 8787);
   const host = options.host ?? "0.0.0.0";
-  await new Promise<void>((resolve) => server.listen(port, host, resolve));
+  await new Promise<void>((resolve, reject) => {
+    // A listen error (e.g. EADDRINUSE) fires the server's 'error' event, not the
+    // listen callback, so tie it into the promise to fail startup fast instead of
+    // awaiting forever.
+    const onError = (err: Error) => reject(err);
+    server.once("error", onError);
+    server.listen(port, host, () => {
+      server.removeListener("error", onError);
+      resolve();
+    });
+  });
   return {
     url: `http://${host === "0.0.0.0" ? "localhost" : host}:${port}`,
     close: () => new Promise((resolve, reject) => server.close((err) => {
