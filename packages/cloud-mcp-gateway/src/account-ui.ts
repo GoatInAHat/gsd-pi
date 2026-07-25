@@ -1,7 +1,13 @@
 import type { ClerkPublicConfig } from "./clerk-auth.js";
 
 export function renderAccountUi(config: ClerkPublicConfig | undefined): string {
-  const configJson = JSON.stringify(config ?? null).replace(/</g, "\\u003c");
+  // Escape sequences that are legal in a JSON string but not in JS source inside
+  // an inline <script>: `<` (to avoid closing the tag / injection) and the
+  // U+2028/U+2029 line terminators, which would otherwise break parsing.
+  const configJson = JSON.stringify(config ?? null)
+    .replace(/</g, "\\u003c")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
   const clerkScripts = config
     ? `
   <script defer crossorigin="anonymous" src="${escapeHtml(config.frontendApiUrl)}/npm/@clerk/ui@1/dist/ui.browser.js" type="text/javascript"></script>
