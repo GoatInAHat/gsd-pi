@@ -71,6 +71,13 @@ export function resolveNavItems(
 /** Selecting an entry navigates when it carries an href, otherwise switches view. */
 export function selectNavItem(item: NavItem, onViewChange: (view: string) => void): void {
   if (item.href) {
+    if (typeof window === "undefined") {
+      // href entries navigate the browser; there is nothing to navigate outside one.
+      // Fail with a clear message instead of a bare ReferenceError on `window`.
+      throw new Error(
+        `selectNavItem: cannot navigate to "${item.href}" outside a browser (window is undefined).`,
+      );
+    }
     window.location.href = item.href;
     return;
   }

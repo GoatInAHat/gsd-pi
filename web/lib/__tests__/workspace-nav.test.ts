@@ -116,4 +116,19 @@ describe("selectNavItem", () => {
       (globalThis as { window?: unknown }).window = original;
     }
   });
+
+  test("throws a clear error for an href entry outside a browser", () => {
+    const original = (globalThis as { window?: unknown }).window;
+    (globalThis as { window?: unknown }).window = undefined;
+    try {
+      const seen: string[] = [];
+      assert.throws(
+        () => selectNavItem(item("machines", ["saas"], "/devices"), (view) => seen.push(view)),
+        /window is undefined/,
+      );
+      assert.deepEqual(seen, []);
+    } finally {
+      (globalThis as { window?: unknown }).window = original;
+    }
+  });
 });
