@@ -41,6 +41,12 @@ const WINDOW_MS = 60 * 1000;
 
 export class UsageLimiter {
   private readonly minuteCalls = new Map<string, number[]>();
+  // In-flight billable reservations per user, keyed by UTC day / month window.
+  // Day and month quotas are otherwise derived from the usage store, which is
+  // only updated after a tool call finishes; reserving at acceptance stops
+  // concurrent calls from all passing check() and overshooting the quota.
+  private readonly dayReservations = new Map<string, { key: string; count: number }>();
+  private readonly monthReservations = new Map<string, { key: string; count: number }>();
 
   constructor(private readonly config: UsageLimitConfig) {}
 
@@ -49,13 +55,15 @@ export class UsageLimiter {
     const calls = this.prune(user.userId, now);
     const minute = calls.length;
     const billable = usage.getUserBillableUsage(user.userId, now);
+    const reserved = this.reservedBillable(user.userId, now);
     const status = buildStatus(user, limits, {
       minute,
-      day: billable.day,
-      month: billable.month,
+      day: billable.day + reserved.day,
+      month: billable.month + reserved.month,
     }, now, calls[0] ? calls[0] + WINDOW_MS : undefined);
     if (!status.allowed) return status;
     this.noteAccepted(user.userId, now);
+    this.reserveBillable(user.userId, now);
     return {
       ...status,
       usage: {
@@ -80,10 +88,32 @@ export class UsageLimiter {
     }, now, calls[0] ? calls[0] + WINDOW_MS : undefined);
   }
 
+  /**
+   * Release a billable reservation held for an in-flight tool call. A caller
+   * that passed check() (status.allowed === true) must call this exactly once
+   * when the call settles, so the reservation does not outlive the request.
+   */
+  releaseBillable(userId: string, now = Date.now()): void {
+    adjustReservation(this.dayReservations, userId, utcDayKey(now), -1);
+    adjustReservation(this.monthReservations, userId, utcMonthKey(now), -1);
+  }
+
   private noteAccepted(userId: string, now: number): void {
     const calls = this.prune(userId, now);
     calls.push(now);
     this.minuteCalls.set(userId, calls);
+  }
+
+  private reserveBillable(userId: string, now: number): void {
+    adjustReservation(this.dayReservations, userId, utcDayKey(now), 1);
+    adjustReservation(this.monthReservations, userId, utcMonthKey(now), 1);
+  }
+
+  private reservedBillable(userId: string, now: number): { day: number; month: number } {
+    return {
+      day: currentReservation(this.dayReservations, userId, utcDayKey(now)),
+      month: currentReservation(this.monthReservations, userId, utcMonthKey(now)),
+    };
   }
 
   private prune(userId: string, now: number): number[] {
@@ -217,6 +247,31 @@ function readLimit(value: string | undefined, fallback: number): number | undefi
 
 function isLimited(limit: number | undefined): limit is number {
   return typeof limit === "number" && limit > 0;
+}
+
+type Reservation = { key: string; count: number };
+
+function adjustReservation(map: Map<string, Reservation>, userId: string, key: string, delta: number): void {
+  const entry = map.get(userId);
+  // A stale window (entry.key !== key) has rolled over, so start fresh instead
+  // of carrying an old day/month's count into the new window.
+  const base = entry && entry.key === key ? entry.count : 0;
+  const count = Math.max(0, base + delta);
+  if (count > 0) map.set(userId, { key, count });
+  else map.delete(userId);
+}
+
+function currentReservation(map: Map<string, Reservation>, userId: string, key: string): number {
+  const entry = map.get(userId);
+  return entry && entry.key === key ? entry.count : 0;
+}
+
+function utcDayKey(now: number): string {
+  return new Date(now).toISOString().slice(0, 10);
+}
+
+function utcMonthKey(now: number): string {
+  return new Date(now).toISOString().slice(0, 7);
 }
 
 function nextUtcDay(now: number): number {

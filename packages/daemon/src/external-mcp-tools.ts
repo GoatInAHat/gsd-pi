@@ -164,7 +164,14 @@ function readExternalMcpToolConfigs(env: NodeJS.ProcessEnv): ExternalMcpToolConf
 
 function parseExplicitConfigs(value: string | undefined): ExternalMcpToolConfig[] | undefined {
   if (!value?.trim()) return undefined;
-  const parsed = JSON.parse(value) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch (err) {
+    throw new Error(
+      `GSD_CLOUD_MCP_SERVERS must be valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
   if (!Array.isArray(parsed)) throw new Error("GSD_CLOUD_MCP_SERVERS must be a JSON array");
   return parsed.map((item, index) => {
     if (!isRecord(item) || typeof item.command !== "string" || !item.command.trim()) {

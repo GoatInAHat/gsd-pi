@@ -85,40 +85,45 @@ export function createGatewayMcpServer(params: {
     const args = request.params.arguments ?? {};
     const startedAt = Date.now();
 
-    if (toolName === CLOUD_PROJECTS_TOOL) {
-      const quota = enforceQuota(params, toolName, args, startedAt);
-      if (quota) return quota;
-      const result = jsonToolResult({ projects: params.registry.listProjects(params.userId) });
-      recordUsage(params.usage, params.userId, toolName, args, startedAt, true);
-      return result;
-    }
-
-    const advertisedToolNames = new Set(params.registry.listTools(params.userId).map((tool) => tool.name));
-    if (!BUILTIN_TOOL_NAMES.has(toolName) && !advertisedToolNames.has(toolName)) {
-      recordUsage(params.usage, params.userId, toolName, args, startedAt, false, {
-        error: "unknown tool",
-        billable: false,
-      });
-      return errorToolResult(`Unknown Cloud MCP Gateway tool: ${toolName}`);
-    }
-
+    // Enforce quota before the unknown-tool check so all tools/call traffic
+    // (including spammed, arbitrary tool names) is rate-limited. A passed check
+    // reserves billable quota that must be released once the call settles.
     const quota = enforceQuota(params, toolName, args, startedAt);
-    if (quota) return quota;
+    if (quota.rejected) return quota.rejected;
 
     try {
-      const result = await params.registry.callTool({
-        userId: params.userId,
-        toolName,
-        args,
-        signal: extra.signal,
-      });
-      const coerced = coerceToolResult(result);
-      recordUsage(params.usage, params.userId, toolName, args, startedAt, coerced.isError !== true);
-      return coerced;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      recordUsage(params.usage, params.userId, toolName, args, startedAt, false, { error: message });
-      return errorToolResult(message);
+      if (toolName === CLOUD_PROJECTS_TOOL) {
+        const result = jsonToolResult({ projects: params.registry.listProjects(params.userId) });
+        recordUsage(params.usage, params.userId, toolName, args, startedAt, true);
+        return result;
+      }
+
+      const advertisedToolNames = new Set(params.registry.listTools(params.userId).map((tool) => tool.name));
+      if (!BUILTIN_TOOL_NAMES.has(toolName) && !advertisedToolNames.has(toolName)) {
+        recordUsage(params.usage, params.userId, toolName, args, startedAt, false, {
+          error: "unknown tool",
+          billable: false,
+        });
+        return errorToolResult(`Unknown Cloud MCP Gateway tool: ${toolName}`);
+      }
+
+      try {
+        const result = await params.registry.callTool({
+          userId: params.userId,
+          toolName,
+          args,
+          signal: extra.signal,
+        });
+        const coerced = coerceToolResult(result);
+        recordUsage(params.usage, params.userId, toolName, args, startedAt, coerced.isError !== true);
+        return coerced;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        recordUsage(params.usage, params.userId, toolName, args, startedAt, false, { error: message });
+        return errorToolResult(message);
+      }
+    } finally {
+      if (quota.reserved) params.usageLimiter?.releaseBillable(params.userId, startedAt);
     }
   });
 
@@ -233,6 +238,14 @@ function recordUsage(
   });
 }
 
+interface QuotaGate {
+  // Set when the request must be rejected (quota exceeded or unknown user).
+  rejected?: CallToolResult;
+  // True when check() accepted the call and reserved billable quota, so the
+  // caller must call usageLimiter.releaseBillable() once the call settles.
+  reserved: boolean;
+}
+
 function enforceQuota(
   params: {
     userId: string;
@@ -243,19 +256,19 @@ function enforceQuota(
   toolName: string,
   args: Record<string, unknown>,
   startedAt: number,
-): CallToolResult | undefined {
-  if (!params.usage || !params.usageLimiter || !params.getUser) return undefined;
+): QuotaGate {
+  if (!params.usage || !params.usageLimiter || !params.getUser) return { reserved: false };
   const user = params.getUser(params.userId);
-  if (!user) return errorToolResult(`Unknown user: ${params.userId}`);
+  if (!user) return { rejected: errorToolResult(`Unknown user: ${params.userId}`), reserved: false };
   const status = params.usageLimiter.check(user, params.usage, startedAt);
-  if (status.allowed) return undefined;
+  if (status.allowed) return { reserved: true };
   const message = formatQuotaExceeded(status);
   recordUsage(params.usage, params.userId, toolName, args, startedAt, false, {
     error: message,
     billable: false,
     throttled: true,
   });
-  return errorToolResult(message);
+  return { rejected: errorToolResult(message), reserved: false };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

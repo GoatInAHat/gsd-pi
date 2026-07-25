@@ -53,6 +53,30 @@ test("usage limiter enforces billable day and month limits", () => {
   assert.equal(denied.usage.month, 1);
 });
 
+test("usage limiter reserves billable day quota for in-flight calls until released", () => {
+  const user = makeUser("u1");
+  const usage = new InMemoryUsageStore();
+  const limiter = new UsageLimiter({
+    free: { callsPerDay: 1 },
+    paid: {},
+    unlimited: {},
+  });
+  const now = Date.parse("2026-06-01T12:00:00.000Z");
+
+  // First call is accepted and reserves the single billable day slot before any
+  // usage is recorded to the store.
+  assert.equal(limiter.check(user, usage, now).allowed, true);
+  // A concurrent second call (store still empty, first not yet recorded) is
+  // denied because the in-flight reservation already consumed the day quota.
+  const denied = limiter.check(user, usage, now + 1);
+  assert.equal(denied.allowed, false);
+  assert.equal(denied.reason, "day");
+
+  // Releasing the in-flight reservation frees the slot again.
+  limiter.releaseBillable(user.userId, now + 2);
+  assert.equal(limiter.check(user, usage, now + 3).allowed, true);
+});
+
 test("unlimited plan bypasses configured free limits", () => {
   const user = makeUser("u1", "unlimited");
   const usage = new InMemoryUsageStore();
