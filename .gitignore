@@ -107,3 +107,6 @@ AGENTS.md
 # opencode local config
 .opencode/
 test-results/
+
+# Memtrace local search index / decision-memory state (machine-local, regenerable)
+.memtrace/
