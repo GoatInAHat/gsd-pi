@@ -338,12 +338,14 @@ export class InMemoryAuthStore {
   }
 
   snapshot(): AuthStoreSnapshot {
+    // Return shallow copies so a caller can't mutate live in-memory auth records
+    // (and thus what gets persisted) by editing the returned snapshot.
     return {
       version: 1,
-      users: Array.from(this.users.values()),
-      userTokens: Array.from(this.userTokens.values()),
-      deviceTokens: Array.from(this.deviceTokens.values()),
-      pairingCodes: Array.from(this.pairingCodes.values()),
+      users: Array.from(this.users.values(), (record) => ({ ...record })),
+      userTokens: Array.from(this.userTokens.values(), (record) => ({ ...record })),
+      deviceTokens: Array.from(this.deviceTokens.values(), (record) => ({ ...record })),
+      pairingCodes: Array.from(this.pairingCodes.values(), (record) => ({ ...record })),
     };
   }
 

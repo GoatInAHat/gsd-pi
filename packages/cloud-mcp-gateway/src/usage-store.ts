@@ -166,10 +166,12 @@ export class InMemoryUsageStore {
   }
 
   snapshot(): UsageStoreSnapshot {
+    // Return copies (like getSummary()) so a caller can't mutate the live buckets
+    // or recentEvents and corrupt internal state or persisted output.
     return {
       version: 1,
-      buckets: Array.from(this.buckets.values()),
-      recentEvents: this.recentEvents,
+      buckets: Array.from(this.buckets.values(), (bucket) => ({ ...bucket })),
+      recentEvents: this.recentEvents.map((event) => ({ ...event })),
     };
   }
 
