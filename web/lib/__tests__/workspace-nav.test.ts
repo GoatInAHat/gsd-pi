@@ -60,14 +60,39 @@ describe("resolveNavItems", () => {
     assert.equal(resolved.at(-1)?.id, "machines");
   });
 
+  test("duplicate ids are collapsed: last value wins, first position kept", () => {
+    // A host reusing a built-in id (or duplicating within extras) must not
+    // produce duplicate React keys; the later entry overrides in place.
+    const override = item("dashboard");
+    override.label = "Overridden";
+    const resolved = resolveNavItems([override, item("machines"), item("machines")], "bundled");
+
+    const ids = resolved.map((i) => i.id);
+    assert.equal(new Set(ids).size, ids.length, "no duplicate ids");
+    // "dashboard" keeps its original first position but takes the extra's value.
+    assert.equal(ids[0], "dashboard");
+    assert.equal(resolved[0].label, "Overridden");
+    // The two "machines" extras collapse into one entry.
+    assert.equal(ids.filter((id) => id === "machines").length, 1);
+  });
+
   test("filtering a built-in view out of one surface leaves the other intact", () => {
-    // The registry ships nothing hidden today; this guards the mechanism itself.
-    const hidden: NavItem = { ...NAV_ITEMS[1], surfaces: ["bundled"] };
-    const ids = [...NAV_ITEMS.slice(0, 1), hidden, ...NAV_ITEMS.slice(2)]
-      .filter((i) => !i.surfaces || i.surfaces.includes("saas"))
-      .map((i) => i.id);
-    assert.ok(!ids.includes("power"));
-    assert.equal(ids.length, NAV_ITEMS.length - 1);
+    // The registry ships nothing hidden today; this guards the mechanism itself
+    // by temporarily scoping a built-in entry and asserting via resolveNavItems.
+    const target = NAV_ITEMS[1];
+    const original = target.surfaces;
+    target.surfaces = ["bundled"];
+    try {
+      const saasIds = resolveNavItems([], "saas").map((i) => i.id);
+      assert.ok(!saasIds.includes("power"));
+      assert.equal(saasIds.length, NAV_ITEMS.length - 1);
+
+      const bundledIds = resolveNavItems([], "bundled").map((i) => i.id);
+      assert.ok(bundledIds.includes("power"));
+      assert.equal(bundledIds.length, NAV_ITEMS.length);
+    } finally {
+      target.surfaces = original;
+    }
   });
 });
 

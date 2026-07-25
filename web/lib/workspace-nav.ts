@@ -56,9 +56,16 @@ export function resolveNavItems(
   extraItems: NavItem[] = [],
   surface: NavSurface = currentNavSurface(),
 ): NavItem[] {
-  return [...NAV_ITEMS, ...extraItems].filter(
+  const visible = [...NAV_ITEMS, ...extraItems].filter(
     (item) => !item.surfaces || item.surfaces.includes(surface),
   );
+  // De-duplicate by id so a host reusing an existing id (or duplicating within
+  // extras) can't produce duplicate React keys (`key={item.id}`) and the unstable
+  // rendering/selection that follows. A Map keeps each id at its first position
+  // while letting a later entry override the value: last item wins, order preserved.
+  const byId = new Map<string, NavItem>();
+  for (const item of visible) byId.set(item.id, item);
+  return [...byId.values()];
 }
 
 /** Selecting an entry navigates when it carries an href, otherwise switches view. */
