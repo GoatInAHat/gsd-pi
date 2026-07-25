@@ -112,7 +112,9 @@ export function createGatewayMcpServer(params: {
           userId: params.userId,
           toolName,
           args,
-          signal: extra.signal,
+          // extra can be undefined in MCP request handlers, so read the abort
+          // signal optionally to avoid throwing (which would turn the call into a 500).
+          signal: extra?.signal,
         });
         const coerced = coerceToolResult(result);
         recordUsage(params.usage, params.userId, toolName, args, startedAt, coerced.isError !== true);
