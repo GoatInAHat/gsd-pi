@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -111,6 +111,14 @@ export class InMemoryAuthStore {
   protected readonly deviceTokens = new Map<string, DeviceTokenRecord & SecretHashRecord>();
   protected readonly pairingCodes = new Map<string, PairingCodeRecord & SecretHashRecord>();
   private readonly lastAccessPersistedAt = new Map<string, number>();
+  // O(1) lookup acceleration for the hot auth paths. Maps a deterministic hash of
+  // the raw (high-entropy, random) token to the record's map key so authentication
+  // does not linear-scan and recompute salted scrypt for every stored token. The
+  // salted scrypt hash remains the actual verification; these indexes only narrow
+  // the candidate set, live in memory only (never persisted), and self-heal for
+  // snapshot-loaded tokens on their first authentication.
+  private readonly userTokenIndex = new Map<string, string>();
+  private readonly deviceTokenIndex = new Map<string, string>();
 
   constructor(seedUserToken?: SeedUserToken, snapshot?: AuthStoreSnapshot) {
     if (snapshot) this.loadSnapshot(snapshot);
@@ -205,7 +213,7 @@ export class InMemoryAuthStore {
 
   addUserToken(token: string, userId: string, options: { label?: string } = {}): UserTokenRecord {
     this.ensureUser(userId);
-    const existing = findSecretRecord(this.userTokens, token);
+    const existing = this.findIndexedEntry(this.userTokens, this.userTokenIndex, token)?.[1];
     if (existing) {
       // The same raw token must never map to two users, and re-adding it must be
       // idempotent: inserting a fresh salted hash would bloat the snapshot with a
@@ -236,13 +244,14 @@ export class InMemoryAuthStore {
       createdAt: Date.now(),
     };
     this.userTokens.set(key.secretHash, record);
+    this.userTokenIndex.set(lookupKeyFor(token), key.secretHash);
     this.afterMutation();
     return publicTokenRecord(record);
   }
 
   authenticateUser(token: string | undefined): string | null {
     if (!token) return null;
-    const entry = findSecretEntry(this.userTokens, token);
+    const entry = this.findIndexedEntry(this.userTokens, this.userTokenIndex, token);
     if (!entry) return null;
     const [secretHash, record] = entry;
     const user = this.users.get(record.userId);
@@ -256,7 +265,7 @@ export class InMemoryAuthStore {
 
   authenticateDevice(token: string | undefined): DeviceTokenRecord | null {
     if (!token) return null;
-    const entry = findSecretEntry(this.deviceTokens, token);
+    const entry = this.findIndexedEntry(this.deviceTokens, this.deviceTokenIndex, token);
     if (!entry) return null;
     const [secretHash, record] = entry;
     const user = this.users.get(record.userId);
@@ -315,6 +324,7 @@ export class InMemoryAuthStore {
       runtimeName,
       createdAt: Date.now(),
     });
+    this.deviceTokenIndex.set(lookupKeyFor(deviceToken), key.secretHash);
     this.afterMutation();
     return { userId: record.userId, runtimeId, deviceToken };
   }
@@ -330,7 +340,7 @@ export class InMemoryAuthStore {
   }
 
   revokeDeviceToken(deviceToken: string): boolean {
-    const record = findSecretRecord(this.deviceTokens, deviceToken);
+    const record = this.findIndexedEntry(this.deviceTokens, this.deviceTokenIndex, deviceToken)?.[1];
     if (!record) return false;
     record.revoked = true;
     this.afterMutation();
@@ -405,6 +415,28 @@ export class InMemoryAuthStore {
     };
     this.users.set(user.userId, user);
     return user;
+  }
+
+  // Resolve a token via its in-memory lookup index (O(1)) before falling back to a
+  // full scan. The salted scrypt hash is still the authority: an index hit is only
+  // trusted after secretMatches() verifies it. A miss (e.g. a snapshot-loaded token
+  // whose index entry was never built) scans once and back-fills the index so the
+  // next authentication is O(1).
+  private findIndexedEntry<T extends SecretHashRecord>(
+    records: Map<string, T>,
+    index: Map<string, string>,
+    secret: string,
+  ): [string, T] | undefined {
+    const lookupKey = lookupKeyFor(secret);
+    const mappedKey = index.get(lookupKey);
+    if (mappedKey !== undefined) {
+      const record = records.get(mappedKey);
+      if (record && secretMatches(record, secret)) return [mappedKey, record];
+      // Stale index entry (record removed or rotated): fall through to a scan.
+    }
+    const entry = findSecretEntry(records, secret);
+    if (entry) index.set(lookupKey, entry[0]);
+    return entry;
   }
 
   private persistAccessIfDue(secretHash: string, now: number): void {
@@ -605,8 +637,11 @@ function cleanOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function findSecretRecord<T extends SecretHashRecord>(records: Map<string, T>, secret: string): T | undefined {
-  return findSecretEntry(records, secret)?.[1];
+// Deterministic, fast index key over the raw (high-entropy, random) token. Used
+// only to narrow the candidate set for an O(1) lookup; the per-record salted
+// scrypt hash remains the actual verification, so this never weakens auth.
+function lookupKeyFor(secret: string): string {
+  return createHash("sha256").update(secret).digest("hex");
 }
 
 function findSecretEntry<T extends SecretHashRecord>(records: Map<string, T>, secret: string): [string, T] | undefined {

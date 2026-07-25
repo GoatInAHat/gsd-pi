@@ -27,7 +27,9 @@ export async function listenHttpMcpServer(
         return sendJson(res, 200, { ok: true, server: 'gsd-mcp-server', mcpPath: '/mcp' });
       }
 
-      if (url.pathname !== '/mcp') {
+      // Accept both '/mcp' and '/mcp/': some proxies and clients normalize or
+      // append a trailing slash, and the cloud gateway already accepts both.
+      if (url.pathname !== '/mcp' && url.pathname !== '/mcp/') {
         return sendJson(res, 404, { error: 'Not found' });
       }
 
