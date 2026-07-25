@@ -142,11 +142,18 @@ export function createGatewayServer(options: GatewayServerOptions = {}) {
           usageLimiter,
           getUser: (id) => auth.getUser(id),
         });
-        // The MCP server is created per request; close it once the response
-        // finishes so its transport/listeners don't leak under load.
-        res.on("finish", () => {
+        // The MCP server is created per request. Close it on finish (normal
+        // completion) and on close (client disconnected before finish fires) so
+        // its transport/listeners can't leak under load; the guard keeps it a
+        // single close.
+        let mcpClosed = false;
+        const closeMcp = () => {
+          if (mcpClosed) return;
+          mcpClosed = true;
           void mcp.close().catch(() => undefined);
-        });
+        };
+        res.on("finish", closeMcp);
+        res.on("close", closeMcp);
         await mcp.connect(transport);
         await transport.handleRequest(req, res, body);
         return;
@@ -203,8 +210,15 @@ export async function listenGateway(options: GatewayServerOptions = {}): Promise
   return {
     url: `http://${host === "0.0.0.0" ? "localhost" : host}:${port}`,
     close: () => new Promise((resolve, reject) => server.close((err) => {
-      usage.close();
-      auth.close();
+      // File-backed stores flush synchronously on close and can throw (e.g. an
+      // fs write error); reject rather than leaving the promise unsettled.
+      try {
+        usage.close();
+        auth.close();
+      } catch (closeErr) {
+        reject(closeErr);
+        return;
+      }
       if (err) reject(err); else resolve();
     })),
   };

@@ -44,9 +44,17 @@ export async function listenHttpMcpServer(
         sessionIdGenerator: undefined,
       });
       const { server: mcpServer } = await createMcpServer(sessionManager);
-      res.on('finish', () => {
+      let mcpClosed = false;
+      const closeMcp = () => {
+        if (mcpClosed) return;
+        mcpClosed = true;
         void mcpServer.close().catch(() => undefined);
-      });
+      };
+      // Close on finish (normal completion) and on close (client aborted or
+      // disconnected before finish fires) so the per-request server/transport
+      // can't leak under load. The guard keeps it a single close.
+      res.on('finish', closeMcp);
+      res.on('close', closeMcp);
       await mcpServer.connect(transport);
       await transport.handleRequest(req, res, body);
     } catch (err) {
