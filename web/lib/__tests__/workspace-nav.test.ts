@@ -17,7 +17,9 @@ function item(id: string, surfaces?: NavItem["surfaces"], href?: string): NavIte
   return { id, label: id, icon, surfaces, href };
 }
 
-describe("resolveNavItems", () => {
+// Run serially: some tests mutate the shared exported NAV_ITEMS, so concurrent
+// subtests (if the runner's concurrency is ever enabled) could race.
+describe("resolveNavItems", { concurrency: false }, () => {
   test("built-in views are unchanged in order on both surfaces", () => {
     const expected = ["dashboard", "power", "chat", "roadmap", "files", "activity", "visualize"];
     assert.deepEqual(
@@ -96,7 +98,8 @@ describe("resolveNavItems", () => {
   });
 });
 
-describe("selectNavItem", () => {
+// Run serially: these tests mutate the shared globalThis.window.
+describe("selectNavItem", { concurrency: false }, () => {
   test("switches the active view when there is no href", () => {
     const seen: string[] = [];
     selectNavItem(item("files"), (view) => seen.push(view));
