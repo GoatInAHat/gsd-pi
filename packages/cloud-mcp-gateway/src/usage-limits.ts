@@ -83,6 +83,13 @@ export class UsageLimiter {
         ...(status.remaining.day !== undefined ? { day: Math.max(0, status.remaining.day - 1) } : {}),
         ...(status.remaining.month !== undefined ? { month: Math.max(0, status.remaining.month - 1) } : {}),
       },
+      resetAt: {
+        ...status.resetAt,
+        // noteAccepted() just recorded this call, so the minute window is now
+        // non-empty even if it was empty pre-acceptance; surface its reset time
+        // (oldest call in the window + WINDOW_MS) instead of the stale undefined.
+        minute: (calls[0] ?? now) + WINDOW_MS,
+      },
     };
   }
 
