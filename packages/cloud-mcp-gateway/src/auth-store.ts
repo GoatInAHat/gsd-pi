@@ -207,7 +207,27 @@ export class InMemoryAuthStore {
   addUserToken(token: string, userId: string, options: { label?: string } = {}): UserTokenRecord {
     this.ensureUser(userId);
     const existing = findSecretRecord(this.userTokens, token);
-    if (existing?.userId === userId && !existing.revoked) return publicTokenRecord(existing);
+    if (existing) {
+      // The same raw token must never map to two users, and re-adding it must be
+      // idempotent: inserting a fresh salted hash would bloat the snapshot with a
+      // duplicate record that findSecretEntry() can never reach (auth matches the
+      // older entry first). Reuse the existing record instead.
+      if (existing.userId !== userId) {
+        throw new Error("User token is already assigned to a different user");
+      }
+      let mutated = false;
+      if (existing.revoked) {
+        delete existing.revoked;
+        mutated = true;
+      }
+      const label = cleanOptionalString(options.label);
+      if (label && existing.label !== label) {
+        existing.label = label;
+        mutated = true;
+      }
+      if (mutated) this.afterMutation();
+      return publicTokenRecord(existing);
+    }
     const key = deriveSecretHash(token);
     const record: UserTokenRecord & SecretHashRecord = {
       ...key,

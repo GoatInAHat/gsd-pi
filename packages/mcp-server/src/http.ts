@@ -81,11 +81,14 @@ export function isLoopbackHost(host: string): boolean {
 }
 
 function authorize(req: IncomingMessage, options: HttpMcpServerOptions): boolean {
-  if (options.allowNoAuth || !options.authToken) return true;
+  // Match validateHttpMcpOptions(): a whitespace-only token means "no auth",
+  // so an empty-after-trim token must not silently require callers to send it.
+  const expected = options.authToken?.trim();
+  if (options.allowNoAuth || !expected) return true;
   const provided = extractBearerToken(req.headers.authorization);
   if (!provided) return false;
   const a = Buffer.from(provided);
-  const b = Buffer.from(options.authToken);
+  const b = Buffer.from(expected);
   return a.length === b.length && timingSafeEqual(a, b);
 }
 

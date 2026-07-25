@@ -128,7 +128,7 @@ export function createGatewayServer(options: GatewayServerOptions = {}) {
         }
       }
 
-      if (url.pathname === "/mcp") {
+      if (url.pathname === "/mcp" || url.pathname === "/mcp/") {
         const authedUser = requireUser(req, auth);
         if (!authedUser) return sendJson(res, 401, { error: "Unauthorized" });
         const body = req.method === "POST" ? await readJson(req) : undefined;

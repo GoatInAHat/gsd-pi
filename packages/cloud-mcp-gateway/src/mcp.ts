@@ -226,11 +226,9 @@ function recordUsage(
     billable: options.billable,
     throttled: options.throttled,
     ...(typeof args.runtimeId === "string" ? { runtimeId: args.runtimeId } : {}),
-    ...(typeof args.projectAlias === "string"
-      ? { projectAlias: args.projectAlias }
-      : typeof args.projectDir === "string"
-        ? { projectAlias: args.projectDir }
-        : {}),
+    // Only record an explicit alias. Falling back to args.projectDir would
+    // persist and display absolute local filesystem paths in the usage store.
+    ...(typeof args.projectAlias === "string" ? { projectAlias: args.projectAlias } : {}),
     ...(options.error ? { error: options.error } : {}),
   });
 }
