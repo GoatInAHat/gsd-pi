@@ -22,10 +22,10 @@ async function getSharp(): Promise<SharpFactory | null> {
 }
 
 /**
- * Test-only seam: override the cached sharp module. Pass `null` to simulate
- * an environment where the sharp native dep is unavailable; pass `undefined`
- * to clear the cache and let the next getSharp() call re-import. See
- * tests/capture-sharp-optional.test.cjs.
+ * Test-only seam: override the cached sharp factory (the callable default
+ * export, `SharpFactory`). Pass `null` to simulate an environment where the
+ * sharp native dep is unavailable; pass `undefined` to clear the cache and let
+ * the next getSharp() call re-import. See tests/capture-sharp-optional.test.cjs.
  */
 export function __setSharpForTesting(
 	value: SharpFactory | null | undefined,
