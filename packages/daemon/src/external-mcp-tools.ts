@@ -187,8 +187,13 @@ function parseArgsValue(value: unknown, fallback: string[]): string[] {
   const trimmed = value.trim();
   if (!trimmed) return fallback;
   if (trimmed.startsWith("[")) {
-    const parsed = JSON.parse(trimmed) as unknown;
-    if (Array.isArray(parsed)) return parsed.filter((item): item is string => typeof item === "string");
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (Array.isArray(parsed)) return parsed.filter((item): item is string => typeof item === "string");
+    } catch {
+      // Malformed JSON array (e.g. a partially copied env value): fall back to
+      // whitespace splitting below instead of throwing and crashing the daemon.
+    }
   }
   return trimmed.split(/\s+/).filter(Boolean);
 }
