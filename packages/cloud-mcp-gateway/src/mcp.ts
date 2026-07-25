@@ -186,10 +186,11 @@ function addRoutingFields(schema: RuntimeToolInputSchema): RuntimeToolInputSchem
 function coerceToolResult(value: unknown): CallToolResult {
   const parsed = CallToolResultSchema.safeParse(value);
   if (parsed.success) return parsed.data;
+  const serialized = typeof value === "string" ? value : JSON.stringify(value, null, 2);
   return {
     content: [{
       type: "text",
-      text: typeof value === "string" ? value : JSON.stringify(value, null, 2),
+      text: typeof serialized === "string" ? serialized : String(value),
     }],
   };
 }

@@ -50,7 +50,11 @@ export class CloudRuntime {
     const socket = this.socket;
     this.socket = undefined;
     socket?.close();
-    void this.executor.close?.();
+    void Promise.resolve(this.executor.close?.()).catch((err) => {
+      this.logger.warn("cloud runtime executor close failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
   }
 
   private connect(): void {

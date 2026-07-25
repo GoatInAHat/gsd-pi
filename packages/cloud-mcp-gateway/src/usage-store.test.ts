@@ -58,6 +58,7 @@ test("file usage store persists aggregate usage", () => {
     durationMs: 12,
     ok: true,
   });
+  first.close();
 
   const second = new FileUsageStore(storePath);
   const summary = second.getSummary();

@@ -144,7 +144,12 @@ export class LocalToolExecutor {
       default:
         {
           const external = await this.externalMcpTools.executeIfAvailable(toolName, args);
-          if (external.handled) return external.result;
+          if (external.handled) {
+            if (external.result === undefined) {
+              throw new Error(`Forwarded external MCP tool returned no result: ${toolName}`);
+            }
+            return external.result;
+          }
         }
         throw new Error(`Unsupported forwarded GSD MCP tool: ${toolName}`);
     }

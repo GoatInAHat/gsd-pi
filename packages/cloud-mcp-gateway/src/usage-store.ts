@@ -177,6 +177,10 @@ export class InMemoryUsageStore {
     // Extension point for persistent stores.
   }
 
+  close(): void {
+    // No persistence to flush for the in-memory store.
+  }
+
   private loadSnapshot(snapshot: UsageStoreSnapshot): void {
     for (const bucket of snapshot.buckets ?? []) {
       if (!bucket.userId || !bucket.toolName || !bucket.day) continue;
@@ -202,14 +206,41 @@ export class InMemoryUsageStore {
 
 export class FileUsageStore extends InMemoryUsageStore {
   private readonly filePath: string;
+  private readonly flushDelayMs: number;
+  private flushTimer: ReturnType<typeof setTimeout> | undefined;
+  private pending = false;
 
-  constructor(filePath: string) {
+  constructor(filePath: string, options: { flushDelayMs?: number } = {}) {
     super(readUsageSnapshot(filePath));
     this.filePath = filePath;
+    this.flushDelayMs = Math.max(0, options.flushDelayMs ?? 250);
     this.persist();
   }
 
   protected override afterMutation(): void {
+    // Coalesce bursty per-tool-call writes into a single debounced flush so the
+    // hot /mcp path isn't blocked by a synchronous write+rename on every call.
+    this.pending = true;
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = undefined;
+      this.flush();
+    }, this.flushDelayMs);
+    this.flushTimer.unref?.();
+  }
+
+  /** Flush any pending mutation and cancel the debounce timer. */
+  override close(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = undefined;
+    }
+    this.flush();
+  }
+
+  private flush(): void {
+    if (!this.pending) return;
+    this.pending = false;
     this.persist();
   }
 

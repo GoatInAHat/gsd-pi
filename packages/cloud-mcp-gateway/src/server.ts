@@ -191,13 +191,16 @@ export async function listenGateway(options: GatewayServerOptions = {}): Promise
   close: () => Promise<void>;
   url: string;
 }> {
-  const { server } = createGatewayServer(options);
+  const { server, usage } = createGatewayServer(options);
   const port = options.port ?? Number(process.env.PORT ?? 8787);
   const host = options.host ?? "0.0.0.0";
   await new Promise<void>((resolve) => server.listen(port, host, resolve));
   return {
     url: `http://${host === "0.0.0.0" ? "localhost" : host}:${port}`,
-    close: () => new Promise((resolve, reject) => server.close((err) => err ? reject(err) : resolve())),
+    close: () => new Promise((resolve, reject) => server.close((err) => {
+      usage.close();
+      if (err) reject(err); else resolve();
+    })),
   };
 }
 

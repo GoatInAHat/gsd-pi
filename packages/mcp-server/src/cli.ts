@@ -13,8 +13,7 @@ installGlobalErrorHandlers();
 
 runMcpServerCli().catch((err) => {
   process.stderr.write(
-    `[gsd-mcp-server] Fatal: ${err instanceof Error ? err.message : String(err)}
-`
+    `[gsd-mcp-server] Fatal: ${err instanceof Error ? err.message : String(err)}\n`,
   );
   process.exit(1);
 });
