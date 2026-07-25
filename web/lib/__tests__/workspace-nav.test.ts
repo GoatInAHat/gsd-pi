@@ -104,22 +104,29 @@ describe("selectNavItem", () => {
   });
 
   test("navigates and does not switch view when an href is present", () => {
-    const original = (globalThis as { window?: unknown }).window;
+    const g = globalThis as { window?: unknown };
+    const hadWindow = "window" in g;
+    const original = g.window;
     const location = { href: "" };
-    (globalThis as { window?: unknown }).window = { location };
+    g.window = { location };
     try {
       const seen: string[] = [];
       selectNavItem(item("machines", ["saas"], "/devices"), (view) => seen.push(view));
       assert.equal(location.href, "/devices");
       assert.deepEqual(seen, []);
     } finally {
-      (globalThis as { window?: unknown }).window = original;
+      // Restore the exact pre-test state: deleting when window was absent, so we
+      // don't leave a `window` property that later `"window" in globalThis` sees.
+      if (hadWindow) g.window = original;
+      else delete g.window;
     }
   });
 
   test("throws a clear error for an href entry outside a browser", () => {
-    const original = (globalThis as { window?: unknown }).window;
-    (globalThis as { window?: unknown }).window = undefined;
+    const g = globalThis as { window?: unknown };
+    const hadWindow = "window" in g;
+    const original = g.window;
+    delete g.window;
     try {
       const seen: string[] = [];
       assert.throws(
@@ -128,7 +135,8 @@ describe("selectNavItem", () => {
       );
       assert.deepEqual(seen, []);
     } finally {
-      (globalThis as { window?: unknown }).window = original;
+      if (hadWindow) g.window = original;
+      else delete g.window;
     }
   });
 });

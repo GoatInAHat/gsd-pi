@@ -51,7 +51,12 @@ export function currentNavSurface(): NavSurface {
   return isCloudModeClient() ? "saas" : "bundled";
 }
 
-/** Registry entries visible on `surface`, followed by any host-supplied extras. */
+/**
+ * Registry entries visible on `surface`, followed by any host-supplied extras.
+ * Ids are unique: an extra with a new id is appended after the built-ins, but an
+ * extra reusing an existing id overrides that entry in place (keeping its
+ * original position) rather than adding a second row.
+ */
 export function resolveNavItems(
   extraItems: NavItem[] = [],
   surface: NavSurface = currentNavSurface(),
