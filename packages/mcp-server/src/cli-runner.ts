@@ -31,6 +31,8 @@ export interface McpServerCliArgs {
   http: boolean;
   host?: string;
   port?: number;
+  /** The raw `--port` string as the user passed it, retained for error messages. */
+  portRaw?: string;
   authToken?: string;
   noAuth: boolean;
 }
@@ -65,9 +67,12 @@ export function parseMcpServerCliArgs(argv: readonly string[]): McpServerCliArgs
       case '--host':
         args.host = takeValue();
         break;
-      case '--port':
-        args.port = Number(takeValue());
+      case '--port': {
+        const rawPort = takeValue();
+        args.portRaw = rawPort;
+        args.port = Number(rawPort);
         break;
+      }
       case '--auth-token':
         args.authToken = takeValue();
         break;
@@ -336,7 +341,7 @@ export async function runMcpServerCli(options: RunMcpServerCliOptions = {}): Pro
     onSignal('SIGINT', () => void cleanupHttp());
     try {
       if (!Number.isInteger(port) || port < 1 || port > 65535) {
-        throw new Error(`invalid --port: ${String(cliArgs.port)}`);
+        throw new Error(`invalid --port: ${JSON.stringify(cliArgs.portRaw ?? String(cliArgs.port))}`);
       }
       httpHandle = await listenHttp(sessionManager, { host, port, authToken, allowNoAuth: cliArgs.noAuth });
       stderr.write(`[gsd-mcp-server] MCP server listening on ${httpHandle.url}\n`);

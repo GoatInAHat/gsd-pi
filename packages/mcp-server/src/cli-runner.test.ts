@@ -1438,7 +1438,13 @@ describe('runMcpServerCli', () => {
 
   test('rejects an invalid --port before attempting to listen', async () => {
     const calls: string[] = [];
-    const stderr = new Writable({ write(_chunk, _encoding, callback) { callback(); } });
+    const stderrChunks: string[] = [];
+    const stderr = new Writable({
+      write(chunk, _encoding, callback) {
+        stderrChunks.push(String(chunk));
+        callback();
+      },
+    });
 
     await assert.rejects(
       runMcpServerCli({
@@ -1462,6 +1468,8 @@ describe('runMcpServerCli', () => {
     );
 
     assert.deepEqual(calls, ['cleanup']);
+    // The error preserves the user's raw input rather than reporting "NaN".
+    assert.match(stderrChunks.join(''), /invalid --port: "not-a-number"/);
   });
 });
 
@@ -1473,7 +1481,7 @@ describe('parseMcpServerCliArgs', () => {
   test('parses both --flag value and --flag=value forms', () => {
     assert.deepEqual(
       parseMcpServerCliArgs(['--http', '--host', '0.0.0.0', '--port=8080', '--auth-token', 'abc', '--no-auth']),
-      { http: true, host: '0.0.0.0', port: 8080, authToken: 'abc', noAuth: true },
+      { http: true, host: '0.0.0.0', port: 8080, portRaw: '8080', authToken: 'abc', noAuth: true },
     );
   });
 

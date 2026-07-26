@@ -98,8 +98,13 @@ export function createGatewayMcpServer(params: {
         return result;
       }
 
-      const advertisedToolNames = new Set(params.registry.listTools(params.userId).map((tool) => tool.name));
-      if (!BUILTIN_TOOL_NAMES.has(toolName) && !advertisedToolNames.has(toolName)) {
+      // Only built-in tools reach the hot path most of the time; skip the
+      // runtime tool-name lookup (listTools + per-call scan) unless the tool is
+      // not a built-in and actually needs runtime resolution.
+      if (
+        !BUILTIN_TOOL_NAMES.has(toolName)
+        && !params.registry.listTools(params.userId).some((tool) => tool.name === toolName)
+      ) {
         recordUsage(params.usage, params.userId, toolName, args, startedAt, false, {
           error: "unknown tool",
           billable: false,

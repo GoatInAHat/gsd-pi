@@ -44,8 +44,19 @@ Environment:
   process.exit(0);
 }
 
+let port: number | undefined;
+if (values.port) {
+  port = Number(values.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    process.stderr.write(
+      `[gsd-cloud-mcp-gateway] fatal: invalid --port: ${JSON.stringify(values.port)}\n`,
+    );
+    process.exit(1);
+  }
+}
+
 listenGateway({
-  port: values.port ? Number(values.port) : undefined,
+  port,
   host: values.host,
   authStorePath: values["auth-store"],
   usageStorePath: values["usage-store"],
