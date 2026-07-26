@@ -1,0 +1,167 @@
+# Weekly refresh of the generated model catalog in packages/pi-ai
+# (src/models.generated.ts, plus src/models.generated.json once the generator
+# emits it). Opens a bot PR with the diff so the change ships through normal
+# review + CI instead of an unreviewed push to main.
+#
+# Token note: PRs opened with the default GITHUB_TOKEN do not trigger CI
+# workflow runs, so this follows the repo's release-bot convention and uses
+# the RELEASE_PAT secret (falling back to github.token if it is not set, in
+# which case CI must be triggered manually on the bot PR).
+name: Update model catalog
+
+on:
+  schedule:
+    # Tuesday 09:17 UTC — off-peak minute, outside the top/half hour.
+    - cron: "17 9 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-model-catalog
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: refresh-model-catalog
+    timeout-minutes: 20
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          token: ${{ secrets.RELEASE_PAT || github.token }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
+        with:
+          version: 10.12.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+          GSD_SKIP_RTK_INSTALL: '1'
+          GSD_SKIP_DEP_REPAIR: '1'
+        run: pnpm install --frozen-lockfile
+
+      # Count providers/models before regenerating. Prefer the JSON artifact
+      # (exact parse) once the generator emits it; fall back to counting
+      # entries in the generated TypeScript.
+      - name: Snapshot catalog counts (before)
+        id: before
+        shell: bash
+        env:
+          CATALOG_DIR: packages/pi-ai/src
+        run: |
+          node --input-type=module -e '
+            import { existsSync, readFileSync } from "node:fs";
+            const dir = process.env.CATALOG_DIR;
+            const jsonPath = `${dir}/models.generated.json`;
+            let providers = 0, models = 0;
+            if (existsSync(jsonPath)) {
+              const catalog = JSON.parse(readFileSync(jsonPath, "utf8"));
+              providers = Object.keys(catalog).length;
+              models = Object.values(catalog).reduce((n, p) => n + Object.keys(p).length, 0);
+            } else {
+              // .ts layout: one-tab quoted keys are providers, two-tab are models.
+              const lines = readFileSync(`${dir}/models.generated.ts`, "utf8").split("\n");
+              providers = lines.filter((l) => /^\t"[^"]+": \{$/.test(l)).length;
+              models = lines.filter((l) => /^\t\t"[^"]+": \{$/.test(l)).length;
+            }
+            console.log(`providers=${providers}`);
+            console.log(`models=${models}`);
+          ' >> "$GITHUB_OUTPUT"
+
+      - name: Regenerate model catalog
+        run: pnpm --filter @gsd/pi-ai run generate-models
+
+      - name: Snapshot catalog counts (after)
+        id: after
+        shell: bash
+        env:
+          CATALOG_DIR: packages/pi-ai/src
+        run: |
+          node --input-type=module -e '
+            import { existsSync, readFileSync } from "node:fs";
+            const dir = process.env.CATALOG_DIR;
+            const jsonPath = `${dir}/models.generated.json`;
+            let providers = 0, models = 0;
+            if (existsSync(jsonPath)) {
+              const catalog = JSON.parse(readFileSync(jsonPath, "utf8"));
+              providers = Object.keys(catalog).length;
+              models = Object.values(catalog).reduce((n, p) => n + Object.keys(p).length, 0);
+            } else {
+              // .ts layout: one-tab quoted keys are providers, two-tab are models.
+              const lines = readFileSync(`${dir}/models.generated.ts`, "utf8").split("\n");
+              providers = lines.filter((l) => /^\t"[^"]+": \{$/.test(l)).length;
+              models = lines.filter((l) => /^\t\t"[^"]+": \{$/.test(l)).length;
+            }
+            console.log(`providers=${providers}`);
+            console.log(`models=${models}`);
+          ' >> "$GITHUB_OUTPUT"
+
+      - name: Commit, push, and open refresh PR
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT || github.token }}
+          BEFORE_PROVIDERS: ${{ steps.before.outputs.providers }}
+          BEFORE_MODELS: ${{ steps.before.outputs.models }}
+          AFTER_PROVIDERS: ${{ steps.after.outputs.providers }}
+          AFTER_MODELS: ${{ steps.after.outputs.models }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "catalog already fresh"
+            exit 0
+          fi
+
+          git status --porcelain
+
+          BRANCH="bot/model-catalog-refresh-$(date -u +%Y-%m-%d)"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            BRANCH="${BRANCH}-run${GITHUB_RUN_ID}"
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add packages/pi-ai/src/models.generated.ts packages/pi-ai/src/models.generated.json
+          git commit -m "chore(models): refresh generated model catalog"
+          git push origin "$BRANCH"
+
+          BODY_FILE="$(mktemp)"
+          {
+            echo "## Model catalog refresh"
+            echo
+            echo "| | before | after |"
+            echo "| --- | ---: | ---: |"
+            echo "| providers | ${BEFORE_PROVIDERS} | ${AFTER_PROVIDERS} |"
+            echo "| models | ${BEFORE_MODELS} | ${AFTER_MODELS} |"
+            echo
+            echo "Regenerated via \`pnpm --filter @gsd/pi-ai run generate-models\`"
+            echo "(models.dev, OpenRouter, Vercel AI Gateway)."
+            echo
+            echo "Machine-generated by the \`update-model-catalog\` workflow"
+            echo "(run #${GITHUB_RUN_NUMBER})."
+          } > "$BODY_FILE"
+
+          PR_URL="$(gh pr create --base main --head "$BRANCH" \
+            --title "chore(models): refresh generated model catalog" \
+            --body-file "$BODY_FILE")"
+          echo "Opened PR: ${PR_URL}"
+
+          if ! gh pr merge --auto --squash "$PR_URL"; then
+            echo "auto-merge unavailable; leaving PR for manual review"
+          fi
