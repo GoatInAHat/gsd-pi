@@ -94,21 +94,33 @@ function excludeUnplannedMilestonesFromDbScan(
   markdownScan: HierarchyScan,
   dbScan: HierarchyScan,
 ): void {
+  const excludedMilestoneIds = new Set<string>();
   for (const milestone of getAllMilestones()) {
     if (markdownScan.milestones.has(milestone.id)) continue;
     const slices = getMilestoneSlices(milestone.id);
     if (milestone.vision.trim() || slices.some((slice) => slice.status !== "skipped")) continue;
+    excludedMilestoneIds.add(milestone.id);
+  }
+  if (excludedMilestoneIds.size === 0) return;
 
-    if (dbScan.milestones.delete(milestone.id)) dbScan.counts.milestones--;
-    const prefix = `${milestone.id}/`;
-    for (const identity of [...dbScan.slices]) {
-      if (!identity.startsWith(prefix)) continue;
-      if (dbScan.slices.delete(identity)) dbScan.counts.slices--;
-    }
-    for (const identity of [...dbScan.tasks]) {
-      if (!identity.startsWith(prefix)) continue;
-      if (dbScan.tasks.delete(identity)) dbScan.counts.tasks--;
-    }
+  // Identities are `${milestoneId}/…`, so the milestone is the leading segment.
+  const milestoneOf = (identity: string): string => {
+    const slash = identity.indexOf("/");
+    return slash === -1 ? identity : identity.slice(0, slash);
+  };
+
+  for (const id of excludedMilestoneIds) {
+    if (dbScan.milestones.delete(id)) dbScan.counts.milestones--;
+  }
+  // Single pass over each set. Deleting the current element during Set
+  // iteration is well-defined, so no intermediate array copy is needed.
+  for (const identity of dbScan.slices) {
+    if (excludedMilestoneIds.has(milestoneOf(identity)) && dbScan.slices.delete(identity))
+      dbScan.counts.slices--;
+  }
+  for (const identity of dbScan.tasks) {
+    if (excludedMilestoneIds.has(milestoneOf(identity)) && dbScan.tasks.delete(identity))
+      dbScan.counts.tasks--;
   }
 }
 
