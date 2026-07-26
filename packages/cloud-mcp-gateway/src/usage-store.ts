@@ -243,7 +243,15 @@ export class FileUsageStore extends InMemoryUsageStore {
   private flush(): void {
     if (!this.pending) return;
     this.pending = false;
-    this.persist();
+    try {
+      this.persist();
+    } catch {
+      // Persistence is best-effort. Restore the pending flag so the next
+      // mutation (or close()) retries the write, and swallow the error so a
+      // transient fs failure (disk full, permissions) can't surface as an
+      // unhandled exception from the debounced timer and crash the gateway.
+      this.pending = true;
+    }
   }
 
   private persist(): void {

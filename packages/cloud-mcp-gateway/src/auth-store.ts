@@ -532,7 +532,16 @@ export class FileAuthStore extends InMemoryAuthStore {
     if (this.accessFlushTimer) return;
     this.accessFlushTimer = setTimeout(() => {
       this.accessFlushTimer = undefined;
-      this.persist();
+      // Access timestamps are best-effort telemetry. Swallow persist failures
+      // (disk full, permissions, etc.) here so they can't surface as an
+      // unhandled exception on the event loop and take down the gateway; a
+      // later structural mutation or close() re-persists the full snapshot,
+      // which already carries the latest access timestamps.
+      try {
+        this.persist();
+      } catch {
+        // best-effort access-timestamp flush; ignore
+      }
     }, this.accessFlushDelayMs);
     this.accessFlushTimer.unref?.();
   }
