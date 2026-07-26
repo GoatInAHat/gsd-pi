@@ -1,5 +1,5 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { CallToolResultSchema, type Tool } from "@modelcontextprotocol/sdk/types.js";
 
 export interface ExternalMcpToolConfig {
@@ -116,7 +116,13 @@ export class ExternalMcpToolBridge {
       command: config.command,
       args: config.args ?? [],
       ...(config.cwd ? { cwd: config.cwd } : {}),
-      ...(config.env ? { env: config.env } : {}),
+      // Merge the config's env over the SDK's safe default environment
+      // (getDefaultEnvironment: PATH, HOME, and other required vars) instead of
+      // replacing it. Passing config.env alone would drop PATH and cause the
+      // child MCP server to fail to spawn. This mirrors the transport's own
+      // default (getDefaultEnvironment() when env is unset) while adding the
+      // configured overrides, and avoids leaking the full process.env.
+      ...(config.env ? { env: { ...getDefaultEnvironment(), ...config.env } } : {}),
       stderr: "pipe",
     });
     transport.stderr?.on("data", () => {
