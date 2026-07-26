@@ -277,15 +277,7 @@ Run `gsd update --models` to fetch the latest published model catalog without a 
 gsd update --models
 ```
 
-The command downloads the catalog snapshot from the gsd-pi repository (`https://raw.githubusercontent.com/open-gsd/gsd-pi/main/packages/pi-ai/src/models.generated.json`) and stores it as a versioned JSON overlay at `~/.gsd/agent/models-catalog.json`:
-
-```json
-{
-  "version": 1,
-  "fetchedAt": "<ISO timestamp>",
-  "source": "<fetch URL>",
-  "models": { "<provider>": { "<modelId>": { "id": "...", "contextWindow": 128000, "...": "..." } } } }
-```
+The command downloads the current generated catalog snapshot from the gsd-pi repository's `main` branch and stores it as a versioned JSON overlay at `~/.gsd/agent/models-catalog.json`. The flag is standalone; a trailing value is rejected.
 
 At startup, models resolve in precedence order (lowest to highest):
 
@@ -293,7 +285,7 @@ At startup, models resolve in precedence order (lowest to highest):
 2. **Overlay** from `~/.gsd/agent/models-catalog.json` — replaces bundled entries with the same provider + model `id` and adds new models and providers.
 3. **`models.json`** (this file) — custom providers, custom models, and `modelOverrides` always take highest precedence and are never modified by the update.
 
-This delivers new models, pricing, and context-window updates as they are published, without upgrading GSD itself. If the overlay is missing or malformed it is ignored and startup is unaffected.
+This delivers new models, pricing, and context-window updates as they are published, without upgrading GSD itself. The overlay is replaced atomically only after a complete catalog passes validation, so a download, validation, or write failure leaves an existing overlay unchanged. If the overlay is missing or malformed, it is ignored and startup continues with the bundled catalog and `models.json`.
 
 ## OpenAI Compatibility
 
