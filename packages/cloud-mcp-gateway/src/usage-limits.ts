@@ -72,7 +72,13 @@ export class UsageLimiter {
       month: billableUsage.month + reserved.month,
     }, now, calls[0] ? calls[0] + WINDOW_MS : undefined, billable);
     if (!status.allowed) return status;
-    this.noteAccepted(user.userId, now);
+    // Only track per-minute timestamps when a minute limit actually applies. For
+    // unlimited plans (or when the minute limit is disabled via env) throttling
+    // never fires, so recording timestamps would only grow the per-user
+    // minuteCalls array under load and waste CPU in prune()/filter without ever
+    // changing a decision.
+    const trackMinute = isLimited(limits.callsPerMinute);
+    if (trackMinute) this.noteAccepted(user.userId, now);
     if (billable) this.reserveBillable(user.userId, now);
     // Reflect the accepted call's own reservation in the returned status so it is
     // consistent with the limiter's internal state: the minute window counted it
@@ -84,7 +90,7 @@ export class UsageLimiter {
       ...status,
       usage: {
         ...status.usage,
-        minute: minute + 1,
+        minute: trackMinute ? minute + 1 : status.usage.minute,
         day: status.usage.day + (billable ? 1 : 0),
         month: status.usage.month + (billable ? 1 : 0),
       },
@@ -99,7 +105,8 @@ export class UsageLimiter {
         // noteAccepted() just recorded this call, so the minute window is now
         // non-empty even if it was empty pre-acceptance; surface its reset time
         // (oldest call in the window + WINDOW_MS) instead of the stale undefined.
-        minute: (calls[0] ?? now) + WINDOW_MS,
+        // Only when a minute limit applies: unlimited plans have no minute window.
+        ...(trackMinute ? { minute: (calls[0] ?? now) + WINDOW_MS } : {}),
       },
     };
   }
