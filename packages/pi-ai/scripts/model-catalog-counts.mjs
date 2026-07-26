@@ -9,18 +9,34 @@ if (!catalogDir) {
 }
 
 const jsonPath = join(catalogDir, "models.generated.json");
-let providers;
-let models;
+let providerCounts;
 
 if (existsSync(jsonPath)) {
 	const catalog = JSON.parse(readFileSync(jsonPath, "utf8"));
-	providers = Object.keys(catalog).length;
-	models = Object.values(catalog).reduce((count, provider) => count + Object.keys(provider).length, 0);
+	providerCounts = Object.fromEntries(
+		Object.entries(catalog).map(([provider, models]) => [provider, Object.keys(models).length]),
+	);
 } else {
 	const lines = readFileSync(join(catalogDir, "models.generated.ts"), "utf8").split("\n");
-	providers = lines.filter((line) => /^\t"[^"]+": \{$/.test(line)).length;
-	models = lines.filter((line) => /^\t\t"[^"]+": \{$/.test(line)).length;
+	const jsonString = '"(?:\\\\.|[^"\\\\])*"';
+	const providerLine = new RegExp(`^\\t(${jsonString}): \\{$`);
+	const modelLine = new RegExp(`^\\t\\t${jsonString}: \\{$`);
+	providerCounts = {};
+	let currentProvider;
+
+	for (const line of lines) {
+		const providerMatch = providerLine.exec(line);
+		if (providerMatch) {
+			currentProvider = JSON.parse(providerMatch[1]);
+			providerCounts[currentProvider] = 0;
+		} else if (currentProvider && modelLine.test(line)) {
+			providerCounts[currentProvider] += 1;
+		}
+	}
 }
 
+const providers = Object.keys(providerCounts).length;
+const models = Object.values(providerCounts).reduce((count, providerModels) => count + providerModels, 0);
 console.log(`providers=${providers}`);
 console.log(`models=${models}`);
+console.log(`provider_counts=${JSON.stringify(providerCounts)}`);

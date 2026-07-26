@@ -312,6 +312,13 @@ function formatCost(value: number): string {
 	return Object.is(rounded, -0) ? "0" : String(rounded);
 }
 
+function formatFiniteNumber(value: unknown, field: string, modelId: string): string {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		throw new Error(`${field} for model ${JSON.stringify(modelId)} must be a finite number.`);
+	}
+	return String(value);
+}
+
 async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 	try {
 		console.log("Fetching models from OpenRouter API...");
@@ -2345,8 +2352,8 @@ export const MODELS = {
 				output += `\t\t\t\ttiers: [${tiers}],\n`;
 			}
 			output += `\t\t\t},\n`;
-			output += `\t\t\tcontextWindow: ${model.contextWindow},\n`;
-			output += `\t\t\tmaxTokens: ${model.maxTokens},\n`;
+			output += `\t\t\tcontextWindow: ${formatFiniteNumber(model.contextWindow, "contextWindow", model.id)},\n`;
+			output += `\t\t\tmaxTokens: ${formatFiniteNumber(model.maxTokens, "maxTokens", model.id)},\n`;
 			output += `\t\t} satisfies Model<${JSON.stringify(model.api)}>,\n`;
 		}
 
