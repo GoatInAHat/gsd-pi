@@ -22,10 +22,17 @@ interface ExternalMcpConnection {
 
 const DEFAULT_BROWSER_MCP_ID = "gsd-browser";
 
+// Minimum interval between route refreshes triggered by an unknown tool name in
+// executeIfAvailable(). Bounds how often remote-supplied names can drive
+// listTools()/spawn work while still letting a newly advertised tool be
+// discovered within the window.
+const ROUTE_REFRESH_TTL_MS = 60_000;
+
 export class ExternalMcpToolBridge {
   private readonly connections = new Map<string, ExternalMcpConnection>();
   private readonly connecting = new Map<string, Promise<ExternalMcpConnection>>();
   private readonly toolRoutes = new Map<string, string>();
+  private routesRefreshedAt = 0;
 
   constructor(private readonly configs: ExternalMcpToolConfig[]) {}
 
@@ -51,15 +58,20 @@ export class ExternalMcpToolBridge {
         await this.closeConnection(config.id);
       }
     }
+    // Record that a full refresh attempt completed so executeIfAvailable() can
+    // rate-limit refreshes driven by unknown tool names.
+    this.routesRefreshedAt = Date.now();
     return tools.sort((a, b) => a.name.localeCompare(b.name));
   }
 
   async executeIfAvailable(toolName: string, args: Record<string, unknown>): Promise<ExternalMcpToolExecution> {
     let configId = this.toolRoutes.get(toolName);
-    if (!configId) {
+    if (!configId && Date.now() - this.routesRefreshedAt >= ROUTE_REFRESH_TTL_MS) {
       // Routes are only populated by advertisedTools(); a call can arrive before
-      // that has run (or after the routes were cleared). Refresh once before
-      // deciding the tool is not ours so a valid forwarded tool isn't rejected.
+      // that has run (or after the routes were cleared). Refresh at most once per
+      // ROUTE_REFRESH_TTL_MS before deciding the tool is not ours, so a valid
+      // forwarded tool isn't rejected while a stream of unknown names from remote
+      // callers cannot force unbounded listTools()/spawn work (a DoS vector).
       await this.advertisedTools().catch(() => undefined);
       configId = this.toolRoutes.get(toolName);
     }
