@@ -80,9 +80,19 @@ export async function listenHttpMcpServer(
   });
   const displayHost = options.host === '0.0.0.0' ? 'localhost' : options.host;
   return {
-    url: `http://${displayHost}:${options.port}/mcp`,
+    url: `http://${formatUrlHost(displayHost)}:${options.port}/mcp`,
     close: () => new Promise((resolve, reject) => server.close((err) => err ? reject(err) : resolve())),
   };
+}
+
+/**
+ * Format a listen host for use in a URL authority. IPv6 literals must be
+ * bracketed (e.g. `[::1]`) or the resulting URL is invalid; tolerate an
+ * already-bracketed value so we never double-wrap.
+ */
+export function formatUrlHost(host: string): string {
+  const bare = host.replace(/^\[/, '').replace(/\]$/, '');
+  return bare.includes(':') ? `[${bare}]` : bare;
 }
 
 export function validateHttpMcpOptions(options: HttpMcpServerOptions): void {
