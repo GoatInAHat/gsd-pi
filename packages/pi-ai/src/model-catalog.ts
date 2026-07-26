@@ -97,10 +97,10 @@ const ThinkingLevelMapSchema = Type.Object(
 
 const CostTierSchema = Type.Object({
 	inputTokensAbove: Type.Number({ minimum: 0 }),
-	input: Type.Optional(Type.Number({ minimum: 0 })),
-	output: Type.Optional(Type.Number({ minimum: 0 })),
-	cacheRead: Type.Optional(Type.Number({ minimum: 0 })),
-	cacheWrite: Type.Optional(Type.Number({ minimum: 0 })),
+	input: Type.Optional(Type.Number()),
+	output: Type.Optional(Type.Number()),
+	cacheRead: Type.Optional(Type.Number()),
+	cacheWrite: Type.Optional(Type.Number()),
 });
 
 const ModelCatalogEntrySchema = Type.Object({
@@ -108,15 +108,15 @@ const ModelCatalogEntrySchema = Type.Object({
 	name: Type.String({ minLength: 1 }),
 	api: Type.String({ minLength: 1 }),
 	provider: Type.String({ minLength: 1 }),
-	baseUrl: Type.String({ minLength: 1 }),
+	baseUrl: Type.String(),
 	reasoning: Type.Boolean(),
 	thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
 	input: Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]), { minItems: 1 }),
 	cost: Type.Object({
-		input: Type.Number({ minimum: 0 }),
-		output: Type.Number({ minimum: 0 }),
-		cacheRead: Type.Number({ minimum: 0 }),
-		cacheWrite: Type.Number({ minimum: 0 }),
+		input: Type.Number(),
+		output: Type.Number(),
+		cacheRead: Type.Number(),
+		cacheWrite: Type.Number(),
 		tiers: Type.Optional(Type.Array(CostTierSchema)),
 	}),
 	contextWindow: Type.Number({ minimum: 1 }),

@@ -4,6 +4,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import { isModelsCatalog } from "../src/model-catalog.ts";
 import { calculateCost } from "../src/models.ts";
 import { MODELS } from "../src/models.generated.ts";
 
@@ -12,6 +13,12 @@ describe("models.generated.ts", () => {
 		const snapshot = JSON.parse(readFileSync(join(import.meta.dirname, "../src/models.generated.json"), "utf8"));
 
 		expect(snapshot).toEqual(MODELS);
+	});
+
+	test("models.generated.json satisfies catalog validation", () => {
+		const snapshot = JSON.parse(readFileSync(join(import.meta.dirname, "../src/models.generated.json"), "utf8"));
+
+		expect(isModelsCatalog(snapshot)).toBe(true);
 	});
 
 	test("does not include floating-point precision artifacts in cost literals", () => {
