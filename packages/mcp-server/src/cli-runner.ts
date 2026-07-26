@@ -53,7 +53,11 @@ export function parseMcpServerCliArgs(argv: readonly string[]): McpServerCliArgs
     const takeValue = (): string => {
       if (inlineValue !== undefined) return inlineValue;
       const next = argv[i + 1];
-      if (next === undefined) throw new Error(`missing value for ${flag}`);
+      // Treat a following flag-looking token as a missing value instead of
+      // silently consuming it (e.g. `--host --http` must not set host to
+      // "--http"); use the `--flag=value` form for a value that must start
+      // with "--".
+      if (next === undefined || next.startsWith('--')) throw new Error(`missing value for ${flag}`);
       i += 1;
       return next;
     };

@@ -1492,4 +1492,12 @@ describe('parseMcpServerCliArgs', () => {
   test('throws when a value-taking flag is missing its value', () => {
     assert.throws(() => parseMcpServerCliArgs(['--host']), /missing value for --host/);
   });
+
+  test('does not consume a following flag as a value', () => {
+    assert.throws(() => parseMcpServerCliArgs(['--host', '--http']), /missing value for --host/);
+  });
+
+  test('accepts a --flag=value whose value starts with dashes', () => {
+    assert.equal(parseMcpServerCliArgs(['--auth-token=--literal']).authToken, '--literal');
+  });
 });
