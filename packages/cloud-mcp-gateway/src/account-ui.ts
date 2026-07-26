@@ -422,11 +422,13 @@ export function renderAccountUi(config: ClerkPublicConfig | undefined): string {
         }
       });
 
-      // The Clerk scripts load with the defer attribute, so they execute only
-      // after the document finishes parsing (just before DOMContentLoaded).
-      // Running boot() synchronously here would see window.Clerk undefined and
-      // wrongly report "Clerk is not configured", so wait for DOMContentLoaded
-      // when parsing is still in progress.
+      // The Clerk scripts load with the defer attribute, so they run after the
+      // document finishes parsing and before DOMContentLoaded fires. This inline
+      // script executes during parsing, when window.Clerk is not yet populated,
+      // so booting now would wrongly report "Clerk is not configured". Waiting
+      // for DOMContentLoaded guarantees the deferred Clerk scripts have executed
+      // and populated window.Clerk; if the document has already finished loading
+      // they have run, so boot immediately.
       if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", boot);
       } else {

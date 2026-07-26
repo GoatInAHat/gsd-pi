@@ -205,7 +205,11 @@ export class InMemoryAuthStore {
   }
 
   issueUserToken(userId: string, options: { label?: string } = {}): UserTokenIssue {
-    if (!this.users.has(userId)) throw new Error(`Unknown user: ${userId}`);
+    // Do not mint tokens for a disabled user: authenticateUser() rejects them,
+    // so the token could never be used, only confuse operators and bloat the
+    // persisted snapshot. Mirrors the createPairingCode() gate below.
+    const user = this.users.get(userId);
+    if (!user || user.disabled) throw new Error(`Unknown or disabled user: ${userId}`);
     const userToken = `${USER_TOKEN_PREFIX}${randomBytes(32).toString("hex")}`;
     const record = this.addUserToken(userToken, userId, options);
     return { userId, tokenId: record.tokenId, userToken };
