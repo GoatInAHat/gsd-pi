@@ -301,7 +301,7 @@ async function handleAdminApi(params: {
     });
   }
 
-  if (req.method === "POST" && segments[2] === "users" && segments[3] && segments[4] === "tokens") {
+  if (req.method === "POST" && segments.length === 5 && segments[2] === "users" && segments[3] && segments[4] === "tokens") {
     const user = auth.getUser(segments[3]);
     if (!user) return sendJson(res, 404, { error: "User not found" });
     const body = await readJson(req);
@@ -313,7 +313,7 @@ async function handleAdminApi(params: {
     });
   }
 
-  if (req.method === "POST" && segments[2] === "users" && segments[3] && segments[4] === "disabled") {
+  if (req.method === "POST" && segments.length === 5 && segments[2] === "users" && segments[3] && segments[4] === "disabled") {
     const user = auth.getUser(segments[3]);
     if (!user) return sendJson(res, 404, { error: "User not found" });
     const body = await readJson(req);
@@ -324,7 +324,7 @@ async function handleAdminApi(params: {
     return sendJson(res, 200, { user: auth.updateUser(user.userId, { disabled }) });
   }
 
-  if (req.method === "POST" && segments[2] === "users" && segments[3] && segments[4] === "pairing-codes") {
+  if (req.method === "POST" && segments.length === 5 && segments[2] === "users" && segments[3] && segments[4] === "pairing-codes") {
     const user = auth.getUser(segments[3]);
     if (!user) return sendJson(res, 404, { error: "User not found" });
     try {
@@ -334,7 +334,7 @@ async function handleAdminApi(params: {
     }
   }
 
-  if (req.method === "POST" && segments[2] === "tokens" && segments[3] && segments[4] === "revoke") {
+  if (req.method === "POST" && segments.length === 5 && segments[2] === "tokens" && segments[3] && segments[4] === "revoke") {
     const revoked = auth.revokeUserTokenById(segments[3]);
     return sendJson(res, revoked ? 200 : 404, revoked ? { revoked: true } : { error: "Token not found" });
   }
@@ -377,7 +377,7 @@ async function handleAccountApi(params: {
     });
   }
 
-  if (req.method === "POST" && segments[2] === "tokens" && segments[3] && segments[4] === "revoke") {
+  if (req.method === "POST" && segments.length === 5 && segments[2] === "tokens" && segments[3] && segments[4] === "revoke") {
     const token = auth.listUserTokens(user.userId).find((record) => record.tokenId === segments[3]);
     if (!token) return sendJson(res, 404, { error: "Token not found" });
     const revoked = auth.revokeUserTokenById(token.tokenId);
