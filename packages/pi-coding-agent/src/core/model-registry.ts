@@ -9,6 +9,7 @@ import {
 	type Context,
 	getModels,
 	getProviders,
+	isModelsCatalogOverlay,
 	type KnownProvider,
 	type Model,
 	type OAuthProviderInterface,
@@ -283,36 +284,10 @@ function emptyCustomModelsResult(error?: string): CustomModelsResult {
 	return { models: [], overrides: new Map(), modelOverrides: new Map(), error };
 }
 
-/**
- * User-level models catalog overlay (models-catalog.json), written by
- * `gsd update --models`. Sits between the bundled catalog and models.json:
- * its entries replace bundled entries with the same provider+id wholesale and
- * add entries that don't exist in the bundled catalog.
- */
-interface ModelsCatalogOverlay {
-	version: number;
-	fetchedAt?: string;
-	source?: string;
-	models: Record<string, Record<string, Model<Api>>>;
-}
-
 /** Result of loading the models catalog overlay */
 interface ModelsCatalogOverlayResult {
 	models: Model<Api>[];
 	error: string | undefined;
-}
-
-function isModelsCatalogOverlay(value: unknown): value is ModelsCatalogOverlay {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-	const models = (value as { models?: unknown }).models;
-	if (typeof models !== "object" || models === null || Array.isArray(models)) return false;
-	for (const providerModels of Object.values(models)) {
-		if (typeof providerModels !== "object" || providerModels === null || Array.isArray(providerModels)) return false;
-		for (const modelDef of Object.values(providerModels)) {
-			if (typeof modelDef !== "object" || modelDef === null || Array.isArray(modelDef)) return false;
-		}
-	}
-	return true;
 }
 
 function mergeCompat(
@@ -616,9 +591,9 @@ export class ModelRegistry {
 			}
 
 			const models: Model<Api>[] = [];
-			for (const [providerName, providerModels] of Object.entries(parsed.models)) {
-				for (const [modelId, modelDef] of Object.entries(providerModels)) {
-					models.push({ ...modelDef, id: modelDef.id ?? modelId, provider: providerName });
+			for (const providerModels of Object.values(parsed.models)) {
+				for (const modelDef of Object.values(providerModels)) {
+					models.push(modelDef);
 				}
 			}
 

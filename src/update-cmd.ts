@@ -1,6 +1,7 @@
 import { execSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { isModelsCatalog, isModelsCatalogOverlay, type ModelsCatalog } from '@gsd/pi-ai'
 import { agentDir as defaultAgentDir } from './app-paths.js'
 import { resolveModelsCatalogPath } from './models-resolver.js'
 import { initResources } from './resource-loader.js'
@@ -57,22 +58,9 @@ function printClaudeRuntimeFloorAdvisory(agentDir: string): void {
 // `gsd update --models` — refresh the runtime model-catalog overlay
 // ---------------------------------------------------------------------------
 
-type ModelsCatalog = Record<string, Record<string, unknown>>
-
 interface CatalogCounts {
   providers: number
   models: number
-}
-
-/**
- * The fetched payload must be an object whose top-level keys map providers to
- * model maps: { "<provider>": { "<modelId>": {…} } }. Anything else (arrays,
- * scalars, nested non-objects) is rejected so a bad fetch never overwrites a
- * good overlay.
- */
-function isModelsCatalogPayload(data: unknown): data is ModelsCatalog {
-  if (!data || typeof data !== 'object' || Array.isArray(data)) return false
-  return Object.values(data).every((value) => !!value && typeof value === 'object' && !Array.isArray(value))
 }
 
 function countCatalogModels(catalog: ModelsCatalog): CatalogCounts {
@@ -88,8 +76,8 @@ function countCatalogModels(catalog: ModelsCatalog): CatalogCounts {
 function readExistingCatalogCounts(catalogPath: string): CatalogCounts | null {
   try {
     if (!existsSync(catalogPath)) return null
-    const parsed = JSON.parse(readFileSync(catalogPath, 'utf-8')) as { models?: unknown }
-    if (!isModelsCatalogPayload(parsed?.models)) return null
+    const parsed: unknown = JSON.parse(readFileSync(catalogPath, 'utf-8'))
+    if (!isModelsCatalogOverlay(parsed)) return null
     return countCatalogModels(parsed.models)
   } catch {
     // Missing/malformed overlay must never break the update command
@@ -110,7 +98,7 @@ async function fetchModelsCatalog(url: string, timeoutMs: number): Promise<Catal
     if (!res.ok) return { ok: false, reason: 'network' }
 
     const data: unknown = await res.json()
-    return isModelsCatalogPayload(data)
+    return isModelsCatalog(data)
       ? { ok: true, catalog: data }
       : { ok: false, reason: 'invalid' }
   } catch (err) {

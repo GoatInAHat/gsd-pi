@@ -15,13 +15,28 @@ import { dirname, join } from 'node:path'
 import { MODELS_CATALOG_URL, runUpdate } from '../update-cmd.ts'
 import { resolveModelsCatalogPath, resolveModelsJsonPath } from '../models-resolver.ts'
 
+function catalogModel(id: string, provider: string, name: string) {
+  return {
+    id,
+    name,
+    api: 'anthropic-messages',
+    provider,
+    baseUrl: 'https://api.example.com',
+    reasoning: false,
+    input: ['text'],
+    cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 },
+    contextWindow: 200_000,
+    maxTokens: 8_192,
+  }
+}
+
 const VALID_CATALOG = {
   anthropic: {
-    'claude-opus-4-6': { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
-    'claude-sonnet-4-6': { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
+    'claude-opus-4-6': catalogModel('claude-opus-4-6', 'anthropic', 'Claude Opus 4.6'),
+    'claude-sonnet-4-6': catalogModel('claude-sonnet-4-6', 'anthropic', 'Claude Sonnet 4.6'),
   },
   openai: {
-    'gpt-5.2': { id: 'gpt-5.2', name: 'GPT-5.2' },
+    'gpt-5.2': catalogModel('gpt-5.2', 'openai', 'GPT-5.2'),
   },
 }
 
@@ -118,7 +133,11 @@ test('update --models shows before/after counts when an overlay already exists',
       version: 1,
       fetchedAt: '2026-01-01T00:00:00.000Z',
       source: MODELS_CATALOG_URL,
-      models: { anthropic: { 'claude-opus-4-6': { id: 'claude-opus-4-6' } } },
+      models: {
+        anthropic: {
+          'claude-opus-4-6': catalogModel('claude-opus-4-6', 'anthropic', 'Claude Opus 4.6'),
+        },
+      },
     }),
   )
 
@@ -162,23 +181,58 @@ test('update --models on HTTP error exits 1 and preserves an existing overlay', 
   assert.equal(readFileSync(h.catalogPath, 'utf-8'), existing, 'existing overlay must not be clobbered')
 })
 
-test('update --models rejects an invalid JSON payload and writes nothing', async (t) => {
-  for (const payload of [
-    Response.json(['not', 'an', 'object']),
-    Response.json({ anthropic: 'not-a-map' }),
-    Response.json(null),
-    new Response('this is not json', { status: 200, headers: { 'Content-Type': 'text/plain' } }),
-  ]) {
-    const h = installHarness(t, async () => payload)
+test('update --models rejects invalid catalog payloads without replacing an overlay', async (t) => {
+  const invalidResponses: [string, () => Response][] = [
+    ['array root', () => Response.json(['not', 'an', 'object'])],
+    ['invalid provider map', () => Response.json({ anthropic: 'not-a-map' })],
+    ['null root', () => Response.json(null)],
+    ['empty catalog', () => Response.json({})],
+    ['null model', () => Response.json({ anthropic: { broken: null } })],
+    ['incomplete model', () => Response.json({ anthropic: { broken: {} } })],
+    [
+      'mismatched model identity',
+      () => Response.json({ anthropic: { broken: catalogModel('other', 'anthropic', 'Broken') } }),
+    ],
+    [
+      'invalid required field',
+      () => Response.json({
+        anthropic: {
+          broken: {
+            ...catalogModel('broken', 'anthropic', 'Broken'),
+            cost: { input: 1, output: 2, cacheRead: 0.1 },
+          },
+        },
+      }),
+    ],
+    [
+      'malformed JSON',
+      () => new Response('this is not json', { status: 200, headers: { 'Content-Type': 'text/plain' } }),
+    ],
+  ]
 
-    await assert.rejects(
-      runUpdate({ target: '--models', agentDir: h.agentDir }),
-      /process\.exit\(1\)/,
-    )
+  for (const [name, createResponse] of invalidResponses) {
+    await t.test(name, async (t) => {
+      const h = installHarness(t, async () => createResponse())
+      mkdirSync(h.agentDir, { recursive: true })
+      const existing = JSON.stringify({
+        version: 1,
+        models: {
+          anthropic: {
+            existing: catalogModel('existing', 'anthropic', 'Existing'),
+          },
+        },
+      })
+      writeFileSync(h.catalogPath, existing)
 
-    assert.equal(h.exitCode, 1)
-    assert.match(h.stderr.join(''), /invalid/i)
-    assert.throws(() => readFileSync(h.catalogPath), /ENOENT/, 'no overlay may be written for invalid payloads')
+      await assert.rejects(
+        runUpdate({ target: '--models', agentDir: h.agentDir }),
+        /process\.exit\(1\)/,
+      )
+
+      assert.equal(h.exitCode, 1)
+      assert.match(h.stderr.join(''), /invalid/i)
+      assert.equal(readFileSync(h.catalogPath, 'utf-8'), existing)
+    })
   }
 })
 

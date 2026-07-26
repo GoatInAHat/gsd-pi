@@ -8,10 +8,10 @@ import { calculateCost } from "../src/models.ts";
 import { MODELS } from "../src/models.generated.ts";
 
 describe("models.generated.ts", () => {
-	test("models.generated.json parses and mirrors the MODELS provider set", () => {
+	test("models.generated.json mirrors the complete generated catalog", () => {
 		const snapshot = JSON.parse(readFileSync(join(import.meta.dirname, "../src/models.generated.json"), "utf8"));
 
-		expect(Object.keys(snapshot).sort()).toEqual(Object.keys(MODELS).sort());
+		expect(snapshot).toEqual(MODELS);
 	});
 
 	test("does not include floating-point precision artifacts in cost literals", () => {
