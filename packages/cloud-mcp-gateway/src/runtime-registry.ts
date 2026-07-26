@@ -343,12 +343,16 @@ function normalizeRuntimeTools(value: unknown): RuntimeToolDefinition[] {
 
 function normalizeInputSchema(value: unknown): RuntimeToolInputSchema {
   if (isInputSchema(value)) {
+    // Strip properties/required from the spread so malformed values from an
+    // untrusted runtime (e.g. `properties: true`, `required: "x"`) can't leak
+    // into the normalized schema or throw; always re-derive them as safe shapes.
+    const { properties, required, ...rest } = value;
     return {
-      ...value,
+      ...rest,
       type: "object",
-      ...(value.properties ? { properties: normalizeProperties(value.properties) } : {}),
-      ...(Array.isArray(value.required)
-        ? { required: value.required.filter((item): item is string => typeof item === "string") }
+      ...(isRecord(properties) ? { properties: normalizeProperties(properties) } : {}),
+      ...(Array.isArray(required)
+        ? { required: required.filter((item): item is string => typeof item === "string") }
         : {}),
     };
   }
@@ -359,7 +363,7 @@ function isInputSchema(value: unknown): value is RuntimeToolInputSchema {
   return isRecord(value) && value.type === "object";
 }
 
-function normalizeProperties(value: Record<string, object>): Record<string, object> {
+function normalizeProperties(value: Record<string, unknown>): Record<string, object> {
   return Object.fromEntries(
     Object.entries(value).filter((entry): entry is [string, object] => isRecord(entry[1])),
   );
