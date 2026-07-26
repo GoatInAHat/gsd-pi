@@ -86,14 +86,21 @@ jobs:
         run: |
           set -euo pipefail
 
+          BRANCH="bot/model-catalog-refresh"
+          PR_URL="$(gh pr list --base main --head "$BRANCH" --state open --json url --jq '.[0].url')"
+
           if [ -z "$(git status --porcelain)" ]; then
-            echo "catalog already fresh"
+            if [ -n "$PR_URL" ]; then
+              gh pr close "$PR_URL" --delete-branch
+              echo "Closed stale refresh PR: ${PR_URL}"
+            else
+              echo "Catalog already fresh"
+            fi
             exit 0
           fi
 
           git status --porcelain
 
-          BRANCH="bot/model-catalog-refresh"
           REMOTE_BRANCH_SHA="$(git ls-remote --heads origin "refs/heads/${BRANCH}" | cut -f1)"
 
           git config user.name "github-actions[bot]"
@@ -127,7 +134,6 @@ jobs:
             echo "(run #${GITHUB_RUN_NUMBER})."
           } > "$BODY_FILE"
 
-          PR_URL="$(gh pr list --base main --head "$BRANCH" --state open --json url --jq '.[0].url')"
           if [ -z "$PR_URL" ]; then
             PR_URL="$(gh pr create --base main --head "$BRANCH" \
               --title "chore(models): refresh generated model catalog" \

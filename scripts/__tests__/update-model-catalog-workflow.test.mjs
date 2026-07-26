@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -27,6 +27,44 @@ function run(command, args, options = {}) {
 
 function git(cwd, ...args) {
 	return run("git", args, { cwd }).stdout.trim();
+}
+
+function createGeneratorPreload(tempRoot) {
+	const preloadPath = join(tempRoot, "mock-generator-io.mjs");
+	writeFileSync(
+		preloadPath,
+		[
+			'import fs from "node:fs";',
+			'import { syncBuiltinESMExports } from "node:module";',
+			"const originalWriteFileSync = fs.writeFileSync.bind(fs);",
+			"globalThis.fetch = async (url) => {",
+			"\tconst target = String(url);",
+			'\tif (process.env.FAIL_SOURCE === "openrouter" && target.includes("openrouter.ai")) {',
+			'\t\tthrow new Error("OpenRouter unavailable");',
+			"\t}",
+			'\tif (process.env.FAIL_SOURCE === "vercel" && target.includes("ai-gateway.vercel.sh")) {',
+			'\t\tthrow new Error("Vercel AI Gateway unavailable");',
+			"\t}",
+			"\treturn {",
+			"\t\tasync json() {",
+			'\t\t\tif (target.includes("models.dev")) {',
+			'\t\t\t\treturn { anthropic: { models: { test: { name: "Test", tool_call: true } } } };',
+			"\t\t\t}",
+			'\t\t\tif (target.includes("openrouter.ai")) {',
+			'\t\t\t\treturn { data: [{ id: "test/model", name: "Test", supported_parameters: ["tools"] }] };',
+			"\t\t\t}",
+			'\t\t\treturn { data: [{ id: "test-model", name: "Test", tags: ["tool-use"] }] };',
+			"\t\t},",
+			"\t};",
+			"};",
+			"fs.writeFileSync = () => {",
+			'\tif (process.env.FAIL_WRITE === "1") throw new Error("forced write failure");',
+			'\tif (process.env.WRITE_LOG) originalWriteFileSync(process.env.WRITE_LOG, "attempted");',
+			"};",
+			"syncBuiltinESMExports();",
+		].join("\n"),
+	);
+	return pathToFileURL(preloadPath).href;
 }
 
 test("catalog count snapshots share one executable implementation", (t) => {
@@ -69,38 +107,40 @@ test("generator reports unexpected failures with a nonzero exit", (t) => {
 	const tempRoot = mkdtempSync(join(root, ".model-catalog-generator-"));
 	t.after(() => rmSync(tempRoot, { recursive: true, force: true }));
 
-	const preloadPath = join(tempRoot, "fail-write.mjs");
-	writeFileSync(
-		preloadPath,
-		[
-			'import fs from "node:fs";',
-			'import { syncBuiltinESMExports } from "node:module";',
-			"globalThis.fetch = async (url) => ({",
-			"\tasync json() {",
-			'\t\tif (String(url).includes("models.dev")) {',
-			"\t\t\treturn {",
-			'\t\t\t\tanthropic: { models: { test: { name: "Test", tool_call: true } } },',
-			"\t\t\t};",
-			"\t\t}",
-			"\t\treturn { data: [] };",
-			"\t},",
-			"});",
-			'fs.writeFileSync = () => { throw new Error("forced write failure"); };',
-			"syncBuiltinESMExports();",
-		].join("\n"),
-	);
-
 	const result = run(
 		process.execPath,
-		["--import", pathToFileURL(preloadPath).href, generatorScript],
-		{ expectSuccess: false },
+		["--import", createGeneratorPreload(tempRoot), generatorScript],
+		{ env: { FAIL_WRITE: "1" }, expectSuccess: false },
 	);
 
 	assert.notEqual(result.status, 0);
 	assert.match(result.stderr, /forced write failure/);
 });
 
-test("refresh workflow reuses its bot PR when JSON output is absent", (t) => {
+test("generator refuses partial upstream catalogs", async (t) => {
+	const tempRoot = mkdtempSync(join(root, ".model-catalog-upstreams-"));
+	t.after(() => rmSync(tempRoot, { recursive: true, force: true }));
+	const preload = createGeneratorPreload(tempRoot);
+
+	for (const source of ["openrouter", "vercel"]) {
+		await t.test(`${source} failure`, () => {
+			const writeLog = join(tempRoot, `${source}-write.log`);
+			const result = run(
+				process.execPath,
+				["--import", preload, generatorScript],
+				{
+					env: { FAIL_SOURCE: source, WRITE_LOG: writeLog },
+					expectSuccess: false,
+				},
+			);
+
+			assert.notEqual(result.status, 0, `${source} failure must stop generation`);
+			assert.equal(existsSync(writeLog), false, `${source} failure must not write the catalog`);
+		});
+	}
+});
+
+test("refresh workflow reuses or closes its bot PR when JSON output is absent", (t) => {
 	const tempRoot = mkdtempSync(join(root, ".model-catalog-workflow-"));
 	t.after(() => rmSync(tempRoot, { recursive: true, force: true }));
 
@@ -136,6 +176,8 @@ test("refresh workflow reuses its bot PR when JSON output is absent", (t) => {
 			'elif [ "$1 $2" = "pr create" ]; then',
 			'\ttouch "$GH_STATE"',
 			'\tprintf "%s\\n" "https://example.test/pr/1"',
+			'elif [ "$1 $2" = "pr close" ]; then',
+			'\trm -f "$GH_STATE"',
 			'elif [ "$1 $2" = "pr merge" ]; then',
 			"\texit 1",
 			"fi",
@@ -170,10 +212,20 @@ test("refresh workflow reuses its bot PR when JSON output is absent", (t) => {
 	assert.match(secondRun.stdout, /Updated PR: https:\/\/example\.test\/pr\/1/);
 	assert.equal(git(remote, "show", "bot/model-catalog-refresh:packages/pi-ai/src/models.generated.ts"), "version three");
 
+	git(repo, "checkout", "main");
+	const cleanRun = run("bash", ["-c", commitStep.run], {
+		cwd: repo,
+		env: { ...env, GITHUB_RUN_NUMBER: "3" },
+	});
+	assert.match(cleanRun.stdout, /Closed stale refresh PR: https:\/\/example\.test\/pr\/1/);
+	assert.equal(existsSync(ghState), false);
+
 	const ghCalls = readFileSync(ghLog, "utf8").split("\n");
 	assert.equal(ghCalls.filter((call) => call.startsWith("pr create ")).length, 1);
+	assert.equal(ghCalls.filter((call) => call.startsWith("pr close ")).length, 1);
 	assert.equal(ghCalls.filter((call) => call.startsWith("pr edit ")).length, 1);
-	assert.equal(ghCalls.filter((call) => call.startsWith("pr list ")).length, 2);
+	assert.equal(ghCalls.filter((call) => call.startsWith("pr list ")).length, 3);
+	assert.equal(ghCalls.filter((call) => call.startsWith("pr merge ")).length, 2);
 	assert.equal(git(remote, "branch", "--list", "bot/model-catalog-refresh"), "bot/model-catalog-refresh");
 	assert.equal(git(remote, "ls-tree", "-r", "--name-only", "bot/model-catalog-refresh").includes("models.generated.json"), false);
 });

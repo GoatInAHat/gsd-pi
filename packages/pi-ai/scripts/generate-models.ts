@@ -1213,7 +1213,15 @@ async function generateModels() {
 		process.exit(1);
 	}
 	const openRouterModels = await fetchOpenRouterModels();
+	if (openRouterModels.length === 0) {
+		throw new Error("OpenRouter returned no tool-capable models; refusing to overwrite src/models.generated.ts.");
+	}
 	const aiGatewayModels = await fetchAiGatewayModels();
+	if (aiGatewayModels.length === 0) {
+		throw new Error(
+			"Vercel AI Gateway returned no tool-capable models; refusing to overwrite src/models.generated.ts.",
+		);
+	}
 
 	// Combine models (models.dev has priority)
 	const allModels = [...modelsDevModels, ...openRouterModels, ...aiGatewayModels].filter(
