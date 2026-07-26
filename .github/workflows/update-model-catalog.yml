@@ -63,25 +63,7 @@ jobs:
         shell: bash
         env:
           CATALOG_DIR: packages/pi-ai/src
-        run: |
-          node --input-type=module -e '
-            import { existsSync, readFileSync } from "node:fs";
-            const dir = process.env.CATALOG_DIR;
-            const jsonPath = `${dir}/models.generated.json`;
-            let providers = 0, models = 0;
-            if (existsSync(jsonPath)) {
-              const catalog = JSON.parse(readFileSync(jsonPath, "utf8"));
-              providers = Object.keys(catalog).length;
-              models = Object.values(catalog).reduce((n, p) => n + Object.keys(p).length, 0);
-            } else {
-              // .ts layout: one-tab quoted keys are providers, two-tab are models.
-              const lines = readFileSync(`${dir}/models.generated.ts`, "utf8").split("\n");
-              providers = lines.filter((l) => /^\t"[^"]+": \{$/.test(l)).length;
-              models = lines.filter((l) => /^\t\t"[^"]+": \{$/.test(l)).length;
-            }
-            console.log(`providers=${providers}`);
-            console.log(`models=${models}`);
-          ' >> "$GITHUB_OUTPUT"
+        run: node packages/pi-ai/scripts/model-catalog-counts.mjs "$CATALOG_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Regenerate model catalog
         run: pnpm --filter @gsd/pi-ai run generate-models
@@ -91,25 +73,7 @@ jobs:
         shell: bash
         env:
           CATALOG_DIR: packages/pi-ai/src
-        run: |
-          node --input-type=module -e '
-            import { existsSync, readFileSync } from "node:fs";
-            const dir = process.env.CATALOG_DIR;
-            const jsonPath = `${dir}/models.generated.json`;
-            let providers = 0, models = 0;
-            if (existsSync(jsonPath)) {
-              const catalog = JSON.parse(readFileSync(jsonPath, "utf8"));
-              providers = Object.keys(catalog).length;
-              models = Object.values(catalog).reduce((n, p) => n + Object.keys(p).length, 0);
-            } else {
-              // .ts layout: one-tab quoted keys are providers, two-tab are models.
-              const lines = readFileSync(`${dir}/models.generated.ts`, "utf8").split("\n");
-              providers = lines.filter((l) => /^\t"[^"]+": \{$/.test(l)).length;
-              models = lines.filter((l) => /^\t\t"[^"]+": \{$/.test(l)).length;
-            }
-            console.log(`providers=${providers}`);
-            console.log(`models=${models}`);
-          ' >> "$GITHUB_OUTPUT"
+        run: node packages/pi-ai/scripts/model-catalog-counts.mjs "$CATALOG_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Commit, push, and open refresh PR
         shell: bash
@@ -129,17 +93,23 @@ jobs:
 
           git status --porcelain
 
-          BRANCH="bot/model-catalog-refresh-$(date -u +%Y-%m-%d)"
-          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
-            BRANCH="${BRANCH}-run${GITHUB_RUN_ID}"
-          fi
+          BRANCH="bot/model-catalog-refresh"
+          REMOTE_BRANCH_SHA="$(git ls-remote --heads origin "refs/heads/${BRANCH}" | cut -f1)"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
-          git add packages/pi-ai/src/models.generated.ts packages/pi-ai/src/models.generated.json
+          git checkout -B "$BRANCH"
+          git add packages/pi-ai/src/models.generated.ts
+          JSON_CATALOG="packages/pi-ai/src/models.generated.json"
+          if [ -f "$JSON_CATALOG" ] || git ls-files --error-unmatch "$JSON_CATALOG" >/dev/null 2>&1; then
+            git add "$JSON_CATALOG"
+          fi
           git commit -m "chore(models): refresh generated model catalog"
-          git push origin "$BRANCH"
+          if [ -n "$REMOTE_BRANCH_SHA" ]; then
+            git push --force-with-lease="refs/heads/${BRANCH}:${REMOTE_BRANCH_SHA}" origin "$BRANCH"
+          else
+            git push origin "$BRANCH"
+          fi
 
           BODY_FILE="$(mktemp)"
           {
@@ -157,10 +127,16 @@ jobs:
             echo "(run #${GITHUB_RUN_NUMBER})."
           } > "$BODY_FILE"
 
-          PR_URL="$(gh pr create --base main --head "$BRANCH" \
-            --title "chore(models): refresh generated model catalog" \
-            --body-file "$BODY_FILE")"
-          echo "Opened PR: ${PR_URL}"
+          PR_URL="$(gh pr list --base main --head "$BRANCH" --state open --json url --jq '.[0].url')"
+          if [ -z "$PR_URL" ]; then
+            PR_URL="$(gh pr create --base main --head "$BRANCH" \
+              --title "chore(models): refresh generated model catalog" \
+              --body-file "$BODY_FILE")"
+            echo "Opened PR: ${PR_URL}"
+          else
+            gh pr edit "$PR_URL" --body-file "$BODY_FILE"
+            echo "Updated PR: ${PR_URL}"
+          fi
 
           if ! gh pr merge --auto --squash "$PR_URL"; then
             echo "auto-merge unavailable; leaving PR for manual review"

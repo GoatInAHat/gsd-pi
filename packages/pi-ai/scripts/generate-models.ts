@@ -2366,4 +2366,4 @@ export const MODELS = {
 }
 
 // Run the generator
-generateModels().catch(console.error);
+await generateModels();
