@@ -87,7 +87,9 @@ jobs:
           set -euo pipefail
 
           BRANCH="bot/model-catalog-refresh"
-          PR_URL="$(gh pr list --base main --head "$BRANCH" --state open --json url --jq '.[0].url')"
+          PR_URL="$(gh pr list --base main --head "$BRANCH" --state open \
+            --json isCrossRepository,headRepositoryOwner,url \
+            --jq 'map(select(.isCrossRepository == false and .headRepositoryOwner.login == env.GITHUB_REPOSITORY_OWNER)) | .[0].url')"
 
           if [ -z "$(git status --porcelain)" ]; then
             if [ -n "$PR_URL" ]; then

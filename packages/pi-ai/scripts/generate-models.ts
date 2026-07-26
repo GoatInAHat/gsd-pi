@@ -2308,13 +2308,13 @@ export const MODELS = {
 		const sortedModelIds = Object.keys(models).sort();
 		for (const modelId of sortedModelIds) {
 			const model = models[modelId];
-			output += `\t\t"${model.id}": {\n`;
-			output += `\t\t\tid: "${model.id}",\n`;
-			output += `\t\t\tname: "${model.name}",\n`;
-			output += `\t\t\tapi: "${model.api}",\n`;
-			output += `\t\t\tprovider: "${model.provider}",\n`;
+			output += `\t\t${JSON.stringify(model.id)}: {\n`;
+			output += `\t\t\tid: ${JSON.stringify(model.id)},\n`;
+			output += `\t\t\tname: ${JSON.stringify(model.name)},\n`;
+			output += `\t\t\tapi: ${JSON.stringify(model.api)},\n`;
+			output += `\t\t\tprovider: ${JSON.stringify(model.provider)},\n`;
 			if (model.baseUrl !== undefined) {
-				output += `\t\t\tbaseUrl: "${model.baseUrl}",\n`;
+				output += `\t\t\tbaseUrl: ${JSON.stringify(model.baseUrl)},\n`;
 			}
 			if (model.headers) {
 				output += `\t\t\theaders: ${JSON.stringify(model.headers)},\n`;
@@ -2347,7 +2347,7 @@ export const MODELS = {
 			output += `\t\t\t},\n`;
 			output += `\t\t\tcontextWindow: ${model.contextWindow},\n`;
 			output += `\t\t\tmaxTokens: ${model.maxTokens},\n`;
-			output += `\t\t} satisfies Model<"${model.api}">,\n`;
+			output += `\t\t} satisfies Model<${JSON.stringify(model.api)}>,\n`;
 		}
 
 		output += `\t},\n`;

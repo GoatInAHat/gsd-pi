@@ -51,15 +51,15 @@ function createGeneratorPreload(tempRoot) {
 			'\t\t\t\treturn { anthropic: { models: { test: { name: "Test", tool_call: true } } } };',
 			"\t\t\t}",
 			'\t\t\tif (target.includes("openrouter.ai")) {',
-			'\t\t\t\treturn { data: [{ id: "test/model", name: "Test", supported_parameters: ["tools"] }] };',
+			'\t\t\t\treturn { data: [{ id: process.env.MODEL_ID || "test/model", name: process.env.MODEL_NAME || "Test", supported_parameters: ["tools"] }] };',
 			"\t\t\t}",
 			'\t\t\treturn { data: [{ id: "test-model", name: "Test", tags: ["tool-use"] }] };',
 			"\t\t},",
 			"\t};",
 			"};",
-			"fs.writeFileSync = () => {",
+			"fs.writeFileSync = (_path, data) => {",
 			'\tif (process.env.FAIL_WRITE === "1") throw new Error("forced write failure");',
-			'\tif (process.env.WRITE_LOG) originalWriteFileSync(process.env.WRITE_LOG, "attempted");',
+			"\tif (process.env.WRITE_LOG) originalWriteFileSync(process.env.WRITE_LOG, data);",
 			"};",
 			"syncBuiltinESMExports();",
 		].join("\n"),
@@ -140,7 +140,52 @@ test("generator refuses partial upstream catalogs", async (t) => {
 	}
 });
 
-test("refresh workflow reuses or closes its bot PR when JSON output is absent", (t) => {
+test("generator safely serializes upstream model strings", async (t) => {
+	const tempRoot = mkdtempSync(join(root, ".model-catalog-serialization-"));
+	t.after(() => rmSync(tempRoot, { recursive: true, force: true }));
+	const preload = createGeneratorPreload(tempRoot);
+	const maliciousId = 'model"with\\escape\nline';
+	const maliciousName = 'Model", injected: (globalThis.catalogInjected = true), ignored: "';
+
+	for (const field of ["id", "name"]) {
+		await t.test(`${field} string`, () => {
+			const modelId = field === "id" ? maliciousId : "test/model";
+			const modelName = field === "name" ? maliciousName : "Test";
+			const generatedPath = join(tempRoot, `${field}.generated.ts`);
+			run(
+				process.execPath,
+				["--import", preload, generatorScript],
+				{ env: { MODEL_ID: modelId, MODEL_NAME: modelName, WRITE_LOG: generatedPath } },
+			);
+
+			const inspect = run(
+				process.execPath,
+				[
+					"--experimental-strip-types",
+					"--input-type=module",
+					"-e",
+					[
+						"globalThis.catalogInjected = false;",
+						`const { MODELS } = await import(${JSON.stringify(pathToFileURL(generatedPath).href)});`,
+						"const model = MODELS.openrouter[process.env.MODEL_ID];",
+						"process.stdout.write(JSON.stringify({ injected: globalThis.catalogInjected, model }));",
+					].join("\n"),
+				],
+				{ env: { MODEL_ID: modelId } },
+			);
+			const result = JSON.parse(inspect.stdout);
+
+			assert.equal(result.injected, false);
+			assert.equal(result.model.id, modelId);
+			assert.equal(result.model.name, modelName);
+			assert.equal(result.model.api, "openai-completions");
+			assert.equal(result.model.provider, "openrouter");
+			assert.equal(result.model.baseUrl, "https://openrouter.ai/api/v1");
+		});
+	}
+});
+
+test("refresh workflow ignores fork PRs and manages its own bot PR without JSON output", (t) => {
 	const tempRoot = mkdtempSync(join(root, ".model-catalog-workflow-"));
 	t.after(() => rmSync(tempRoot, { recursive: true, force: true }));
 
@@ -172,7 +217,12 @@ test("refresh workflow reuses or closes its bot PR when JSON output is absent", 
 			"#!/bin/sh",
 			'printf "%s\\n" "$*" >> "$GH_LOG"',
 			'if [ "$1 $2" = "pr list" ]; then',
-			'\tif [ -f "$GH_STATE" ]; then printf "%s\\n" "https://example.test/pr/1"; fi',
+			'\tif [ -f "$GH_STATE" ]; then',
+			'\t\tcase "$*" in',
+			'\t\t\t*isCrossRepository*headRepositoryOwner*GITHUB_REPOSITORY_OWNER*) printf "%s\\n" "https://example.test/pr/1" ;;',
+			'\t\t\t*) printf "%s\\n" "https://example.test/fork/1" ;;',
+			"\t\tesac",
+			"\tfi",
 			'elif [ "$1 $2" = "pr create" ]; then',
 			'\ttouch "$GH_STATE"',
 			'\tprintf "%s\\n" "https://example.test/pr/1"',
@@ -191,6 +241,7 @@ test("refresh workflow reuses or closes its bot PR when JSON output is absent", 
 		BEFORE_MODELS: "1",
 		BEFORE_PROVIDERS: "1",
 		GITHUB_RUN_NUMBER: "1",
+		GITHUB_REPOSITORY_OWNER: "open-gsd",
 		GH_LOG: ghLog,
 		GH_STATE: ghState,
 		PATH: `${binDir}:${process.env.PATH}`,
@@ -226,6 +277,7 @@ test("refresh workflow reuses or closes its bot PR when JSON output is absent", 
 	assert.equal(ghCalls.filter((call) => call.startsWith("pr edit ")).length, 1);
 	assert.equal(ghCalls.filter((call) => call.startsWith("pr list ")).length, 3);
 	assert.equal(ghCalls.filter((call) => call.startsWith("pr merge ")).length, 2);
+	assert.equal(ghCalls.some((call) => call.includes("https://example.test/fork/1")), false);
 	assert.equal(git(remote, "branch", "--list", "bot/model-catalog-refresh"), "bot/model-catalog-refresh");
 	assert.equal(git(remote, "ls-tree", "-r", "--name-only", "bot/model-catalog-refresh").includes("models.generated.json"), false);
 });
