@@ -385,6 +385,9 @@ export function renderAdminUi(): string {
           <label>Admin token
             <input id="admin-token" type="password" autocomplete="off">
           </label>
+          <label class="remember">
+            <input id="remember-token" type="checkbox"> Remember token this session
+          </label>
           <button type="submit">Connect</button>
           <button class="secondary" id="clear-token" type="button">Clear</button>
         </form>
@@ -461,8 +464,12 @@ export function renderAdminUi(): string {
 
   <script>
     (function () {
+      // Keep the admin token in memory by default so an XSS on /admin cannot
+      // read it back out of storage. A previously persisted token only survives
+      // a reload when the operator explicitly opted in via "Remember token".
+      var remembered = sessionStorage.getItem("gsdCloudAdminToken") || "";
       var state = {
-        token: sessionStorage.getItem("gsdCloudAdminToken") || "",
+        token: remembered,
         tab: "users",
         users: [],
         runtimes: [],
@@ -472,18 +479,27 @@ export function renderAdminUi(): string {
       };
 
       var tokenInput = document.getElementById("admin-token");
+      var rememberInput = document.getElementById("remember-token");
       tokenInput.value = state.token;
+      rememberInput.checked = remembered !== "";
 
       document.getElementById("auth-form").addEventListener("submit", function (event) {
         event.preventDefault();
         state.token = tokenInput.value.trim();
-        if (state.token) sessionStorage.setItem("gsdCloudAdminToken", state.token);
+        // Only persist when the operator opted in; otherwise keep the token
+        // in memory only and drop any token a prior session had persisted.
+        if (state.token && rememberInput.checked) {
+          sessionStorage.setItem("gsdCloudAdminToken", state.token);
+        } else {
+          sessionStorage.removeItem("gsdCloudAdminToken");
+        }
         refresh();
       });
 
       document.getElementById("clear-token").addEventListener("click", function () {
         state.token = "";
         tokenInput.value = "";
+        rememberInput.checked = false;
         sessionStorage.removeItem("gsdCloudAdminToken");
         state.users = [];
         state.runtimes = [];
