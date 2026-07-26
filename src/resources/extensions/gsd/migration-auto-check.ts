@@ -90,6 +90,30 @@ function scanHasExtraIdentities(a: HierarchyScan, b: HierarchyScan): boolean {
   );
 }
 
+function excludeUnplannedMilestonesFromDbScan(
+  markdownScan: HierarchyScan,
+  dbScan: HierarchyScan,
+): void {
+  for (const milestone of getAllMilestones()) {
+    if (markdownScan.milestones.has(milestone.id)) continue;
+    const slices = getMilestoneSlices(milestone.id);
+    if (milestone.vision.trim() || slices.some((slice) => slice.status !== "skipped")) continue;
+
+    if (dbScan.milestones.delete(milestone.id)) dbScan.counts.milestones--;
+    const prefix = `${milestone.id}/`;
+    for (const identity of [...dbScan.slices]) {
+      if (!identity.startsWith(prefix)) continue;
+      dbScan.slices.delete(identity);
+      dbScan.counts.slices--;
+    }
+    for (const identity of [...dbScan.tasks]) {
+      if (!identity.startsWith(prefix)) continue;
+      dbScan.tasks.delete(identity);
+      dbScan.counts.tasks--;
+    }
+  }
+}
+
 function paddedMilestoneId(id: string): string | null {
   return /^\d+$/.test(id) ? `M${id.padStart(3, "0")}` : null;
 }
@@ -226,9 +250,15 @@ export async function checkMarkdownHierarchyAgainstDb(
   refreshWorkflowDatabaseFromDisk();
 
   const dbScan = scanDbHierarchy();
-  const beforeDb = dbScan.counts;
   alignNumericMarkdownIdsWithDb(markdownScan, dbScan);
   alignBareMarkdownIdsWithSuffixedDb(markdownScan, dbScan);
+
+  // renderRoadmapFromDb deliberately skips milestones with no non-skipped
+  // slices and no vision, refusing to create a misleading stub ROADMAP (#852).
+  // Exclude the same hierarchy branches from projection parity so a newly
+  // admitted, not-yet-planned milestone is not reported as repairable drift.
+  excludeUnplannedMilestonesFromDbScan(markdownScan, dbScan);
+  const beforeDb = dbScan.counts;
 
   // Discussion-phase scratch: a milestone dir with no ROADMAP and no DB row is
   // a pre-registration discussion artifact (CONTEXT/CONTEXT-DRAFT only — the
