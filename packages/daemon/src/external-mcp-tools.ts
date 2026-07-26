@@ -95,6 +95,15 @@ export class ExternalMcpToolBridge {
   }
 
   async close(): Promise<void> {
+    // Drain in-flight connect attempts first. A successful attempt moves its
+    // connection into this.connections (see connectionFor), so awaiting the
+    // connecting map before closing established connections ensures a child
+    // process / stdio transport that finished connecting during shutdown is
+    // still closed rather than leaked. Failures already cleaned up after
+    // themselves in openConnection().
+    await Promise.all(
+      Array.from(this.connecting.values()).map((attempt) => attempt.catch(() => undefined)),
+    );
     await Promise.all(Array.from(this.connections.keys()).map((id) => this.closeConnection(id)));
   }
 
@@ -200,7 +209,7 @@ function parseExplicitConfigs(value: string | undefined): ExternalMcpToolConfig[
     }
     return {
       id: typeof item.id === "string" && item.id.trim() ? item.id.trim() : `external-${index + 1}`,
-      command: item.command,
+      command: item.command.trim(),
       args: parseArgsValue(item.args, []),
       ...(typeof item.cwd === "string" ? { cwd: item.cwd } : {}),
       ...(isStringRecord(item.env) ? { env: item.env } : {}),
