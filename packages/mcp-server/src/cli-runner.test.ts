@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough, type Readable, Writable } from 'node:stream';
 
-import { runMcpServerCli } from './cli-runner.js';
+import { parseMcpServerCliArgs, runMcpServerCli } from './cli-runner.js';
+import type { HttpMcpServerOptions } from './http.js';
 
 class ExitError extends Error {
   constructor(readonly code: number) {
@@ -1330,5 +1331,157 @@ describe('runMcpServerCli', () => {
       rmSync(projectDir, { recursive: true, force: true });
       rmSync(gsdHome, { recursive: true, force: true });
     }
+  });
+
+  test('starts the HTTP transport with parsed flags instead of stdio', async () => {
+    const calls: string[] = [];
+    let received: HttpMcpServerOptions | undefined;
+    const stderr = new Writable({ write(_chunk, _encoding, callback) { callback(); } });
+
+    await runMcpServerCli({
+      argv: ['--http', '--host', '0.0.0.0', '--port', '9911', '--auth-token', 'secret-token'],
+      env: {},
+      exit(code) {
+        throw new ExitError(code);
+      },
+      loadStoredCredentialEnvKeys() {
+        calls.push('load-env');
+      },
+      registerMcpInstance() {
+        throw new Error('http mode must not touch the PID registry');
+      },
+      sweepProjectOrphanMcpServers() {
+        throw new Error('http mode must not sweep orphans');
+      },
+      createSessionManager() {
+        calls.push('create-session-manager');
+        return { async cleanup() { calls.push('cleanup-session-manager'); } };
+      },
+      async importStdioServerTransport() {
+        throw new Error('http mode must not import the stdio transport');
+      },
+      warmWorkflowToolBridges() {
+        throw new Error('http mode must not warm stdio bridges');
+      },
+      async listenHttpMcpServer(_manager, httpOptions) {
+        received = httpOptions;
+        calls.push('listen-http');
+        return { url: 'http://0.0.0.0:9911/mcp', async close() { calls.push('close-http'); } };
+      },
+      stderr,
+      onSignal() {},
+    });
+
+    assert.deepEqual(received, { host: '0.0.0.0', port: 9911, authToken: 'secret-token', allowNoAuth: false });
+    assert.deepEqual(calls, ['load-env', 'create-session-manager', 'listen-http']);
+  });
+
+  test('falls back to GSD_MCP_AUTH_TOKEN, defaults host/port, and honors --no-auth', async () => {
+    let received: HttpMcpServerOptions | undefined;
+    const stderr = new Writable({ write(_chunk, _encoding, callback) { callback(); } });
+
+    await runMcpServerCli({
+      argv: ['--http', '--no-auth'],
+      env: { GSD_MCP_AUTH_TOKEN: 'env-token' },
+      exit(code) {
+        throw new ExitError(code);
+      },
+      loadStoredCredentialEnvKeys() {},
+      createSessionManager() {
+        return { async cleanup() {} };
+      },
+      async listenHttpMcpServer(_manager, httpOptions) {
+        received = httpOptions;
+        return { url: 'http://127.0.0.1:8787/mcp', async close() {} };
+      },
+      stderr,
+      onSignal() {},
+    });
+
+    assert.deepEqual(received, { host: '127.0.0.1', port: 8787, authToken: 'env-token', allowNoAuth: true });
+  });
+
+  test('exits non-zero and cleans up the session manager when the HTTP listener fails', async () => {
+    const calls: string[] = [];
+    const stderrChunks: string[] = [];
+    const stderr = new Writable({
+      write(chunk, _encoding, callback) {
+        stderrChunks.push(String(chunk));
+        callback();
+      },
+    });
+
+    await assert.rejects(
+      runMcpServerCli({
+        argv: ['--http', '--host', '0.0.0.0'],
+        env: {},
+        exit(code) {
+          throw new ExitError(code);
+        },
+        loadStoredCredentialEnvKeys() {},
+        createSessionManager() {
+          return { async cleanup() { calls.push('cleanup'); } };
+        },
+        async listenHttpMcpServer() {
+          calls.push('listen');
+          throw new Error('EADDRINUSE');
+        },
+        stderr,
+        onSignal() {},
+      }),
+      (error) => error instanceof ExitError && error.code === 1,
+    );
+
+    assert.deepEqual(calls, ['listen', 'cleanup']);
+    assert.match(stderrChunks.join(''), /failed to start HTTP server/);
+  });
+
+  test('rejects an invalid --port before attempting to listen', async () => {
+    const calls: string[] = [];
+    const stderr = new Writable({ write(_chunk, _encoding, callback) { callback(); } });
+
+    await assert.rejects(
+      runMcpServerCli({
+        argv: ['--http', '--port', 'not-a-number'],
+        env: {},
+        exit(code) {
+          throw new ExitError(code);
+        },
+        loadStoredCredentialEnvKeys() {},
+        createSessionManager() {
+          return { async cleanup() { calls.push('cleanup'); } };
+        },
+        async listenHttpMcpServer() {
+          calls.push('listen');
+          return { url: 'http://unused/mcp', async close() {} };
+        },
+        stderr,
+        onSignal() {},
+      }),
+      (error) => error instanceof ExitError && error.code === 1,
+    );
+
+    assert.deepEqual(calls, ['cleanup']);
+  });
+});
+
+describe('parseMcpServerCliArgs', () => {
+  test('defaults to stdio mode with no flags', () => {
+    assert.deepEqual(parseMcpServerCliArgs([]), { http: false, noAuth: false });
+  });
+
+  test('parses both --flag value and --flag=value forms', () => {
+    assert.deepEqual(
+      parseMcpServerCliArgs(['--http', '--host', '0.0.0.0', '--port=8080', '--auth-token', 'abc', '--no-auth']),
+      { http: true, host: '0.0.0.0', port: 8080, authToken: 'abc', noAuth: true },
+    );
+  });
+
+  test('throws on an unknown option', () => {
+    assert.throws(() => parseMcpServerCliArgs(['--bogus']), /unknown option: --bogus/);
+  });
+
+  test('throws when a value-taking flag is missing its value', () => {
+    assert.throws(() => parseMcpServerCliArgs(['--host']), /missing value for --host/);
   });
 });

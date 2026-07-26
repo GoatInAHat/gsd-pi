@@ -2,6 +2,7 @@ import type { Readable, Writable } from 'node:stream';
 import { Worker } from 'node:worker_threads';
 
 import { SessionManager } from './session-manager.js';
+import type { HttpMcpServerOptions } from './http.js';
 import { createMcpServer } from './server.js';
 import { loadStoredCredentialEnvKeys } from './tool-credentials.js';
 import {
@@ -22,6 +23,60 @@ const MCP_PKG = '@modelcontextprotocol/sdk';
 const STDIN_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const STDIN_IDLE_CHECK_INTERVAL_MS = 60 * 1000;
 const CLEANUP_STEP_TIMEOUT_MS = 2 * 1000;
+
+const DEFAULT_HTTP_HOST = '127.0.0.1';
+const DEFAULT_HTTP_PORT = 8787;
+
+export interface McpServerCliArgs {
+  http: boolean;
+  host?: string;
+  port?: number;
+  authToken?: string;
+  noAuth: boolean;
+}
+
+/**
+ * Parse the flags documented in the package README for the Streamable HTTP
+ * transport: `--http`, `--host`, `--port`, `--auth-token`, and `--no-auth`.
+ * Supports both `--flag value` and `--flag=value` forms and throws on unknown
+ * options or missing values so typos surface instead of being silently ignored.
+ */
+export function parseMcpServerCliArgs(argv: readonly string[]): McpServerCliArgs {
+  const args: McpServerCliArgs = { http: false, noAuth: false };
+  for (let i = 0; i < argv.length; i++) {
+    const raw = argv[i];
+    const eq = raw.indexOf('=');
+    const flag = eq === -1 ? raw : raw.slice(0, eq);
+    const inlineValue = eq === -1 ? undefined : raw.slice(eq + 1);
+    const takeValue = (): string => {
+      if (inlineValue !== undefined) return inlineValue;
+      const next = argv[i + 1];
+      if (next === undefined) throw new Error(`missing value for ${flag}`);
+      i += 1;
+      return next;
+    };
+    switch (flag) {
+      case '--http':
+        args.http = true;
+        break;
+      case '--no-auth':
+        args.noAuth = true;
+        break;
+      case '--host':
+        args.host = takeValue();
+        break;
+      case '--port':
+        args.port = Number(takeValue());
+        break;
+      case '--auth-token':
+        args.authToken = takeValue();
+        break;
+      default:
+        throw new Error(`unknown option: ${raw}`);
+    }
+  }
+  return args;
+}
 
 /**
  * Cadence for the worker-thread parent-liveness monitor.
@@ -94,9 +149,14 @@ interface OrphanMonitorHandle {
 }
 
 export interface RunMcpServerCliOptions {
+  argv?: readonly string[];
   cwd?: () => string;
   env?: NodeJS.ProcessEnv;
   exit?: (code: number) => never;
+  listenHttpMcpServer?: (
+    sessionManager: SessionManagerLike,
+    options: HttpMcpServerOptions,
+  ) => Promise<{ close: () => Promise<void>; url: string }>;
   loadStoredCredentialEnvKeys?: () => void;
   registerMcpInstance?: (projectDir: string) => boolean | void;
   sweepProjectOrphanMcpServers?: (projectDir: string) => void;
@@ -197,6 +257,17 @@ async function importDefaultStdioServerTransport(): Promise<{ StdioServerTranspo
   return import(`${MCP_PKG}/server/stdio.js`) as Promise<{ StdioServerTransport: StdioTransportConstructor }>;
 }
 
+// Imported lazily so the common stdio path never loads the Streamable HTTP
+// transport or its SDK dependency.
+async function importDefaultListenHttpMcpServer(): Promise<
+  (
+    sessionManager: SessionManager,
+    options: HttpMcpServerOptions,
+  ) => Promise<{ close: () => Promise<void>; url: string }>
+> {
+  return (await import('./http.js')).listenHttpMcpServer;
+}
+
 export async function runMcpServerCli(options: RunMcpServerCliOptions = {}): Promise<void> {
   const cwd = options.cwd ?? (() => process.cwd());
   const env = options.env ?? process.env;
@@ -226,6 +297,57 @@ export async function runMcpServerCli(options: RunMcpServerCliOptions = {}): Pro
   const warmBridges = options.warmWorkflowToolBridges ?? warmWorkflowToolBridges;
   const resolveObservationTokenState = options.resolveMilestoneStatusObservationTokenState
     ?? resolveMilestoneStatusObservationTokenState;
+  const listenHttp = options.listenHttpMcpServer ?? (async (
+    manager: SessionManagerLike,
+    httpOptions: HttpMcpServerOptions,
+  ) => (await importDefaultListenHttpMcpServer())(manager as SessionManager, httpOptions));
+
+  const cliArgs = parseMcpServerCliArgs(options.argv ?? process.argv.slice(2));
+
+  if (cliArgs.http) {
+    // Streamable HTTP transport (see README "Cloud / Remote HTTP"). This is a
+    // long-running standalone server, so it skips the stdio-only machinery
+    // (PID registry, stdin idle watchdog, orphan monitors) and just listens
+    // until a signal arrives.
+    loadEnv();
+    const host = cliArgs.host ?? DEFAULT_HTTP_HOST;
+    const port = cliArgs.port ?? DEFAULT_HTTP_PORT;
+    const authToken = cliArgs.authToken ?? env.GSD_MCP_AUTH_TOKEN;
+    const sessionManager = createSessionManager();
+    let httpHandle: { close: () => Promise<void>; url: string } | undefined;
+    let httpCleaningUp = false;
+    const cleanupHttp = async (code = 0): Promise<void> => {
+      if (httpCleaningUp) return;
+      httpCleaningUp = true;
+      stderr.write('[gsd-mcp-server] Shutting down...\n');
+      try {
+        await httpHandle?.close();
+      } catch {
+        // best-effort shutdown
+      }
+      try {
+        await sessionManager.cleanup();
+      } catch {
+        // best-effort shutdown
+      }
+      exit(code);
+    };
+    onSignal('SIGTERM', () => void cleanupHttp());
+    onSignal('SIGINT', () => void cleanupHttp());
+    try {
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new Error(`invalid --port: ${String(cliArgs.port)}`);
+      }
+      httpHandle = await listenHttp(sessionManager, { host, port, authToken, allowNoAuth: cliArgs.noAuth });
+      stderr.write(`[gsd-mcp-server] MCP server listening on ${httpHandle.url}\n`);
+    } catch (err) {
+      stderr.write(
+        `[gsd-mcp-server] Fatal: failed to start HTTP server: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      await cleanupHttp(1);
+    }
+    return;
+  }
 
   loadEnv();
 

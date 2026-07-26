@@ -269,8 +269,14 @@ type Reservation = { key: string; count: number };
 
 function adjustReservation(map: Map<string, Reservation>, userId: string, key: string, delta: number): void {
   const entry = map.get(userId);
-  // A stale window (entry.key !== key) has rolled over, so start fresh instead
-  // of carrying an old day/month's count into the new window.
+  // A release (negative delta) whose window has already rolled over must not
+  // touch the current window's reservation. The stale window's count was
+  // discarded when the new window's first reserve reset the entry, so applying
+  // the release here would wrongly delete or undercount the live entry and let
+  // concurrent calls bypass day/month quotas around midnight/month boundaries.
+  if (delta < 0 && entry !== undefined && entry.key !== key) return;
+  // A stale window (entry.key !== key) on a reserve has rolled over, so start
+  // fresh instead of carrying an old day/month's count into the new window.
   const base = entry && entry.key === key ? entry.count : 0;
   const count = Math.max(0, base + delta);
   if (count > 0) map.set(userId, { key, count });

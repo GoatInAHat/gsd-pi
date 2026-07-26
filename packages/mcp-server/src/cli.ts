@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
- * @opengsd/mcp-server CLI — stdio transport entry point.
+ * @opengsd/mcp-server CLI entry point.
  *
- * Connects the MCP server to stdin/stdout for use by Claude Code,
- * Cursor, and other MCP-compatible clients.
+ * Defaults to the stdio transport for local MCP clients (Claude Code, Cursor,
+ * etc.) that spawn the server process. Passing `--http` instead starts the
+ * authenticated Streamable HTTP transport documented in the package README.
  */
 
 import { installGlobalErrorHandlers } from './cli-errors.js';
