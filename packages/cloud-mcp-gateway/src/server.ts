@@ -28,13 +28,19 @@ export interface GatewayServerOptions {
 
 export function createGatewayServer(options: GatewayServerOptions = {}) {
   const userId = options.userId ?? "local-user";
-  const userToken = options.userToken ?? process.env.GSD_CLOUD_USER_TOKEN;
+  // Trim so a copy/paste or templating artifact (e.g. a trailing newline or a
+  // whitespace-only value) cannot seed the store with the wrong token and lock
+  // out intended clients; a whitespace-only value is treated as unset.
+  const userToken = normalizeToken(options.userToken ?? process.env.GSD_CLOUD_USER_TOKEN);
   if (!userToken) {
     throw new Error("GSD_CLOUD_USER_TOKEN is required");
   }
   const authStorePath = options.authStorePath ?? process.env.GSD_CLOUD_AUTH_STORE_PATH;
   const usageStorePath = options.usageStorePath ?? process.env.GSD_CLOUD_USAGE_STORE_PATH;
-  const adminToken = options.adminToken ?? process.env.GSD_CLOUD_ADMIN_TOKEN;
+  // Trim for the same reason: a whitespace-only admin token would otherwise
+  // enable admin-token auth with an unusable value and lock operators out of
+  // /admin/api/*, so treat empty-after-trim as unset (admin-token auth off).
+  const adminToken = normalizeToken(options.adminToken ?? process.env.GSD_CLOUD_ADMIN_TOKEN);
   const allowRegistration = options.allowRegistration ?? parseBoolean(process.env.GSD_CLOUD_ALLOW_REGISTRATION);
   const auth = authStorePath
     ? new FileAuthStore(authStorePath, { token: userToken, userId, role: "admin" })
@@ -552,6 +558,13 @@ function optionalLimit(value: unknown): number | undefined {
 
 function parseBoolean(value: string | undefined): boolean {
   return value === "1" || value === "true" || value === "yes";
+}
+
+// Normalize a bearer token from options/env: trim surrounding whitespace and
+// treat an empty-after-trim value as unset (undefined).
+function normalizeToken(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 class BadRequestError extends Error {}

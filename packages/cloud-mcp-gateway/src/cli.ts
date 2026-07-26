@@ -2,17 +2,32 @@
 import { parseArgs } from "node:util";
 import { listenGateway } from "./server.js";
 
-const { values } = parseArgs({
-  options: {
-    port: { type: "string" },
-    host: { type: "string" },
-    "auth-store": { type: "string" },
-    "usage-store": { type: "string" },
-    "allow-registration": { type: "boolean" },
-    help: { type: "boolean", short: "h" },
-  },
-  allowPositionals: false,
-});
+function parseCliArgs() {
+  return parseArgs({
+    options: {
+      port: { type: "string" },
+      host: { type: "string" },
+      "auth-store": { type: "string" },
+      "usage-store": { type: "string" },
+      "allow-registration": { type: "boolean" },
+      help: { type: "boolean", short: "h" },
+    },
+    allowPositionals: false,
+    strict: true,
+  }).values;
+}
+
+let values: ReturnType<typeof parseCliArgs>;
+try {
+  values = parseCliArgs();
+} catch (err) {
+  // parseArgs throws on unknown flags or disallowed positionals; surface the
+  // gateway's standard fatal formatting instead of a raw Node stack trace.
+  process.stderr.write(
+    `[gsd-cloud-mcp-gateway] fatal: ${err instanceof Error ? err.message : String(err)}\n`,
+  );
+  process.exit(1);
+}
 
 if (values.help) {
   process.stdout.write(`Usage: gsd-cloud-mcp-gateway [options]
