@@ -178,6 +178,8 @@ test('update --models on HTTP error exits 1 and preserves an existing overlay', 
   )
 
   assert.equal(h.exitCode, 1)
+  assert.match(h.stderr.join(''), /HTTP 404/, 'HTTP errors report the status, not a network hint')
+  assert.doesNotMatch(h.stderr.join(''), /network connection/)
   assert.equal(readFileSync(h.catalogPath, 'utf-8'), existing, 'existing overlay must not be clobbered')
 })
 

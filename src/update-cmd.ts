@@ -88,6 +88,7 @@ function readExistingCatalogCounts(catalogPath: string): CatalogCounts | null {
 type CatalogFetchResult =
   | { ok: true; catalog: ModelsCatalog }
   | { ok: false; reason: 'network' | 'invalid' }
+  | { ok: false; reason: 'http'; status: number; statusText: string }
 
 async function fetchModelsCatalog(url: string, timeoutMs: number): Promise<CatalogFetchResult> {
   const controller = new AbortController()
@@ -95,7 +96,9 @@ async function fetchModelsCatalog(url: string, timeoutMs: number): Promise<Catal
 
   try {
     const res = await fetch(url, { signal: controller.signal })
-    if (!res.ok) return { ok: false, reason: 'network' }
+    // A non-2xx response reached the server; it is an HTTP error, not a
+    // connectivity problem, so report the status instead of "check your network".
+    if (!res.ok) return { ok: false, reason: 'http', status: res.status, statusText: res.statusText }
 
     const data: unknown = await res.json()
     return isModelsCatalog(data)
@@ -135,6 +138,10 @@ async function runModelsUpdate(agentDirOverride?: string): Promise<void> {
     // Never clobber an existing overlay on failure — return before any write
     if (result.reason === 'invalid') {
       failModelsUpdate('Fetched model catalog is invalid: expected a provider → model map. Existing catalog left unchanged.')
+    }
+    if (result.reason === 'http') {
+      const statusText = result.statusText ? ` ${result.statusText}` : ''
+      failModelsUpdate(`Failed to fetch model catalog: server responded with HTTP ${result.status}${statusText}. Existing catalog left unchanged.`)
     }
     failModelsUpdate('Failed to fetch model catalog. Check your network connection. Existing catalog left unchanged.')
   }
