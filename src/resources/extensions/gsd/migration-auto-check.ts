@@ -103,13 +103,11 @@ function excludeUnplannedMilestonesFromDbScan(
     const prefix = `${milestone.id}/`;
     for (const identity of [...dbScan.slices]) {
       if (!identity.startsWith(prefix)) continue;
-      dbScan.slices.delete(identity);
-      dbScan.counts.slices--;
+      if (dbScan.slices.delete(identity)) dbScan.counts.slices--;
     }
     for (const identity of [...dbScan.tasks]) {
       if (!identity.startsWith(prefix)) continue;
-      dbScan.tasks.delete(identity);
-      dbScan.counts.tasks--;
+      if (dbScan.tasks.delete(identity)) dbScan.counts.tasks--;
     }
   }
 }
