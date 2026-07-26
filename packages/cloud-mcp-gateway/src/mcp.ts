@@ -85,10 +85,19 @@ export function createGatewayMcpServer(params: {
     const args = request.params.arguments ?? {};
     const startedAt = Date.now();
 
-    // Enforce quota before the unknown-tool check so all tools/call traffic
-    // (including spammed, arbitrary tool names) is rate-limited. A passed check
-    // reserves billable quota that must be released once the call settles.
-    const quota = enforceQuota(params, toolName, args, startedAt);
+    // A tool is "known" when it is a gateway built-in or a runtime-advertised
+    // tool. Built-ins short-circuit before the runtime tool-name lookup
+    // (listTools + per-call scan) to keep the hot path cheap.
+    const knownTool = BUILTIN_TOOL_NAMES.has(toolName)
+      || params.registry.listTools(params.userId).some((tool) => tool.name === toolName);
+
+    // Enforce quota before dispatching so all tools/call traffic (including
+    // spammed, arbitrary tool names) is minute-throttled. Only known tools
+    // consume and reserve billable day/month quota; an unknown tool is
+    // rate-limited but must not deny legitimate calls near the day/month
+    // boundary. A billable pass reserves quota that must be released once the
+    // call settles.
+    const quota = enforceQuota(params, toolName, args, startedAt, knownTool);
     if (quota.rejected) return quota.rejected;
 
     try {
@@ -98,13 +107,7 @@ export function createGatewayMcpServer(params: {
         return result;
       }
 
-      // Only built-in tools reach the hot path most of the time; skip the
-      // runtime tool-name lookup (listTools + per-call scan) unless the tool is
-      // not a built-in and actually needs runtime resolution.
-      if (
-        !BUILTIN_TOOL_NAMES.has(toolName)
-        && !params.registry.listTools(params.userId).some((tool) => tool.name === toolName)
-      ) {
+      if (!knownTool) {
         recordUsage(params.usage, params.userId, toolName, args, startedAt, false, {
           error: "unknown tool",
           billable: false,
@@ -263,12 +266,15 @@ function enforceQuota(
   toolName: string,
   args: Record<string, unknown>,
   startedAt: number,
+  // Whether this call is billable (a known tool). Non-billable calls are still
+  // minute-throttled by check() but skip the day/month billable gate/reservation.
+  billable: boolean,
 ): QuotaGate {
   if (!params.usage || !params.usageLimiter || !params.getUser) return { reserved: false };
   const user = params.getUser(params.userId);
   if (!user) return { rejected: errorToolResult(`Unknown user: ${params.userId}`), reserved: false };
-  const status = params.usageLimiter.check(user, params.usage, startedAt);
-  if (status.allowed) return { reserved: true };
+  const status = params.usageLimiter.check(user, params.usage, startedAt, billable);
+  if (status.allowed) return { reserved: billable };
   const message = formatQuotaExceeded(status);
   recordUsage(params.usage, params.userId, toolName, args, startedAt, false, {
     error: message,

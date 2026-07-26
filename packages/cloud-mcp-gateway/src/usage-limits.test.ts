@@ -77,6 +77,58 @@ test("usage limiter reserves billable day quota for in-flight calls until releas
   assert.equal(limiter.check(user, usage, now + 3).allowed, true);
 });
 
+test("non-billable calls are minute-throttled but skip the day/month billable gate", () => {
+  const user = makeUser("u1");
+  const usage = new InMemoryUsageStore();
+  const limiter = new UsageLimiter({
+    free: { callsPerMinute: 2, callsPerDay: 1, callsPerMonth: 1 },
+    paid: {},
+    unlimited: {},
+  });
+  const now = Date.parse("2026-06-01T12:00:00.000Z");
+
+  // A non-billable call (e.g. an unknown tool) is accepted without consuming or
+  // reserving the day/month billable quota.
+  const first = limiter.check(user, usage, now, false);
+  assert.equal(first.allowed, true);
+  assert.equal(first.usage.day, 0, "non-billable call must not count against day usage");
+  assert.equal(first.usage.month, 0, "non-billable call must not count against month usage");
+
+  // Because the non-billable call reserved nothing, a concurrent billable call
+  // near the single day/month slot is still allowed.
+  assert.equal(limiter.check(user, usage, now + 1, true).allowed, true);
+
+  // Non-billable calls are still minute-throttled: the third call in the window
+  // (limit 2) is rejected on the minute reason, not the day/month reason.
+  const throttled = limiter.check(user, usage, now + 2, false);
+  assert.equal(throttled.allowed, false);
+  assert.equal(throttled.reason, "minute");
+});
+
+test("non-billable calls are not rejected by an exhausted day quota", () => {
+  const user = makeUser("u1");
+  const usage = new InMemoryUsageStore();
+  usage.recordToolCall({
+    userId: "u1",
+    toolName: "gsd_status",
+    startedAt: Date.parse("2026-06-01T12:00:00.000Z"),
+    durationMs: 1,
+    ok: true,
+  });
+  const limiter = new UsageLimiter({
+    free: { callsPerDay: 1, callsPerMonth: 1 },
+    paid: {},
+    unlimited: {},
+  });
+  const at = Date.parse("2026-06-01T12:00:01.000Z");
+
+  // A billable call is denied because the day quota is exhausted.
+  assert.equal(limiter.check(user, usage, at, true).reason, "day");
+  // A non-billable call at the same moment is allowed because it skips the
+  // day/month billable gate.
+  assert.equal(limiter.check(user, usage, at + 1, false).allowed, true);
+});
+
 test("unlimited plan bypasses configured free limits", () => {
   const user = makeUser("u1", "unlimited");
   const usage = new InMemoryUsageStore();

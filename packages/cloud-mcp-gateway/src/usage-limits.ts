@@ -50,38 +50,49 @@ export class UsageLimiter {
 
   constructor(private readonly config: UsageLimitConfig) {}
 
-  check(user: UserRecord, usage: InMemoryUsageStore, now = Date.now()): UsageQuotaStatus {
+  /**
+   * Check whether a tool call may proceed and, on acceptance, record it.
+   *
+   * Minute throttling applies to every call so spammed, arbitrary tool names
+   * are still rate-limited. Day/month billable quota is only checked and
+   * reserved for billable calls: passing `billable: false` (e.g. an unknown
+   * tool that will be recorded non-billable) skips the day/month gate and never
+   * holds a day/month reservation, so spam/typos cannot deny concurrent
+   * legitimate calls near a day/month quota boundary.
+   */
+  check(user: UserRecord, usage: InMemoryUsageStore, now = Date.now(), billable = true): UsageQuotaStatus {
     const limits = resolveLimits(user, this.config);
     const calls = this.prune(user.userId, now);
     const minute = calls.length;
-    const billable = usage.getUserBillableUsage(user.userId, now);
+    const billableUsage = usage.getUserBillableUsage(user.userId, now);
     const reserved = this.reservedBillable(user.userId, now);
     const status = buildStatus(user, limits, {
       minute,
-      day: billable.day + reserved.day,
-      month: billable.month + reserved.month,
-    }, now, calls[0] ? calls[0] + WINDOW_MS : undefined);
+      day: billableUsage.day + reserved.day,
+      month: billableUsage.month + reserved.month,
+    }, now, calls[0] ? calls[0] + WINDOW_MS : undefined, billable);
     if (!status.allowed) return status;
     this.noteAccepted(user.userId, now);
-    this.reserveBillable(user.userId, now);
+    if (billable) this.reserveBillable(user.userId, now);
     // Reflect the accepted call's own reservation in the returned status so it is
     // consistent with the limiter's internal state: the minute window counted it
-    // (noteAccepted) and the day/month billable reservation counted it
-    // (reserveBillable). Otherwise callers surfacing this status under-report
-    // day/month usage by 1 until the call is later recorded in the usage store.
+    // (noteAccepted) and, for billable calls, the day/month billable reservation
+    // counted it (reserveBillable). Otherwise callers surfacing this status
+    // under-report day/month usage by 1 until the call is later recorded in the
+    // usage store.
     return {
       ...status,
       usage: {
         ...status.usage,
         minute: minute + 1,
-        day: status.usage.day + 1,
-        month: status.usage.month + 1,
+        day: status.usage.day + (billable ? 1 : 0),
+        month: status.usage.month + (billable ? 1 : 0),
       },
       remaining: {
         ...status.remaining,
         ...(status.remaining.minute !== undefined ? { minute: Math.max(0, status.remaining.minute - 1) } : {}),
-        ...(status.remaining.day !== undefined ? { day: Math.max(0, status.remaining.day - 1) } : {}),
-        ...(status.remaining.month !== undefined ? { month: Math.max(0, status.remaining.month - 1) } : {}),
+        ...(billable && status.remaining.day !== undefined ? { day: Math.max(0, status.remaining.day - 1) } : {}),
+        ...(billable && status.remaining.month !== undefined ? { month: Math.max(0, status.remaining.month - 1) } : {}),
       },
       resetAt: {
         ...status.resetAt,
@@ -183,6 +194,10 @@ function buildStatus(
   usage: UsageQuotaStatus["usage"],
   now: number,
   minuteResetAt: number | undefined,
+  // Minute throttling always applies; day/month quotas are only enforced for
+  // billable calls so non-billable calls (e.g. unknown tools) are rate-limited
+  // without consuming or being rejected by the day/month billable budget.
+  enforceBillable = true,
 ): UsageQuotaStatus {
   const resetAt = {
     minute: minuteResetAt,
@@ -207,7 +222,7 @@ function buildStatus(
       retryAfterSeconds: Math.max(1, Math.ceil(((resetAt.minute ?? now + WINDOW_MS) - now) / 1000)),
     };
   }
-  if (isLimited(limits.callsPerDay) && usage.day >= limits.callsPerDay) {
+  if (enforceBillable && isLimited(limits.callsPerDay) && usage.day >= limits.callsPerDay) {
     return {
       userId: user.userId,
       plan: user.plan,
@@ -220,7 +235,7 @@ function buildStatus(
       retryAfterSeconds: Math.max(1, Math.ceil((resetAt.day - now) / 1000)),
     };
   }
-  if (isLimited(limits.callsPerMonth) && usage.month >= limits.callsPerMonth) {
+  if (enforceBillable && isLimited(limits.callsPerMonth) && usage.month >= limits.callsPerMonth) {
     return {
       userId: user.userId,
       plan: user.plan,
