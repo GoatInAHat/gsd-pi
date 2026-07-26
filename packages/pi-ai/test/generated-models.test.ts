@@ -10,12 +10,14 @@ import { MODELS } from "../src/models.generated.ts";
 
 describe("models.generated.ts", () => {
 	test("models.generated.json mirrors the complete generated catalog", () => {
+		// allow-source-grep: reads the generated JSON data snapshot (manifest output), not source, to verify it mirrors MODELS
 		const snapshot = JSON.parse(readFileSync(join(import.meta.dirname, "../src/models.generated.json"), "utf8"));
 
 		expect(snapshot).toEqual(MODELS);
 	});
 
 	test("models.generated.json satisfies catalog validation", () => {
+		// allow-source-grep: reads the generated JSON data snapshot (manifest output), not source, to validate its shape
 		const snapshot = JSON.parse(readFileSync(join(import.meta.dirname, "../src/models.generated.json"), "utf8"));
 
 		expect(isModelsCatalog(snapshot)).toBe(true);
