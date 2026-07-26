@@ -145,11 +145,14 @@ export class ExternalMcpToolBridge {
     try {
       await connection.client.close();
     } catch {
-      try {
-        await connection.transport.close();
-      } catch {
-        // Best-effort cleanup only; the caller is already handling the real failure.
-      }
+      // Fall through: the transport is still closed below so a failed client
+      // close cannot leak the stdio child process / pipes.
+    } finally {
+      // Always close the transport, not just on the client-close error path.
+      // Client.close() usually closes the transport too, but that is not
+      // guaranteed, and this close is idempotent, so on the success path this
+      // ensures the stdio child process / pipes are released.
+      await connection.transport.close().catch(() => undefined);
     }
   }
 }
