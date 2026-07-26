@@ -356,7 +356,12 @@ export class InMemoryAuthStore {
     // (and thus what gets persisted) by editing the returned snapshot.
     return {
       version: 1,
-      users: Array.from(this.users.values(), (record) => ({ ...record })),
+      // Deep-copy quotaOverrides so a caller can't mutate the nested override
+      // object on a live user record through the returned snapshot.
+      users: Array.from(this.users.values(), (record) => ({
+        ...record,
+        ...(record.quotaOverrides ? { quotaOverrides: { ...record.quotaOverrides } } : {}),
+      })),
       userTokens: Array.from(this.userTokens.values(), (record) => ({ ...record })),
       deviceTokens: Array.from(this.deviceTokens.values(), (record) => ({ ...record })),
       pairingCodes: Array.from(this.pairingCodes.values(), (record) => ({ ...record })),

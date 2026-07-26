@@ -67,18 +67,21 @@ export async function listenHttpMcpServer(
     }
   });
 
+  // Node's server.listen expects a bare IPv6 literal (e.g. `::1`), not a
+  // bracketed one; strip any brackets that formatUrlHost() re-adds for the URL.
+  const listenHost = options.host.replace(/^\[/, '').replace(/\]$/, '');
   await new Promise<void>((resolve, reject) => {
     // A listen error (e.g. EADDRINUSE) fires the server's 'error' event, not the
     // listen callback, so tie it into the promise to fail startup fast instead of
     // awaiting forever.
     const onError = (err: Error) => reject(err);
     server.once('error', onError);
-    server.listen(options.port, options.host, () => {
+    server.listen(options.port, listenHost, () => {
       server.removeListener('error', onError);
       resolve();
     });
   });
-  const displayHost = options.host === '0.0.0.0' ? 'localhost' : options.host;
+  const displayHost = listenHost === '0.0.0.0' ? 'localhost' : listenHost;
   return {
     url: `http://${formatUrlHost(displayHost)}:${options.port}/mcp`,
     close: () => new Promise((resolve, reject) => server.close((err) => err ? reject(err) : resolve())),
