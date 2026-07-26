@@ -8,13 +8,14 @@ import type { Page } from "playwright";
 // sharp's ESM build exposes the callable constructor as its default export, so
 // the cached value is `(await import("sharp")).default`. Type it as that default
 // export (the factory), not the module namespace, otherwise `sharp(buffer)`
-// is seen as non-callable. sharp ships dual types: the ESM entry (index.d.mts)
-// uses `export default`, while the CJS entry (index.d.cts) uses `export =` with
-// no `default` member. Resolve `["default"]` only when it exists so the type
-// compiles under whichever entry the build's module resolution selects, while
-// staying callable in both cases.
+// is seen as non-callable.
+//
+// sharp ships two type surfaces: dist/index.d.mts (`export default sharp`) and
+// the legacy lib/index.d.ts (`export = sharp`). Depending on which one module
+// resolution picks, `typeof import("sharp")` either has a `default` property or
+// *is* the factory itself, so index into `default` only when it exists.
 type SharpModule = typeof import("sharp");
-type SharpFactory = SharpModule extends { default: infer TDefault } ? TDefault : SharpModule;
+type SharpFactory = SharpModule extends { default: infer D } ? D : SharpModule;
 let _sharp: SharpFactory | null | undefined;
 async function getSharp(): Promise<SharpFactory | null> {
 	if (_sharp !== undefined) return _sharp;
