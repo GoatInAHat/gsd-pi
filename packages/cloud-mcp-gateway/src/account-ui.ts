@@ -430,9 +430,11 @@ export function renderAccountUi(config: ClerkPublicConfig | undefined): string {
       // and populated window.Clerk; if the document has already finished loading
       // they have run, so boot immediately.
       if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", boot);
+        document.addEventListener("DOMContentLoaded", function () {
+          boot().catch(showError);
+        });
       } else {
-        boot();
+        boot().catch(showError);
       }
 
       async function boot() {

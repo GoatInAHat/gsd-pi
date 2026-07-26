@@ -557,7 +557,8 @@ function optionalLimit(value: unknown): number | undefined {
 }
 
 function parseBoolean(value: string | undefined): boolean {
-  return value === "1" || value === "true" || value === "yes";
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
 // Normalize a bearer token from options/env: trim surrounding whitespace and
