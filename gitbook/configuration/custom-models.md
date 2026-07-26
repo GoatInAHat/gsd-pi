@@ -111,6 +111,32 @@ Override specific model settings without redefining the entire model:
 }
 ```
 
+## Updating the Model Catalog
+
+Run `gsd update --models` to fetch the latest published model catalog without a full npm upgrade:
+
+```bash
+gsd update --models
+```
+
+The command downloads the catalog snapshot from the gsd-pi repository (`https://raw.githubusercontent.com/open-gsd/gsd-pi/main/packages/pi-ai/src/models.generated.json`) and stores it as a versioned JSON overlay at `~/.gsd/agent/models-catalog.json`:
+
+```json
+{
+  "version": 1,
+  "fetchedAt": "<ISO timestamp>",
+  "source": "<fetch URL>",
+  "models": { "<provider>": { "<modelId>": { "contextWindow": 128000, "...": "..." } } } }
+```
+
+At startup, models resolve in precedence order (lowest to highest):
+
+1. **Bundled catalog** shipped with the installed GSD version.
+2. **Overlay** from `~/.gsd/agent/models-catalog.json` — replaces bundled entries with the same provider + model `id` and adds new models and providers.
+3. **`models.json`** (this file) — custom providers, custom models, and `modelOverrides` always take highest precedence and are never modified by the update.
+
+This delivers new models, pricing, and context-window updates as they are published, without upgrading GSD itself. If the overlay is missing or malformed it is ignored and startup is unaffected.
+
 ## Cost Tracking
 
 For accurate cost tracking with custom models, add the `cost` field (per million tokens):

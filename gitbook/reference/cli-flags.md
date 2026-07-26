@@ -39,7 +39,7 @@
 | Command | Description |
 |---------|-------------|
 | `gsd config` | Set up global API keys |
-| `gsd update` | Update to the latest version |
+| `gsd update` | Update to the latest version (`gsd update browser` updates the managed browser; `gsd update --models` refreshes the model catalog) |
 
 ## Headless Mode
 

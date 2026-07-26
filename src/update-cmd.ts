@@ -1,5 +1,8 @@
 import { execSync } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { agentDir as defaultAgentDir } from './app-paths.js'
+import { resolveModelsCatalogPath } from './models-resolver.js'
 import { initResources } from './resource-loader.js'
 import { buildClaudeRuntimeFloorAdvisory } from './resources/shared/claude-runtime-floor.js'
 import { reconcileGsdBrowserPathAfterInstall } from './resources/shared/gsd-browser-path-sync.js'
@@ -17,10 +20,16 @@ import {
 
 const NPM_PACKAGE = GSD_PI_PACKAGE_NAME
 
+export const MODELS_CATALOG_URL =
+  'https://raw.githubusercontent.com/open-gsd/gsd-pi/main/packages/pi-ai/src/models.generated.json'
+const MODELS_CATALOG_FETCH_TIMEOUT_MS = 15000
+
 interface RunUpdateOptions {
   agentDir?: string
   skillsDir?: string
   target?: string
+  /** Positional args after the target (e.g. an unexpected value after `--models`) */
+  extraArgs?: string[]
 }
 
 function formatCurrentVersion(version: string | null): string {
@@ -42,6 +51,137 @@ function printClaudeRuntimeFloorAdvisory(agentDir: string): void {
     const reset = '\x1b[0m'
     process.stdout.write(`${yellow}${advisory}${reset}\n`)
   }
+}
+
+// ---------------------------------------------------------------------------
+// `gsd update --models` — refresh the runtime model-catalog overlay
+// ---------------------------------------------------------------------------
+
+type ModelsCatalog = Record<string, Record<string, unknown>>
+
+interface CatalogCounts {
+  providers: number
+  models: number
+}
+
+/**
+ * The fetched payload must be an object whose top-level keys map providers to
+ * model maps: { "<provider>": { "<modelId>": {…} } }. Anything else (arrays,
+ * scalars, nested non-objects) is rejected so a bad fetch never overwrites a
+ * good overlay.
+ */
+function isModelsCatalogPayload(data: unknown): data is ModelsCatalog {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false
+  return Object.values(data).every((value) => !!value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function countCatalogModels(catalog: ModelsCatalog): CatalogCounts {
+  const providers = Object.keys(catalog)
+  let models = 0
+  for (const provider of providers) {
+    models += Object.keys(catalog[provider]).length
+  }
+  return { providers: providers.length, models }
+}
+
+/** Best-effort read of an existing overlay for before/after counts. */
+function readExistingCatalogCounts(catalogPath: string): CatalogCounts | null {
+  try {
+    if (!existsSync(catalogPath)) return null
+    const parsed = JSON.parse(readFileSync(catalogPath, 'utf-8')) as { models?: unknown }
+    if (!isModelsCatalogPayload(parsed?.models)) return null
+    return countCatalogModels(parsed.models)
+  } catch {
+    // Missing/malformed overlay must never break the update command
+    return null
+  }
+}
+
+type CatalogFetchResult =
+  | { ok: true; catalog: ModelsCatalog }
+  | { ok: false; reason: 'network' | 'invalid' }
+
+async function fetchModelsCatalog(url: string, timeoutMs: number): Promise<CatalogFetchResult> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const res = await fetch(url, { signal: controller.signal })
+    if (!res.ok) return { ok: false, reason: 'network' }
+
+    const data: unknown = await res.json()
+    return isModelsCatalogPayload(data)
+      ? { ok: true, catalog: data }
+      : { ok: false, reason: 'invalid' }
+  } catch (err) {
+    // res.json() throws on malformed JSON — that is an invalid payload, not a network error
+    const isJsonError = err instanceof SyntaxError
+    return { ok: false, reason: isJsonError ? 'invalid' : 'network' }
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+function failModelsUpdate(message: string): never {
+  const yellow = '\x1b[33m'
+  const reset = '\x1b[0m'
+  process.stderr.write(`${yellow}${message}${reset}\n`)
+  process.exit(1)
+}
+
+async function runModelsUpdate(agentDirOverride?: string): Promise<void> {
+  const bold = '\x1b[1m'
+  const dim = '\x1b[2m'
+  const green = '\x1b[32m'
+  const reset = '\x1b[0m'
+
+  const catalogPath = agentDirOverride
+    ? join(agentDirOverride, 'models-catalog.json')
+    : resolveModelsCatalogPath()
+
+  process.stdout.write(`${dim}Fetching model catalog...${reset}\n`)
+  process.stdout.write(`${dim}Source:${reset} ${MODELS_CATALOG_URL}\n`)
+
+  const result = await fetchModelsCatalog(MODELS_CATALOG_URL, MODELS_CATALOG_FETCH_TIMEOUT_MS)
+  if (!result.ok) {
+    // Never clobber an existing overlay on failure — return before any write
+    if (result.reason === 'invalid') {
+      failModelsUpdate('Fetched model catalog is invalid: expected a provider → model map. Existing catalog left unchanged.')
+    }
+    failModelsUpdate('Failed to fetch model catalog. Check your network connection. Existing catalog left unchanged.')
+  }
+
+  const before = readExistingCatalogCounts(catalogPath)
+  const after = countCatalogModels(result.catalog)
+
+  const overlay = {
+    version: 1,
+    fetchedAt: new Date().toISOString(),
+    source: MODELS_CATALOG_URL,
+    models: result.catalog,
+  }
+
+  // Atomic write: temp file in the same directory, then rename
+  const tmpPath = `${catalogPath}.tmp-${process.pid}`
+  try {
+    mkdirSync(dirname(catalogPath), { recursive: true })
+    writeFileSync(tmpPath, JSON.stringify(overlay, null, 2) + '\n')
+    renameSync(tmpPath, catalogPath)
+  } catch (err) {
+    rmSync(tmpPath, { force: true })
+    const detail = err instanceof Error ? err.message : String(err)
+    failModelsUpdate(`Failed to write model catalog: ${detail}. Existing catalog left unchanged.`)
+  }
+
+  if (before) {
+    process.stdout.write(
+      `${dim}Previous catalog:${reset} ${before.providers} providers, ${before.models} models\n`,
+    )
+  }
+  process.stdout.write(
+    `${green}${bold}Updated model catalog:${reset} ${after.providers} providers, ${after.models} models\n`,
+  )
+  process.stdout.write(`${dim}Saved to${reset} ${catalogPath}\n`)
 }
 
 async function runBrowserUpdate(): Promise<void> {
@@ -111,9 +251,18 @@ export async function runUpdate(options: RunUpdateOptions = {}): Promise<void> {
     await runBrowserUpdate()
     return
   }
+  if (options.target === '--models') {
+    if (options.extraArgs && options.extraArgs.length > 0) {
+      process.stderr.write(`gsd update --models does not take a value: ${options.extraArgs.join(' ')}\n`)
+      process.stderr.write('Usage: gsd update [browser] [--models]\n')
+      process.exit(1)
+    }
+    await runModelsUpdate(options.agentDir)
+    return
+  }
   if (options.target) {
     process.stderr.write(`Unknown update target: ${options.target}\n`)
-    process.stderr.write('Usage: gsd update [browser]\n')
+    process.stderr.write('Usage: gsd update [browser] [--models]\n')
     process.exit(1)
   }
 
