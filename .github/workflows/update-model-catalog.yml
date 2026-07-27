@@ -140,7 +140,7 @@ jobs:
           git add packages/pi-ai/src/models.generated.ts
           JSON_CATALOG="packages/pi-ai/src/models.generated.json"
           if [ -f "$JSON_CATALOG" ] || git ls-files --error-unmatch "$JSON_CATALOG" >/dev/null 2>&1; then
-            git add "$JSON_CATALOG"
+            git add -A "$JSON_CATALOG"
           fi
           git commit -m "chore(models): refresh generated model catalog"
           if [ -n "$REMOTE_BRANCH_SHA" ]; then
