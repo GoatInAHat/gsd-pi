@@ -33,12 +33,23 @@ import { tmpdir } from "os";
 
 // ─── Config ───────────────────────────────────────────────────────────────
 
-// Every test runs the binary from a temp project dir, so a relative
-// GSD_SMOKE_BINARY (like the `dist/loader.js` in the header) must be pinned
-// to the invoking cwd before we chdir away from it.
-const binary = process.env.GSD_SMOKE_BINARY
-  ? resolve(process.env.GSD_SMOKE_BINARY)
-  : "gsd";
+// GSD_SMOKE_BINARY may name either a filesystem path to a JS entrypoint
+// (like the `dist/loader.js` in the header) or a bare executable on PATH
+// (like `gsd`, the default). A path is run via `node`, and because every
+// test runs from a temp project dir it must be pinned to the invoking cwd
+// before we chdir away from it. A bare name is run directly through PATH and
+// must NOT be resolved: resolve("gsd") would become `<cwd>/gsd` and get run
+// as `node <cwd>/gsd`, which fails. Only values containing a path separator
+// are treated as paths.
+const rawBinary = process.env.GSD_SMOKE_BINARY;
+const binaryIsScriptPath =
+  rawBinary !== undefined && /[\\/]/.test(rawBinary);
+const binary =
+  rawBinary === undefined
+    ? "gsd"
+    : binaryIsScriptPath
+      ? resolve(rawBinary)
+      : rawBinary;
 let passed = 0;
 let failed = 0;
 
@@ -86,8 +97,8 @@ function gsd(
   env?: Record<string, string>,
 ): { stdout: string; stderr: string; code: number } {
   const result = spawnSync(
-    binary === "gsd" ? "gsd" : "node",
-    binary === "gsd" ? args : [binary, ...args],
+    binaryIsScriptPath ? "node" : binary,
+    binaryIsScriptPath ? [binary, ...args] : args,
     {
       cwd,
       encoding: "utf-8",
@@ -335,8 +346,16 @@ run("headless query: all tasks done reports summarizing phase", () => {
       join(sDir, "S01-PLAN.md"),
       buildMinimalPlan([{ id: "T01", title: "Task One", done: true }]),
     );
-    // The importer consumes the checked plan task; a task summary is not
-    // authoritative in this layout, so the fixture does not carry an inert one.
+    // This fixture deliberately uses the legacy nested layout
+    // (milestones/M001/slices/S01), matching src/tests/headless-recover.test.ts.
+    // "summarizing" is derived purely from the checked plan task: all planned
+    // tasks done, no milestone summary yet. We intentionally do NOT add a task
+    // summary here and do NOT exercise the flat <phase>/S01-T01-SUMMARY.md path:
+    // in the legacy layout targetTaskFile() writes slices/S01/tasks/T01-SUMMARY.md,
+    // and pairing that with the checked plan checkbox makes the summary and the
+    // checkbox conflicting claims on M001/S01/T01, which the importer rejects with
+    // a 'conflicting-legacy-import-target' blocker. This fixture covers the recover
+    // two-step gate and legacy import; flat task-summary import is out of scope.
 
     recover(dir);
     const result = gsd(["headless", "query"], dir);
