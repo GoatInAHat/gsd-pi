@@ -26,6 +26,7 @@ import {
   resolveTaskFile,
 } from "../../paths.js";
 import { isClosedStatus } from "../../status-guards.js";
+import { findMilestoneIds } from "../../milestone-ids.js";
 import { removeProjectionTreeSync } from "../../atomic-write.js";
 import { invalidateStateCache } from "../../state.js";
 import type { GSDState } from "../../types.js";
@@ -295,14 +296,43 @@ function classifyDiskOnlySliceDir(
   return sawScaffold ? "quarantine-scaffold" : "delete-empty";
 }
 
+/**
+ * Milestone ids that all resolve to the same directory on disk.
+ *
+ * #1565: with unique-suffix ids enabled, `gsd_plan_milestone` stores the DB row
+ * as `M004-t76mxm` while `findMilestoneIds()` derives `M004` from the flat-phase
+ * directory name — later units then plan slices under `M004`. Both ids resolve
+ * to the same phase dir, so slices for this milestone can live under either id.
+ * Looking up only `milestone.id` yields an empty slice set and flags every
+ * `NN-MM-PLAN.md` as unknown, which blocks auto-mode permanently.
+ */
+function milestoneIdAliases(
+  basePath: string,
+  milestoneId: string,
+  milestonePath: string,
+  filesystemIds: string[],
+): string[] {
+  const aliases = [milestoneId];
+  for (const fsId of filesystemIds) {
+    if (aliases.includes(fsId)) continue;
+    if (resolveMilestonePath(basePath, fsId) === milestonePath) aliases.push(fsId);
+  }
+  return aliases;
+}
+
 function detectDiskSliceIdDivergenceForMilestone(
   basePath: string,
   milestoneId: string,
+  filesystemIds: string[],
 ): DiskSliceIdDivergenceDrift[] {
   const milestonePath = resolveMilestonePath(basePath, milestoneId);
   if (!milestonePath) return [];
 
-  const knownSliceIds = new Set(getMilestoneSlices(milestoneId).map((slice) => slice.id));
+  const knownSliceIds = new Set(
+    milestoneIdAliases(basePath, milestoneId, milestonePath, filesystemIds).flatMap((id) =>
+      getMilestoneSlices(id).map((slice) => slice.id),
+    ),
+  );
   const drifts: DiskSliceIdDivergenceDrift[] = [];
 
   // Flat-phase: scan phase dir for plan files (NN-MM-PLAN.md) where MM
@@ -394,6 +424,13 @@ function computeArtifactDbDrift(
   if (!isDbAvailable()) return [];
 
   const drifts: ArtifactDbDrift[] = [];
+  // Scanned once per pass: the disk layout is immutable while detection runs.
+  let filesystemIds: string[] = [];
+  try {
+    filesystemIds = findMilestoneIds(ctx.basePath);
+  } catch {
+    // unreadable projection root — fall back to DB ids only
+  }
 
   for (const milestone of getAllMilestones()) {
     if (isClosedStatus(milestone.status)) continue;
@@ -413,7 +450,9 @@ function computeArtifactDbDrift(
     }
 
     drifts.push(...detectArtifactDbStatusDriftForMilestone(ctx.basePath, milestone.id));
-    drifts.push(...detectDiskSliceIdDivergenceForMilestone(ctx.basePath, milestone.id));
+    drifts.push(
+      ...detectDiskSliceIdDivergenceForMilestone(ctx.basePath, milestone.id, filesystemIds),
+    );
   }
 
   return drifts;
