@@ -4,6 +4,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { inspect } from "node:util";
 
 const { resolveSharpFactory } = await import("../screenshot-constraints.ts");
 
@@ -34,7 +35,7 @@ describe("resolveSharpFactory", () => {
       assert.strictEqual(
         resolveSharpFactory(mod),
         null,
-        `expected null for ${JSON.stringify(mod) ?? String(mod)}`,
+        `expected null for ${inspect(mod)}`,
       );
     }
   });
