@@ -10,7 +10,14 @@ export const { getLinkablePackages } = require('./workspace-manifest.cjs');
 
 export const TEST_RE = /\.(?:test|spec)\.(?:ts|tsx|mjs|js|cjs)$/;
 export const SRC_RE = /\.(?:ts|tsx|mjs|js)$/;
-export const SKIP_DIRS = new Set(['node_modules', 'dist', 'dist-test', '.cache', 'templates']);
+// `worktrees` covers the checkouts that nest inside the repo (.worktrees/,
+// .claude/worktrees/, .gsd-worktrees/): their copies of every test file are
+// not this checkout's tests, and counting them buries the audit in tens of
+// thousands of phantom "unwired" entries locally.
+export const SKIP_DIRS = new Set([
+  'node_modules', 'dist', 'dist-test', '.cache', 'templates',
+  'worktrees', '.worktrees', '.gsd-worktrees',
+]);
 
 export const UNIT_EXTENSION_GLOBS = new Set([
   'gsd',
