@@ -28,12 +28,17 @@ import {
   writeFileSync,
   rmSync,
 } from "fs";
-import { join } from "path";
+import { join, resolve } from "path";
 import { tmpdir } from "os";
 
 // ─── Config ───────────────────────────────────────────────────────────────
 
-const binary = process.env.GSD_SMOKE_BINARY || "gsd";
+// Every test runs the binary from a temp project dir, so a relative
+// GSD_SMOKE_BINARY (like the `dist/loader.js` in the header) must be pinned
+// to the invoking cwd before we chdir away from it.
+const binary = process.env.GSD_SMOKE_BINARY
+  ? resolve(process.env.GSD_SMOKE_BINARY)
+  : "gsd";
 let passed = 0;
 let failed = 0;
 
@@ -206,8 +211,19 @@ function buildTaskSummary(id: string): string {
 // imported via `gsd headless recover` before `headless query` can derive
 // their state. The interactive `gsd recover` command requires a TTY; the
 // headless subcommand is the non-interactive parallel.
+// Since the import-application gate landed, recover is two-step: the first
+// invocation prints the import preview and exits 1, and only a re-run carrying
+// that exact `--preview=<hash>` applies it.
 function recover(dir: string): void {
-  const result = gsd(["headless", "recover"], dir);
+  const preview = gsd(["headless", "recover"], dir);
+  const previewHash = /^Preview hash: (sha256:[0-9a-f]{64})$/mu.exec(
+    preview.stderr,
+  )?.[1];
+  assert(
+    previewHash !== undefined,
+    `gsd headless recover should print a preview hash, got ${preview.code}: ${preview.stderr}`,
+  );
+  const result = gsd(["headless", "recover", `--preview=${previewHash}`], dir);
   assert(
     result.code === 0,
     `gsd headless recover should succeed for fixture, got ${result.code}: ${result.stderr}`,
@@ -309,7 +325,7 @@ run("headless query: all tasks done reports summarizing phase", () => {
   try {
     const mDir = join(dir, ".gsd", "milestones", "M001");
     const sDir = join(mDir, "slices", "S01");
-    mkdirSync(join(sDir, "tasks"), { recursive: true });
+    mkdirSync(sDir, { recursive: true });
     writeFileSync(join(mDir, "M001-CONTEXT.md"), "# M001\n\nContext.");
     writeFileSync(
       join(mDir, "M001-ROADMAP.md"),
@@ -319,10 +335,9 @@ run("headless query: all tasks done reports summarizing phase", () => {
       join(sDir, "S01-PLAN.md"),
       buildMinimalPlan([{ id: "T01", title: "Task One", done: true }]),
     );
-    writeFileSync(
-      join(sDir, "tasks", "T01-SUMMARY.md"),
-      buildTaskSummary("T01"),
-    );
+    // Canonical flat task-artifact path (`<milestone>/S01-T01-SUMMARY.md`) —
+    // the layout `targetTaskFile` writes today.
+    writeFileSync(join(mDir, "S01-T01-SUMMARY.md"), buildTaskSummary("T01"));
 
     recover(dir);
     const result = gsd(["headless", "query"], dir);
@@ -343,8 +358,10 @@ run("headless query: all tasks done reports summarizing phase", () => {
 // Previously this accepted {complete, idle, pre-planning} — three-way
 // accept meant it could not distinguish "rolled forward correctly" from
 // "broken."  Now: the roadmap has its only slice checked and a SUMMARY
-// file exists, so the milestone must roll forward to either "complete"
-// (M001 reported as done) or "idle" (M001 archived, no successor).
+// file exists, so the milestone must roll forward to "complete" (M001
+// reported as done), "idle" (M001 archived, no successor), or
+// "validating-milestone" (import leaves M001 active with every slice done
+// and no VALIDATION.md, so state derivation routes it to validation first).
 // "pre-planning" indicates we forgot the completed milestone — a bug.
 
 run("headless query: milestone with summary reports complete or idle", () => {
@@ -365,8 +382,8 @@ run("headless query: milestone with summary reports complete or idle", () => {
     const json = JSON.parse(result.stdout);
     const phase = json.state?.phase ?? json.phase;
     assert(
-      phase === "complete" || phase === "idle",
-      `expected complete or idle (not pre-planning — completed milestone must not be forgotten), got: ${phase}`,
+      phase === "complete" || phase === "idle" || phase === "validating-milestone",
+      `expected complete, idle, or validating-milestone (not pre-planning — completed milestone must not be forgotten), got: ${phase}`,
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
