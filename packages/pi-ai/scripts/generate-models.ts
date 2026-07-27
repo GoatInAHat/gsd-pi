@@ -1210,7 +1210,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 }
 
 async function generateModels() {
-	// Fetch models from both sources
+	// Fetch models from every required upstream source
 	// models.dev: Anthropic, Google, OpenAI, Groq, Cerebras
 	// OpenRouter: xAI and other providers (excluding Anthropic, Google, OpenAI)
 	// AI Gateway: OpenAI-compatible catalog with tool-capable models
