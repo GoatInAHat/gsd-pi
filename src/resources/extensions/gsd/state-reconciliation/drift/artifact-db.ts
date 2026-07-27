@@ -307,15 +307,15 @@ function classifyDiskOnlySliceDir(
  * `NN-MM-PLAN.md` as unknown, which blocks auto-mode permanently.
  */
 function milestoneIdAliases(
-  basePath: string,
   milestoneId: string,
   milestonePath: string,
   filesystemIds: string[],
+  resolvedPathByFsId: Map<string, string | null>,
 ): string[] {
   const aliases = [milestoneId];
   for (const fsId of filesystemIds) {
     if (aliases.includes(fsId)) continue;
-    if (resolveMilestonePath(basePath, fsId) === milestonePath) aliases.push(fsId);
+    if (resolvedPathByFsId.get(fsId) === milestonePath) aliases.push(fsId);
   }
   return aliases;
 }
@@ -324,13 +324,14 @@ function detectDiskSliceIdDivergenceForMilestone(
   basePath: string,
   milestoneId: string,
   filesystemIds: string[],
+  resolvedPathByFsId: Map<string, string | null>,
 ): DiskSliceIdDivergenceDrift[] {
   const milestonePath = resolveMilestonePath(basePath, milestoneId);
   if (!milestonePath) return [];
 
   const knownSliceIds = new Set(
-    milestoneIdAliases(basePath, milestoneId, milestonePath, filesystemIds).flatMap((id) =>
-      getMilestoneSlices(id).map((slice) => slice.id),
+    milestoneIdAliases(milestoneId, milestonePath, filesystemIds, resolvedPathByFsId).flatMap(
+      (id) => getMilestoneSlices(id).map((slice) => slice.id),
     ),
   );
   const drifts: DiskSliceIdDivergenceDrift[] = [];
@@ -432,6 +433,16 @@ function computeArtifactDbDrift(
     // unreadable projection root — fall back to DB ids only
   }
 
+  // #1565 follow-up: resolveMilestonePath scans the whole phases dir on most
+  // calls, so resolve each filesystem id to its disk path exactly once per pass
+  // instead of re-resolving every id inside milestoneIdAliases for every DB
+  // milestone (which was O(#milestones × #filesystemIds × #phaseDirs)).
+  const resolvedPathByFsId = new Map<string, string | null>();
+  for (const fsId of filesystemIds) {
+    if (resolvedPathByFsId.has(fsId)) continue;
+    resolvedPathByFsId.set(fsId, resolveMilestonePath(ctx.basePath, fsId));
+  }
+
   for (const milestone of getAllMilestones()) {
     if (isClosedStatus(milestone.status)) continue;
 
@@ -451,7 +462,12 @@ function computeArtifactDbDrift(
 
     drifts.push(...detectArtifactDbStatusDriftForMilestone(ctx.basePath, milestone.id));
     drifts.push(
-      ...detectDiskSliceIdDivergenceForMilestone(ctx.basePath, milestone.id, filesystemIds),
+      ...detectDiskSliceIdDivergenceForMilestone(
+        ctx.basePath,
+        milestone.id,
+        filesystemIds,
+        resolvedPathByFsId,
+      ),
     );
   }
 
