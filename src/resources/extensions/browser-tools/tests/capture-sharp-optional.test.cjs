@@ -16,11 +16,6 @@ const assert = require("node:assert/strict");
 const jiti = require("jiti")(__filename, { interopDefault: true, debug: false });
 
 const { constrainScreenshot, __setSharpForTesting } = jiti("../capture.ts");
-// getScreenshotBufferDimensions is not re-exported through capture.ts; pull it
-// straight from the module under change. jiti caches modules, and capture.ts
-// imports screenshot-constraints.ts, so both share the same `_sharp` cache and
-// the same __setSharpForTesting seam.
-const { getScreenshotBufferDimensions } = jiti("../screenshot-constraints.ts");
 
 describe("constrainScreenshot — sharp unavailable (null)", () => {
 	afterEach(() => {
@@ -108,10 +103,10 @@ describe("constrainScreenshot — cached sharp value is a callable factory", () 
 	// legacy lib/index.d.ts (`export = sharp`, so the module *is* the factory).
 	// The conditional `SharpFactory` type indexes into `default` only when it
 	// exists; if it regressed to the module namespace, `sharp(buffer)` would not
-	// be callable. resolveSharpFactory's own unit coverage lives in
-	// tests/screenshot-constraints.test.mjs; these tests instead inject a plain
-	// function factory and assert the runtime consumers invoke it as a function,
-	// without needing the native sharp binary.
+	// be callable. resolveSharpFactory's own unit coverage and the metadata-path
+	// runtime guard live in tests/screenshot-constraints.test.mjs (picked up by
+	// CI); this test instead injects a plain function factory and asserts the
+	// resize-path consumer invokes it as a function, without the native binary.
 	it("invokes the injected sharp factory as a function on the resize path", async () => {
 		const calls = [];
 		const makeInstance = () => ({
@@ -135,27 +130,5 @@ describe("constrainScreenshot — cached sharp value is a callable factory", () 
 			"the cached sharp value must be invoked as a callable factory",
 		);
 		assert.ok(Buffer.isBuffer(result), "resize path must return a Buffer");
-	});
-
-	it("invokes the injected sharp factory as a function on the metadata path", async () => {
-		const calls = [];
-		const sharpFactory = (buffer) => {
-			calls.push(buffer);
-			return {
-				metadata: async () => ({ width: 1024, height: 768 }),
-			};
-		};
-		__setSharpForTesting(sharpFactory);
-
-		const raw = Buffer.from([0x89, 0x50, 0x4e, 0x47]); // PNG magic bytes
-		const dims = await getScreenshotBufferDimensions(raw);
-
-		assert.equal(calls.length, 1, "the cached sharp value must be called as a factory");
-		assert.strictEqual(calls[0], raw, "the raw buffer must be handed to the factory");
-		assert.deepEqual(
-			dims,
-			{ width: 1024, height: 768 },
-			"getScreenshotBufferDimensions must read width/height from sharp().metadata()",
-		);
 	});
 });
