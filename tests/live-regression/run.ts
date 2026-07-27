@@ -202,10 +202,6 @@ function buildMinimalPlan(
   return lines.join("\n");
 }
 
-function buildTaskSummary(id: string): string {
-  return `---\nid: ${id}\nparent: S01\nmilestone: M001\nduration: 5m\nverification_result: passed\ncompleted_at: ${new Date().toISOString()}\n---\n\n# ${id}: Done\n\nCompleted.`;
-}
-
 // Recover DB hierarchy from on-disk markdown projections. DB is authoritative
 // at runtime, so live-regression fixtures that exist only as markdown must be
 // imported via `gsd headless recover` before `headless query` can derive
@@ -216,6 +212,10 @@ function buildTaskSummary(id: string): string {
 // that exact `--preview=<hash>` applies it.
 function recover(dir: string): void {
   const preview = gsd(["headless", "recover"], dir);
+  assert(
+    preview.code === 1,
+    `gsd headless recover preview should exit 1, got ${preview.code}: ${preview.stderr}`,
+  );
   const previewHash = /^Preview hash: (sha256:[0-9a-f]{64})$/mu.exec(
     preview.stderr,
   )?.[1];
@@ -335,9 +335,8 @@ run("headless query: all tasks done reports summarizing phase", () => {
       join(sDir, "S01-PLAN.md"),
       buildMinimalPlan([{ id: "T01", title: "Task One", done: true }]),
     );
-    // Canonical flat task-artifact path (`<milestone>/S01-T01-SUMMARY.md`) —
-    // the layout `targetTaskFile` writes today.
-    writeFileSync(join(mDir, "S01-T01-SUMMARY.md"), buildTaskSummary("T01"));
+    // The importer consumes the checked plan task; a task summary is not
+    // authoritative in this layout, so the fixture does not carry an inert one.
 
     recover(dir);
     const result = gsd(["headless", "query"], dir);
