@@ -40,8 +40,10 @@ import { tmpdir } from "os";
 // before we chdir away from it. A bare name is run directly through PATH and
 // must NOT be resolved: resolve("gsd") would become `<cwd>/gsd` and get run
 // as `node <cwd>/gsd`, which fails. Only values containing a path separator
-// are treated as paths.
-const rawBinary = process.env.GSD_SMOKE_BINARY;
+// are treated as paths. An unset OR empty value falls back to "gsd" (matching
+// the prior `env || "gsd"` truthiness), so a shell that exports the variable
+// empty does not spawn "".
+const rawBinary = process.env.GSD_SMOKE_BINARY || undefined;
 const binaryIsScriptPath =
   rawBinary !== undefined && /[\\/]/.test(rawBinary);
 const binary =
