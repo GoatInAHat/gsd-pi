@@ -1,0 +1,26 @@
+// Project/App: gsd-pi
+// File Purpose: Guard that auto-loop break branches record the real break reason (not a hardcoded "unit-break") in the dispatch ledger.
+
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+
+const LOOP_SOURCE = readFileSync(fileURLToPath(new URL("../auto/loop.ts", import.meta.url)), "utf8");
+
+test("loop break branches settle the ledger with the resolved break reason", () => {
+  const branches = LOOP_SOURCE.split('unitPhaseResult.action === "break"').slice(1);
+  assert.equal(branches.length, 2, "expected both the legacy and custom-engine break branches");
+
+  for (const branch of branches) {
+    const body = branch.slice(0, branch.search(/\n\s*break;/));
+    assert.match(body, /const breakReason = unitPhaseResult\.reason \?\? "unit-break";/);
+    assert.match(body, /settleDispatchFailed\([^,]+, breakReason,/);
+    assert.match(body, /finishTurn\("stopped", "execution", breakReason\)/);
+    assert.doesNotMatch(
+      body.replace(/const breakReason = unitPhaseResult\.reason \?\? "unit-break";/, ""),
+      /"unit-break"/,
+      "break reason must not be hardcoded — distinct reasons must stay distinct for stuck-loop detection",
+    );
+  }
+});
