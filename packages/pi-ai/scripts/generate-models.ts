@@ -308,6 +308,9 @@ function getBedrockBaseUrl(modelId: string): string {
 }
 
 function formatCost(value: number): string {
+	if (!Number.isFinite(value)) {
+		throw new Error("Model costs must be finite numbers.");
+	}
 	const rounded = Number(value.toFixed(12));
 	return Object.is(rounded, -0) ? "0" : String(rounded);
 }

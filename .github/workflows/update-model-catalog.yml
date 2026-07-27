@@ -4,9 +4,8 @@
 # review + CI instead of an unreviewed push to main.
 #
 # Token note: PRs opened with the default GITHUB_TOKEN do not trigger CI
-# workflow runs, so this follows the repo's release-bot convention and uses
-# the RELEASE_PAT secret (falling back to github.token if it is not set, in
-# which case CI must be triggered manually on the bot PR).
+# workflow runs, so this follows the repo's release-bot convention and requires
+# the RELEASE_PAT secret.
 name: Update model catalog
 
 on:
@@ -26,15 +25,26 @@ concurrency:
 jobs:
   refresh:
     name: refresh-model-catalog
+    if: github.repository == 'open-gsd/gsd-pi'
     timeout-minutes: 20
     runs-on: blacksmith-4vcpu-ubuntu-2404
 
     steps:
+      - name: Require release token
+        env:
+          RELEASE_PAT: ${{ secrets.RELEASE_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "$RELEASE_PAT" ]; then
+            echo "::error::RELEASE_PAT is required to open a bot PR that triggers CI" >&2
+            exit 1
+          fi
+
       - name: Checkout main
         uses: actions/checkout@v7
         with:
           ref: main
-          token: ${{ secrets.RELEASE_PAT || github.token }}
+          token: ${{ secrets.RELEASE_PAT }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
@@ -88,7 +98,7 @@ jobs:
       - name: Commit, push, and open refresh PR
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PAT || github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
           BEFORE_PROVIDERS: ${{ steps.before.outputs.providers }}
           BEFORE_MODELS: ${{ steps.before.outputs.models }}
           AFTER_PROVIDERS: ${{ steps.after.outputs.providers }}
@@ -111,6 +121,13 @@ jobs:
               echo "Catalog already fresh"
             fi
             exit 0
+          fi
+
+          if [ "$SUSPICIOUS_SHRINKAGE" = "true" ] && [ -n "$PR_URL" ]; then
+            AUTO_MERGE_ENABLED="$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest != null')"
+            if [ "$AUTO_MERGE_ENABLED" = "true" ]; then
+              gh pr merge --disable-auto "$PR_URL"
+            fi
           fi
 
           git status --porcelain
@@ -165,10 +182,6 @@ jobs:
           fi
 
           if [ "$SUSPICIOUS_SHRINKAGE" = "true" ]; then
-            AUTO_MERGE_ENABLED="$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest != null')"
-            if [ "$AUTO_MERGE_ENABLED" = "true" ]; then
-              gh pr merge --disable-auto "$PR_URL"
-            fi
             echo "Suspicious catalog shrinkage detected; auto-merge disabled and human review required"
           elif ! gh pr merge --auto --squash "$PR_URL"; then
             echo "auto-merge unavailable; leaving PR for manual review"

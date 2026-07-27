@@ -9,6 +9,7 @@ import YAML from "yaml";
 const root = process.cwd();
 const workflow = YAML.parse(readFileSync(".github/workflows/update-model-catalog.yml", "utf8"));
 const steps = workflow.jobs.refresh.steps;
+const releaseTokenStep = steps.find((step) => step.name === "Require release token");
 const commitStep = steps.find((step) => step.name === "Commit, push, and open refresh PR");
 const countScript = join(root, "packages/pi-ai/scripts/model-catalog-counts.mjs");
 const generatorScript = join(root, "packages/pi-ai/scripts/generate-models.ts");
@@ -54,7 +55,7 @@ function createGeneratorPreload(tempRoot) {
 			'\t\t\t\treturn { anthropic: { models: { test: { name: "Test", tool_call: true } } } };',
 			"\t\t\t}",
 			'\t\t\tif (target.includes("openrouter.ai")) {',
-			'\t\t\t\treturn { data: [{ id: process.env.MODEL_ID || "test/model", name: process.env.MODEL_NAME || "Test", context_length: process.env.MODEL_CONTEXT_WINDOW || 4096, top_provider: { max_completion_tokens: process.env.MODEL_MAX_TOKENS || 4096 }, supported_parameters: ["tools"] }] };',
+			'\t\t\t\treturn { data: [{ id: process.env.MODEL_ID || "test/model", name: process.env.MODEL_NAME || "Test", context_length: process.env.MODEL_CONTEXT_WINDOW || 4096, top_provider: { max_completion_tokens: process.env.MODEL_MAX_TOKENS || 4096 }, pricing: { prompt: process.env.MODEL_PROMPT_COST || "0", completion: process.env.MODEL_COMPLETION_COST || "0" }, supported_parameters: ["tools"] }] };',
 			"\t\t\t}",
 			'\t\t\treturn { data: [{ id: "test-model", name: "Test", tags: ["tool-use"] }] };',
 			"\t\t},",
@@ -69,6 +70,24 @@ function createGeneratorPreload(tempRoot) {
 	);
 	return pathToFileURL(preloadPath).href;
 }
+
+test("workflow runs only upstream and requires RELEASE_PAT", () => {
+	assert.equal(workflow.jobs.refresh.if, "github.repository == 'open-gsd/gsd-pi'");
+	assert.equal(
+		steps.find((step) => step.name === "Checkout main").with.token,
+		"${{ secrets.RELEASE_PAT }}",
+	);
+	assert.equal(commitStep.env.GH_TOKEN, "${{ secrets.RELEASE_PAT }}");
+
+	const missing = run("bash", ["-c", releaseTokenStep.run], {
+		env: { RELEASE_PAT: "" },
+		expectSuccess: false,
+	});
+	assert.notEqual(missing.status, 0);
+	assert.match(missing.stderr, /RELEASE_PAT is required to open a bot PR that triggers CI/);
+
+	run("bash", ["-c", releaseTokenStep.run], { env: { RELEASE_PAT: "test-token" } });
+});
 
 test("catalog count snapshots share one executable implementation", (t) => {
 	const tempRoot = mkdtempSync(join(root, ".model-catalog-counts-"));
@@ -238,6 +257,33 @@ test("generator rejects nonnumeric model limits before writing", async (t) => {
 	}
 });
 
+test("generator rejects nonfinite model costs before writing", async (t) => {
+	const tempRoot = mkdtempSync(join(root, ".model-catalog-costs-"));
+	t.after(() => rmSync(tempRoot, { recursive: true, force: true }));
+	const preload = createGeneratorPreload(tempRoot);
+
+	for (const [field, value] of [["prompt", "not-a-price"], ["completion", "Infinity"]]) {
+		await t.test(`${field} cost`, () => {
+			const writeLog = join(tempRoot, `${field}.generated.ts`);
+			const env = {
+				WRITE_LOG: writeLog,
+				...(field === "prompt"
+					? { MODEL_PROMPT_COST: value }
+					: { MODEL_COMPLETION_COST: value }),
+			};
+			const result = run(
+				process.execPath,
+				["--import", preload, generatorScript],
+				{ env, expectSuccess: false },
+			);
+
+			assert.notEqual(result.status, 0);
+			assert.match(result.stderr, /Model costs must be finite numbers/);
+			assert.equal(existsSync(writeLog), false);
+		});
+	}
+});
+
 test("generator safely serializes upstream model strings", async (t) => {
 	const tempRoot = mkdtempSync(join(root, ".model-catalog-serialization-"));
 	t.after(() => rmSync(tempRoot, { recursive: true, force: true }));
@@ -295,6 +341,7 @@ test("refresh workflow ignores fork PRs and manages its own bot PR without JSON 
 	const ghLog = join(tempRoot, "gh.log");
 	const ghState = join(tempRoot, "pr-open");
 	const ghAutoMergeState = join(tempRoot, "auto-merge-enabled");
+	const ghDisableHeadLog = join(tempRoot, "disable-head.log");
 	const ghBodyLog = join(tempRoot, "pr-body.md");
 	mkdirSync(repo);
 	mkdirSync(binDir);
@@ -337,7 +384,7 @@ test("refresh workflow ignores fork PRs and manages its own bot PR without JSON 
 			'\tif [ -f "$GH_AUTO_MERGE_STATE" ]; then printf "%s\\n" "true"; else printf "%s\\n" "false"; fi',
 			'elif [ "$1 $2" = "pr merge" ]; then',
 			'\tcase "$*" in',
-			'\t\t*--disable-auto*) rm -f "$GH_AUTO_MERGE_STATE" ;;',
+			'\t\t*--disable-auto*) git --git-dir="$GH_REMOTE" show bot/model-catalog-refresh:packages/pi-ai/src/models.generated.ts > "$GH_DISABLE_HEAD_LOG"; rm -f "$GH_AUTO_MERGE_STATE" ;;',
 			'\t\t*--auto*) if [ "$GH_AUTO_FAIL" = "1" ]; then exit 1; else touch "$GH_AUTO_MERGE_STATE"; fi ;;',
 			"\tesac",
 			"fi",
@@ -354,8 +401,10 @@ test("refresh workflow ignores fork PRs and manages its own bot PR without JSON 
 		GITHUB_REPOSITORY_OWNER: "open-gsd",
 		GH_AUTO_FAIL: "0",
 		GH_AUTO_MERGE_STATE: ghAutoMergeState,
+		GH_DISABLE_HEAD_LOG: ghDisableHeadLog,
 		GH_BODY_LOG: ghBodyLog,
 		GH_LOG: ghLog,
+		GH_REMOTE: remote,
 		GH_STATE: ghState,
 		PATH: `${binDir}:${process.env.PATH}`,
 		SHRUNK_PROVIDERS: "",
@@ -384,6 +433,7 @@ test("refresh workflow ignores fork PRs and manages its own bot PR without JSON 
 	assert.match(secondRun.stdout, /auto-merge disabled and human review required/);
 	assert.match(readFileSync(ghBodyLog, "utf8"), /> \[!WARNING\]/);
 	assert.match(readFileSync(ghBodyLog, "utf8"), /openrouter \(10 to 4\)/);
+	assert.equal(readFileSync(ghDisableHeadLog, "utf8"), "version two\n");
 	assert.equal(existsSync(ghAutoMergeState), false);
 	assert.equal(git(remote, "show", "bot/model-catalog-refresh:packages/pi-ai/src/models.generated.ts"), "version three");
 
