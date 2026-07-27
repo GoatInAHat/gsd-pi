@@ -310,28 +310,27 @@ function milestoneIdAliases(
   milestoneId: string,
   milestonePath: string,
   filesystemIds: string[],
-  resolvedPathByFsId: Map<string, string | null>,
+  resolvePath: (id: string) => string | null,
 ): string[] {
   const aliases = [milestoneId];
   for (const fsId of filesystemIds) {
     if (aliases.includes(fsId)) continue;
-    if (resolvedPathByFsId.get(fsId) === milestonePath) aliases.push(fsId);
+    if (resolvePath(fsId) === milestonePath) aliases.push(fsId);
   }
   return aliases;
 }
 
 function detectDiskSliceIdDivergenceForMilestone(
-  basePath: string,
   milestoneId: string,
   filesystemIds: string[],
-  resolvedPathByFsId: Map<string, string | null>,
+  resolvePath: (id: string) => string | null,
 ): DiskSliceIdDivergenceDrift[] {
-  const milestonePath = resolveMilestonePath(basePath, milestoneId);
+  const milestonePath = resolvePath(milestoneId);
   if (!milestonePath) return [];
 
   const knownSliceIds = new Set(
-    milestoneIdAliases(milestoneId, milestonePath, filesystemIds, resolvedPathByFsId).flatMap(
-      (id) => getMilestoneSlices(id).map((slice) => slice.id),
+    milestoneIdAliases(milestoneId, milestonePath, filesystemIds, resolvePath).flatMap((id) =>
+      getMilestoneSlices(id).map((slice) => slice.id),
     ),
   );
   const drifts: DiskSliceIdDivergenceDrift[] = [];
@@ -434,14 +433,18 @@ function computeArtifactDbDrift(
   }
 
   // #1565 follow-up: resolveMilestonePath scans the whole phases dir on most
-  // calls, so resolve each filesystem id to its disk path exactly once per pass
+  // calls, so resolve each milestone id to its disk path at most once per pass
   // instead of re-resolving every id inside milestoneIdAliases for every DB
-  // milestone (which was O(#milestones × #filesystemIds × #phaseDirs)).
-  const resolvedPathByFsId = new Map<string, string | null>();
-  for (const fsId of filesystemIds) {
-    if (resolvedPathByFsId.has(fsId)) continue;
-    resolvedPathByFsId.set(fsId, resolveMilestonePath(ctx.basePath, fsId));
-  }
+  // milestone (which was O(#milestones × #filesystemIds × #phaseDirs)). Safe to
+  // cache for the whole pass: the disk layout is immutable while detection runs.
+  const resolvedPathById = new Map<string, string | null>();
+  const resolvePath = (id: string): string | null => {
+    const cached = resolvedPathById.get(id);
+    if (cached !== undefined) return cached;
+    const resolved = resolveMilestonePath(ctx.basePath, id);
+    resolvedPathById.set(id, resolved);
+    return resolved;
+  };
 
   for (const milestone of getAllMilestones()) {
     if (isClosedStatus(milestone.status)) continue;
@@ -462,12 +465,7 @@ function computeArtifactDbDrift(
 
     drifts.push(...detectArtifactDbStatusDriftForMilestone(ctx.basePath, milestone.id));
     drifts.push(
-      ...detectDiskSliceIdDivergenceForMilestone(
-        ctx.basePath,
-        milestone.id,
-        filesystemIds,
-        resolvedPathByFsId,
-      ),
+      ...detectDiskSliceIdDivergenceForMilestone(milestone.id, filesystemIds, resolvePath),
     );
   }
 
