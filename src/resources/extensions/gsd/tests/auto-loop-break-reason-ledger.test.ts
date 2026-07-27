@@ -10,10 +10,12 @@ const LOOP_SOURCE = readFileSync(fileURLToPath(new URL("../auto/loop.ts", import
 
 test("loop break branches settle the ledger with the resolved break reason", () => {
   const branches = LOOP_SOURCE.split('unitPhaseResult.action === "break"').slice(1);
-  assert.equal(branches.length, 2, "expected both the legacy and custom-engine break branches");
+  assert.ok(branches.length >= 2, "expected at least the legacy and custom-engine break branches");
 
   for (const branch of branches) {
-    const body = branch.slice(0, branch.search(/\n\s*break;/));
+    const sentinel = branch.search(/\n\s*break;/);
+    assert.notEqual(sentinel, -1, "expected a `break;` sentinel to terminate the break branch body");
+    const body = branch.slice(0, sentinel);
     assert.match(body, /const breakReason = unitPhaseResult\.reason \?\? "unit-break";/);
     assert.match(body, /settleDispatchFailed\([^,]+, breakReason,/);
     assert.match(body, /finishTurn\("stopped", "execution", breakReason\)/);
