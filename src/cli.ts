@@ -253,7 +253,7 @@ function ensureRtkBootstrap(): Promise<void> {
 // actually upgrade out of the broken state. See shouldBypassManagedResourceMismatchGate.
 if (shouldBypassManagedResourceMismatchGate(cliFlags.messages[0])) {
   const { runUpdate } = await import('./update-cmd.js')
-  await runUpdate({ target: cliFlags.messages[1] })
+  await runUpdate({ target: cliFlags.messages[1], extraArgs: cliFlags.messages.slice(2) })
   process.exit(0)
 }
 
