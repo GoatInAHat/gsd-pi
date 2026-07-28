@@ -18,5 +18,5 @@ test("complete-slice prompt forbids the wrong task summary glob", () => {
 });
 
 test("complete-slice prompt guards the task summary find against a missing tasks dir", () => {
-  assert.match(prompt, /find .*tasks -name "\*-SUMMARY\.md" 2>\/dev\/null \|\| true/i);
+  assert.match(prompt, /find\s+.*tasks\s+-name\s+"\*-SUMMARY\.md"\s+2>\s*\/dev\/null\s*\|\|\s*true/i);
 });
