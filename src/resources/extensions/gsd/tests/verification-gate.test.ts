@@ -783,6 +783,18 @@ test("isLikelyCommand: known command word followed by English prose is rejected 
   assert.equal(isLikelyCommand("npm run test:unit"), true);
 });
 
+test("isLikelyCommand: prose markers exclude operand-shaped words", () => {
+  // Bare prepositions and single letters are plausible operands, so they must
+  // not flip a flagless command to prose.
+  assert.equal(isLikelyCommand("git diff on master"), true);
+  assert.equal(isLikelyCommand("git checkout at release"), true);
+  assert.equal(isLikelyCommand("make install into build"), true);
+  assert.equal(isLikelyCommand("cat a b c"), true);
+  assert.equal(isLikelyCommand("go build with tags"), true);
+  // Articles, copulas, and prose verbs still identify descriptions
+  assert.equal(isLikelyCommand("git log shows the commit on master"), false);
+});
+
 test("isLikelyCommand: non-ASCII prose descriptions are rejected", () => {
   assert.equal(isLikelyCommand("所有 命令 输出 一行 JSONL go test ./... 通过"), false);
 });

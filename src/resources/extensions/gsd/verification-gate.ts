@@ -461,14 +461,15 @@ const KNOWN_COMMAND_PREFIXES = new Set([
 
 /**
  * English words that never appear as a shell sub-command or operand but are
- * common in descriptive prose. Deliberately excludes words that double as
- * sub-commands (`build`, `test`, `show`, `run`, ...).
+ * common in descriptive prose. Deliberately excludes:
+ *   - words that double as sub-commands (`build`, `test`, `show`, `run`, ...)
+ *   - bare prepositions and single letters, which are plausible operands —
+ *     `git diff on master` and `cat a b c` must stay commands
  */
 const PROSE_MARKER_WORDS = new Set([
-  "a", "an", "the", "is", "are", "was", "were", "should", "shows", "showing",
+  "an", "the", "is", "are", "was", "were", "should", "shows", "showing",
   "returns", "contains", "confirms", "exists", "piped", "authored",
   "that", "which", "whether", "there", "its", "their",
-  "by", "with", "without", "at", "on", "into", "onto",
 ]);
 
 /**
