@@ -128,6 +128,18 @@ describe('parseCliArgs — short flags and basic options', () => {
     assert.deepEqual(flags.messages, ['headless', '--bare', 'auto'])
   })
 
+  test('--bare is accepted at top level (the RPC child argv from headless/MCP forwarding)', () => {
+    // headless.ts and the MCP/daemon session managers spawn the RPC child as
+    // `node cli.js --mode rpc ... --bare`; that argv hits this parser directly.
+    const flags = parse('--mode', 'rpc', '--thinking', 'medium', '--bare')
+    assert.equal(flags.bare, true)
+    assert.equal(flags.mode, 'rpc')
+  })
+
+  test('bare is undefined when --bare not passed', () => {
+    assert.equal(parse('-p').bare, undefined)
+  })
+
   test('`auto` does not pass through: --model/--thinking are parsed so buildHeadlessAutoArgs can reorder them', () => {
     const flags = parse('auto', '--model', 'test-model', '--thinking', 'medium')
     assert.deepEqual(flags.messages, ['auto'])
