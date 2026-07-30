@@ -871,11 +871,23 @@ function getBundledExtensionKeys(): Set<string> {
 }
 
 /**
+ * The suppression subset of the loader's constructor options that --bare sets.
+ * Derived from the real option type so a key typo (or an upstream rename) fails
+ * typecheck instead of silently degrading --bare to a no-op.
+ */
+type BareResourceLoaderOptions = Partial<
+  Pick<
+    ConstructorParameters<typeof DefaultResourceLoaderType>[0],
+    'noSkills' | 'noPromptTemplates' | 'noThemes' | 'noContextFiles'
+  >
+>
+
+/**
  * Resource-loader options for --bare mode: skip user skills, prompt templates,
  * themes, and the CLAUDE.md/AGENTS.md ancestor walk. Single source of truth so
  * the print-mode and interactive loader construction sites cannot drift.
  */
-export function bareResourceLoaderOptions(bare: boolean | undefined): Record<string, unknown> {
+export function bareResourceLoaderOptions(bare: boolean | undefined): BareResourceLoaderOptions {
   return bare
     ? { noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true }
     : {}
