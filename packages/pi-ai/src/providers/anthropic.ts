@@ -1245,6 +1245,40 @@ function shouldUseFineGrainedToolStreamingBeta(model: Model<"anthropic-messages"
 	return !!context.tools?.length && !getAnthropicCompat(model).supportsEagerToolInputStreaming;
 }
 
+/**
+ * Recursively strip verbose metadata from a JSON Schema to reduce payload size.
+ * (Shared utility — also used in openai-completions.ts)
+ */
+function sanitizeToolSchema(schema: unknown): unknown {
+	if (schema === null || typeof schema !== "object") return schema;
+	if (Array.isArray(schema)) return schema.map(sanitizeToolSchema);
+
+	const cleaned: Record<string, unknown> = { ...schema };
+	delete cleaned.description;
+	delete cleaned.examples;
+	delete cleaned.default;
+
+	if (cleaned.properties && typeof cleaned.properties === "object") {
+		cleaned.properties = Object.fromEntries(
+			Object.entries(cleaned.properties as Record<string, unknown>).map(([k, v]) => [k, sanitizeToolSchema(v)]),
+		);
+	}
+	if (cleaned.items && typeof cleaned.items === "object") {
+		cleaned.items = sanitizeToolSchema(cleaned.items);
+	}
+	if (Array.isArray(cleaned.allOf)) {
+		cleaned.allOf = cleaned.allOf.map(sanitizeToolSchema);
+	}
+	if (Array.isArray(cleaned.anyOf)) {
+		cleaned.anyOf = cleaned.anyOf.map(sanitizeToolSchema);
+	}
+	if (Array.isArray(cleaned.oneOf)) {
+		cleaned.oneOf = cleaned.oneOf.map(sanitizeToolSchema);
+	}
+
+	return cleaned;
+}
+
 function convertTools(
 	tools: Tool[],
 	isOAuthToken: boolean,
@@ -1257,14 +1291,19 @@ function convertTools(
 	const sanitizeInputSchema = requiresMoonshotToolSchemaSanitizationAnthropic(model);
 
 	return tools.map((tool, index) => {
-		const schema = tool.parameters as { properties?: unknown; required?: string[] };
-		const inputSchema = sanitizeInputSchema
-			? sanitizeSchemaForMoonshot(tool.parameters)
-			: {
-					type: "object" as const,
-					properties: schema.properties ?? {},
-					required: schema.required ?? [],
-				};
+		let inputSchema: unknown;
+		if (sanitizeInputSchema) {
+			inputSchema = sanitizeSchemaForMoonshot(tool.parameters);
+		} else {
+			const schema = tool.parameters as { properties?: unknown; required?: string[] };
+			inputSchema = {
+				type: "object" as const,
+				properties: schema.properties ?? {},
+				required: schema.required ?? [],
+			};
+		}
+		// Always strip verbose metadata to reduce payload size
+		inputSchema = sanitizeToolSchema(inputSchema);
 
 		return {
 			name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,

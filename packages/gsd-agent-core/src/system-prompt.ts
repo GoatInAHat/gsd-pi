@@ -4,19 +4,9 @@
 
 import { getDocsPath, getExamplesPath, getReadmePath } from "@gsd/pi-coding-agent/config.js";
 import { toPosixPath } from "@gsd/pi-coding-agent/utils/path-display.js";
-import { formatSkillsForPrompt, type Skill } from "@gsd/pi-coding-agent/core/skills.js";
+import type { Skill } from "@gsd/pi-coding-agent/core/skills.js";
 
-/** Tool descriptions for system prompt */
-const toolDescriptions: Record<string, string> = {
-	read: "Read file contents",
-	bash: "Execute bash commands (ls, grep, find, etc.)",
-	edit: "Make surgical edits to files (find exact text and replace)",
-	write: "Create or overwrite files",
-	grep: "Search file contents for patterns (respects .gitignore)",
-	find: "Find files by glob pattern (respects .gitignore)",
-	ls: "List directory contents",
-	lsp: "Code intelligence via Language Server Protocol (go-to-definition, references, diagnostics, hover, rename, symbols)",
-};
+
 
 export interface BuildSystemPromptOptions {
 	/** Custom system prompt (replaces default). */
@@ -101,12 +91,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 			}
 		}
 
-		const customPromptHasSkillAccess =
-			!selectedTools || selectedTools.includes("read") || selectedTools.includes("Skill");
-		if (customPromptHasSkillAccess && skills.length > 0) {
-			prompt += formatSkillsForPrompt(skills);
-		}
-
 		prompt += dateTimeLine;
 		prompt += `\nCurrent date: ${date}`;
 		prompt += `\nCurrent working directory: ${resolvedCwd}`;
@@ -127,15 +111,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 	const examplesPath = toPosixPath(getExamplesPath());
 
 	const tools = selectedTools || ["read", "bash", "edit", "write"];
-	const toolsList =
-		tools.length > 0
-			? tools
-					.map((name) => {
-						const snippet = toolSnippets?.[name] ?? toolDescriptions[name] ?? name;
-						return `- ${name}: ${snippet}`;
-					})
-					.join("\n")
-			: "(none)";
+	const toolsList = tools.length > 0 ? `- ${tools.join(", ")}` : "(none)";
 
 	// Build guidelines based on which tools are actually available
 	const guidelinesList: string[] = [];
@@ -155,7 +131,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 	const hasFind = tools.includes("find");
 	const hasLs = tools.includes("ls");
 	const hasRead = tools.includes("read");
-	const hasLsp = tools.includes("lsp");
 
 	// File exploration guidelines
 	if (hasBash && !hasGrep && !hasFind && !hasLs) {
@@ -178,17 +153,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 		addGuideline("Use write only for new files or complete rewrites after verifying the target path");
 	}
 
-	if (hasLsp) {
-		addGuideline(
-			`Use lsp as the primary tool for code navigation in typed codebases:
-- Navigation: definition, type_definition, implementation, references, incoming_calls, outgoing_calls
-- Understanding: hover (types + docs), signature (parameter info), symbols (file/workspace search)
-- Refactoring: rename (project-wide), code_actions (quick-fixes, imports, refactors), format (formatter)
-- Verification: diagnostics after edits to catch type errors immediately
-- Never grep for a symbol definition when lsp can resolve it semantically
-- Never shell out to a formatter when lsp format is available`,
-		);
-	}
+
 
 	if (hasEdit || hasWrite) {
 		addGuideline(
@@ -219,13 +184,7 @@ In addition to the tools above, you may have access to other custom tools depend
 Guidelines:
 ${guidelines}
 
-Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):
-- Main documentation: ${readmePath}
-- Additional docs: ${docsPath}
-- Examples: ${examplesPath} (extensions, custom tools, SDK)
-- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md)
-- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing
-- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)`;
+When asked about pi internals (SDK, extensions, themes, skills, TUI), read the docs at ${readmePath}, ${docsPath}, and ${examplesPath}; follow cross-references to related docs.`;
 
 	if (appendSection) {
 		prompt += appendSection;
@@ -238,11 +197,6 @@ Pi documentation (read only when the user asks about pi itself, its SDK, extensi
 		for (const { path: filePath, content } of contextFiles) {
 			prompt += `## ${filePath}\n\n${content}\n\n`;
 		}
-	}
-
-	const hasSkill = tools.includes("Skill");
-	if ((hasRead || hasSkill) && skills.length > 0) {
-		prompt += formatSkillsForPrompt(skills);
 	}
 
 	prompt += dateTimeLine;

@@ -1108,24 +1108,103 @@ export function convertMessages(
 	return params;
 }
 
+/**
+ * Recursively strip verbose metadata from a JSON Schema to reduce payload size.
+ *
+ * The model already receives tool-level descriptions via the `description`
+ * field on the tool definition itself. Parameter-level `description`,
+ * `examples`, and `default` values are redundant and waste ~45-60KB per
+ * request (128 tools × ~400B avg).
+ *
+ * This is a pure data transformation — the JSON Schema remains valid
+ * (description/examples/default are all optional per JSON Schema spec).
+ *
+ * Used in convertTools() before sending tools to any provider API.
+ */
+function sanitizeToolSchema(schema: unknown): unknown {
+	if (schema === null || typeof schema !== "object") return schema;
+	if (Array.isArray(schema)) return schema.map(sanitizeToolSchema);
+
+	const cleaned: Record<string, unknown> = { ...schema };
+
+	// Remove verbose metadata (model already has tool-level description)
+	delete cleaned.description;
+	delete cleaned.examples;
+	delete cleaned.default;
+
+	// Recurse into nested schema objects
+	if (cleaned.properties && typeof cleaned.properties === "object") {
+		cleaned.properties = Object.fromEntries(
+			Object.entries(cleaned.properties as Record<string, unknown>).map(([k, v]) => [k, sanitizeToolSchema(v)]),
+		);
+	}
+	if (cleaned.items && typeof cleaned.items === "object") {
+		cleaned.items = sanitizeToolSchema(cleaned.items);
+	}
+	if (Array.isArray(cleaned.allOf)) {
+		cleaned.allOf = cleaned.allOf.map(sanitizeToolSchema);
+	}
+	if (Array.isArray(cleaned.anyOf)) {
+		cleaned.anyOf = cleaned.anyOf.map(sanitizeToolSchema);
+	}
+	if (Array.isArray(cleaned.oneOf)) {
+		cleaned.oneOf = cleaned.oneOf.map(sanitizeToolSchema);
+	}
+
+	return cleaned;
+}
+
+/**
+ * Truncate a tool description to ~50 characters at a word boundary.
+ * Used for GSD workflow tools whose descriptions are already in the system prompt.
+ * The model can discover full details from the system prompt when needed.
+ */
+function shortenToolDescription(description: string, maxChars = 50): string {
+	if (!description || description.length <= maxChars) return description;
+	// Cut at last word boundary before maxChars
+	const truncated = description.substring(0, maxChars);
+	const lastSpace = truncated.lastIndexOf(" ");
+	if (lastSpace > maxChars * 0.5) {
+		return truncated.substring(0, lastSpace) + "...";
+	}
+	return truncated + "...";
+}
+
+/**
+ * Check if a tool name belongs to the GSD workflow tool family.
+ * These tools are already documented in the system prompt, so their
+ * API descriptions can be safely shortened.
+ */
+function isGSDTool(name: string): boolean {
+	return name.startsWith("gsd_") || name.startsWith("gsd-");
+}
+
 function convertTools(
 	tools: Tool[],
 	compat: ResolvedOpenAICompletionsCompat,
 	model: Model<"openai-completions">,
 ): OpenAI.Chat.Completions.ChatCompletionTool[] {
 	const sanitizeParameters = requiresMoonshotToolSchemaSanitization(model);
-	return tools.map((tool) => ({
-		type: "function",
-		function: {
-			name: tool.name,
-			description: tool.description,
-			parameters: sanitizeParameters
-				? sanitizeSchemaForMoonshot(tool.parameters)
-				: (tool.parameters as any), // TypeBox already generates JSON Schema
-			// Only include strict if provider supports it. Some reject unknown fields.
-			...(compat.supportsStrictMode !== false && { strict: false }),
-		},
-	}));
+	return tools.map((tool) => {
+		let parameters: Record<string, unknown> = tool.parameters as Record<string, unknown>;
+		if (sanitizeParameters) {
+			parameters = sanitizeSchemaForMoonshot(parameters) as Record<string, unknown>;
+		}
+		// Always strip verbose metadata to reduce payload size
+		parameters = sanitizeToolSchema(parameters) as Record<string, unknown>;
+		// Shorten GSD workflow tool descriptions — they're already in the system prompt
+		const description = isGSDTool(tool.name)
+			? shortenToolDescription(tool.description)
+			: tool.description;
+		return {
+			type: "function" as const,
+			function: {
+				name: tool.name,
+				description,
+				parameters,
+			},
+		};
+	});
 }
 
 function parseChunkUsage(

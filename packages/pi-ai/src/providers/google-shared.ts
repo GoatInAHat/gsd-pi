@@ -690,6 +690,40 @@ export function sanitizeSchemaForMoonshot(schema: unknown): Record<string, unkno
  * Schemas are sanitized to remove fields not supported by Cloud Code Assist
  * (patternProperties, const converted to enum, etc.).
  */
+/**
+ * Recursively strip verbose metadata from a JSON Schema to reduce payload size.
+ * (Shared utility — also used in openai-completions.ts and anthropic.ts)
+ */
+function sanitizeToolSchema(schema: unknown): unknown {
+	if (schema === null || typeof schema !== "object") return schema;
+	if (Array.isArray(schema)) return schema.map(sanitizeToolSchema);
+
+	const cleaned: Record<string, unknown> = { ...schema };
+	delete cleaned.description;
+	delete cleaned.examples;
+	delete cleaned.default;
+
+	if (cleaned.properties && typeof cleaned.properties === "object") {
+		cleaned.properties = Object.fromEntries(
+			Object.entries(cleaned.properties as Record<string, unknown>).map(([k, v]) => [k, sanitizeToolSchema(v)]),
+		);
+	}
+	if (cleaned.items && typeof cleaned.items === "object") {
+		cleaned.items = sanitizeToolSchema(cleaned.items);
+	}
+	if (Array.isArray(cleaned.allOf)) {
+		cleaned.allOf = cleaned.allOf.map(sanitizeToolSchema);
+	}
+	if (Array.isArray(cleaned.anyOf)) {
+		cleaned.anyOf = cleaned.anyOf.map(sanitizeToolSchema);
+	}
+	if (Array.isArray(cleaned.oneOf)) {
+		cleaned.oneOf = cleaned.oneOf.map(sanitizeToolSchema);
+	}
+
+	return cleaned;
+}
+
 export function convertTools(
 	tools: Tool[],
 	useParameters = false,
@@ -697,15 +731,21 @@ export function convertTools(
 	if (tools.length === 0) return undefined;
 	return [
 		{
-			functionDeclarations: tools.map((tool) => ({
-				name: tool.name,
-				description: tool.description,
-				...(useParameters
-					? {
-							parameters: toClaudeInputSchemaRoot(tool.parameters as unknown),
-						}
-					: { parametersJsonSchema: sanitizeForOpenApi(tool.parameters as unknown) }),
-			})),
+			functionDeclarations: tools.map((tool) => {
+				let params: unknown;
+				if (useParameters) {
+					params = toClaudeInputSchemaRoot(tool.parameters as unknown);
+				} else {
+					params = sanitizeForOpenApi(tool.parameters as unknown);
+				}
+				// Always strip verbose metadata to reduce payload size
+				params = sanitizeToolSchema(params);
+				return {
+					name: tool.name,
+					description: tool.description,
+					parameters: params,
+				};
+			}),
 		},
 	];
 }
