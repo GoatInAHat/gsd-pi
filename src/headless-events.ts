@@ -19,6 +19,8 @@ import {
   isTerminalNotice,
 } from './resources/extensions/gsd/stop-notice.js'
 import { canonicalToolName } from './resources/extensions/gsd/engine-hook-contract.js'
+import type { HeadlessJsonResult } from './headless-types.js'
+import type { RpcCostUpdateEvent } from '@opengsd/contracts'
 
 // ---------------------------------------------------------------------------
 // Exit Code Constants
@@ -243,6 +245,82 @@ export function classifyHeadlessFinalStatus(args: {
     return args.totalEvents === 0 ? 'error' : 'timeout'
   }
   return 'complete'
+}
+
+// ---------------------------------------------------------------------------
+// Batch JSON Cost / Result Aggregation
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalized reading of an RpcCostUpdateEvent. Per the contract
+ * (packages/contracts/src/rpc.ts), `cumulativeCost` is a plain number in USD
+ * and `tokens` is `{ input, output, cacheRead, cacheWrite }`.
+ */
+export interface HeadlessCostReading {
+  costUsd: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+}
+
+function toFiniteNumber(value: unknown): number {
+  const num = Number(value)
+  return Number.isFinite(num) ? num : 0
+}
+
+export function readCostUpdateEvent(event: unknown): HeadlessCostReading | null {
+  if (typeof event !== 'object' || event === null) return null
+  const frame = event as Partial<RpcCostUpdateEvent>
+  if (frame.type !== 'cost_update') return null
+  return {
+    costUsd: toFiniteNumber(frame.cumulativeCost),
+    inputTokens: toFiniteNumber(frame.tokens?.input),
+    outputTokens: toFiniteNumber(frame.tokens?.output),
+    cacheReadTokens: toFiniteNumber(frame.tokens?.cacheRead),
+    cacheWriteTokens: toFiniteNumber(frame.tokens?.cacheWrite),
+  }
+}
+
+/** Mutable running totals for batch JSON mode. Field names match HeadlessJsonResult['cost']. */
+export type HeadlessCostTotals = HeadlessJsonResult['cost']
+
+export function createHeadlessCostTotals(): HeadlessCostTotals {
+  return { total: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 }
+}
+
+/** Accumulate a cost_update event into running totals (cumulative-max pattern per K004). */
+export function trackHeadlessCostEvent(totals: HeadlessCostTotals, event: unknown): void {
+  const reading = readCostUpdateEvent(event)
+  if (!reading) return
+  totals.total = Math.max(totals.total, reading.costUsd)
+  totals.input_tokens = Math.max(totals.input_tokens, reading.inputTokens)
+  totals.output_tokens = Math.max(totals.output_tokens, reading.outputTokens)
+  totals.cache_read_tokens = Math.max(totals.cache_read_tokens, reading.cacheReadTokens)
+  totals.cache_write_tokens = Math.max(totals.cache_write_tokens, reading.cacheWriteTokens)
+}
+
+/** Build the structured result emitted on stdout in --output-format json batch mode. */
+export function buildHeadlessJsonResult(args: {
+  blocked: boolean
+  exitCode: number
+  totalEvents: number
+  recentEvents: readonly HeadlessTrackedEventLike[]
+  sessionId: string | undefined
+  duration: number
+  cost: HeadlessCostTotals
+  toolCalls: number
+}): HeadlessJsonResult {
+  const finalStatus = classifyHeadlessFinalStatus(args)
+  return {
+    status: finalStatus === 'complete' ? 'success' : finalStatus,
+    exitCode: args.exitCode,
+    sessionId: args.sessionId,
+    duration: args.duration,
+    cost: args.cost,
+    toolCalls: args.toolCalls,
+    events: args.totalEvents,
+  }
 }
 
 /**

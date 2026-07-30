@@ -35,6 +35,11 @@ import {
   shouldArmHeadlessIdleTimeout,
   shouldRestartHeadlessRun,
   classifyHeadlessFinalStatus,
+  createHeadlessCostTotals,
+  trackHeadlessCostEvent,
+  readCostUpdateEvent,
+  buildHeadlessJsonResult,
+  type HeadlessCostReading,
   EXIT_SUCCESS,
   EXIT_ERROR,
   EXIT_BLOCKED,
@@ -42,7 +47,7 @@ import {
   mapStatusToExitCode,
 } from './headless-events.js'
 
-import type { OutputFormat, HeadlessJsonResult } from './headless-types.js'
+import type { OutputFormat } from './headless-types.js'
 import { VALID_OUTPUT_FORMATS } from './headless-types.js'
 
 import {
@@ -482,16 +487,12 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
   const interactiveToolCallIds = new Set<string>()
 
   // JSON batch mode: cost aggregation (cumulative-max pattern per K004)
-  let cumulativeCostUsd = 0
-  let cumulativeInputTokens = 0
-  let cumulativeOutputTokens = 0
-  let cumulativeCacheReadTokens = 0
-  let cumulativeCacheWriteTokens = 0
+  const batchCostTotals = createHeadlessCostTotals()
   let lastSessionId: string | undefined
 
   // Verbose text-mode state
   const toolStartTimes = new Map<string, number>()
-  let lastCostData: { costUsd: number; inputTokens: number; outputTokens: number } | undefined
+  let lastCostData: HeadlessCostReading | undefined
   let thinkingBuffer = ''
   // Streaming state: tracks whether we're inside a text or thinking block
   let inTextBlock = false
@@ -500,24 +501,16 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
   // Emit HeadlessJsonResult to stdout for --output-format json batch mode
   function emitBatchJsonResult(): void {
     if (options.outputFormat !== 'json') return
-    const duration = Date.now() - startTime
-    const finalStatus = classifyHeadlessFinalStatus({ blocked, exitCode, totalEvents, recentEvents })
-    const status: HeadlessJsonResult['status'] = finalStatus === 'complete' ? 'success' : finalStatus
-    const result: HeadlessJsonResult = {
-      status,
+    const result = buildHeadlessJsonResult({
+      blocked,
       exitCode,
+      totalEvents,
+      recentEvents,
       sessionId: lastSessionId,
-      duration,
-      cost: {
-        total: cumulativeCostUsd,
-        input_tokens: cumulativeInputTokens,
-        output_tokens: cumulativeOutputTokens,
-        cache_read_tokens: cumulativeCacheReadTokens,
-        cache_write_tokens: cumulativeCacheWriteTokens,
-      },
+      duration: Date.now() - startTime,
+      cost: batchCostTotals,
       toolCalls: toolCallCount,
-      events: totalEvents,
-    }
+    })
     process.stdout.write(JSON.stringify(result) + '\n')
   }
 
@@ -635,42 +628,18 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
         process.stdout.write(JSON.stringify(eventObj) + '\n')
       }
     } else if (options.outputFormat === 'json') {
-      // Batch mode: silently track cost_update events (cumulative-max per K004)
-      const eventType = String(eventObj.type ?? '')
+      // Batch mode: silently track cost_update events (cumulative-max per K004).
+      // sessionId is captured from the client.init() response, not from events —
+      // the v2 init result arrives as an RPC response and never reaches onEvent.
       if (eventType === 'cost_update') {
-        const data = eventObj as Record<string, unknown>
-        const cumCost = data.cumulativeCost as Record<string, unknown> | undefined
-        if (cumCost) {
-          cumulativeCostUsd = Math.max(cumulativeCostUsd, Number(cumCost.costUsd ?? 0))
-          const tokens = data.tokens as Record<string, number> | undefined
-          if (tokens) {
-            cumulativeInputTokens = Math.max(cumulativeInputTokens, tokens.input ?? 0)
-            cumulativeOutputTokens = Math.max(cumulativeOutputTokens, tokens.output ?? 0)
-            cumulativeCacheReadTokens = Math.max(cumulativeCacheReadTokens, tokens.cacheRead ?? 0)
-            cumulativeCacheWriteTokens = Math.max(cumulativeCacheWriteTokens, tokens.cacheWrite ?? 0)
-          }
-        }
-      }
-      // Track sessionId from init_result
-      if (eventType === 'init_result') {
-        lastSessionId = String((eventObj as Record<string, unknown>).sessionId ?? '')
+        trackHeadlessCostEvent(batchCostTotals, eventObj)
       }
     } else if (!options.json) {
       // Progress output to stderr with verbose state tracking
-      const eventType = String(eventObj.type ?? '')
 
       // Track cost_update events for agent_end summary
       if (eventType === 'cost_update') {
-        const data = eventObj as Record<string, unknown>
-        const cumCost = data.cumulativeCost as Record<string, unknown> | undefined
-        if (cumCost) {
-          const tokens = data.tokens as Record<string, number> | undefined
-          lastCostData = {
-            costUsd: Number(cumCost.costUsd ?? 0),
-            inputTokens: tokens?.input ?? 0,
-            outputTokens: tokens?.output ?? 0,
-          }
-        }
+        lastCostData = readCostUpdateEvent(eventObj) ?? lastCostData
       }
 
       // Stream assistant text and thinking deltas in verbose mode
@@ -928,7 +897,8 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
   // v2 protocol negotiation — attempt init for structured completion events
   let v2Enabled = false
   try {
-    await client.init({ clientId: 'gsd-headless' })
+    const initResult = await client.init({ clientId: 'gsd-headless' })
+    lastSessionId = initResult.sessionId
     v2Enabled = true
   } catch {
     process.stderr.write('[headless] Warning: v2 init failed, falling back to v1 string-matching\n')
@@ -955,6 +925,7 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
       if (timeoutTimer) clearTimeout(timeoutTimer)
       process.exit(1)
     }
+    lastSessionId = matched.id
     process.stderr.write(`[headless] Resuming session ${matched.id}\n`)
   }
 
