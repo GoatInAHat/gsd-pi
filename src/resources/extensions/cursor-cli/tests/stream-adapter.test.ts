@@ -69,6 +69,53 @@ test("parseCursorAgentLine maps text, legacy tool, result, usage, and errors", (
 	assert.deepEqual(parseCursorAgentLine('{"type":"error","message":"boom"}'), { type: "error", message: "boom" });
 });
 
+test("parseCursorAgentLine ignores the echoed prompt and thinking events (not assistant text)", () => {
+	// Real shapes captured from cursor-agent 2026.07.23 stream-json output.
+	const promptEcho =
+		'{"type":"user","message":{"role":"user","content":[{"type":"text","text":"System instructions:\\nYou are an expert coding assistant."}]},"session_id":"s1"}';
+	assert.deepEqual(parseCursorAgentLine(promptEcho), { type: "ignore" });
+
+	assert.deepEqual(
+		parseCursorAgentLine('{"type":"thinking","subtype":"delta","text":"The user requested","session_id":"s1"}'),
+		{ type: "ignore" },
+	);
+	assert.deepEqual(
+		parseCursorAgentLine('{"type":"thinking","subtype":"completed","session_id":"s1"}'),
+		{ type: "ignore" },
+	);
+
+	// Role-tagged non-assistant message events must not leak either, whatever the type label.
+	assert.deepEqual(
+		parseCursorAgentLine('{"type":"message","message":{"role":"user","content":[{"type":"text","text":"echo"}]}}'),
+		{ type: "ignore" },
+	);
+});
+
+test("streamViaCursorAgent does not prepend the prompt echo to assistant text", async () => {
+	const lines = [
+		'{"type":"system","subtype":"init","session_id":"s1","model":"Composer 2.5"}',
+		'{"type":"user","message":{"role":"user","content":[{"type":"text","text":"System instructions:\\nYou are an expert coding assistant.\\n\\nUser:\\nSay hi."}]},"session_id":"s1"}',
+		'{"type":"thinking","subtype":"delta","text":"The user requested a reply.","session_id":"s1"}',
+		'{"type":"thinking","subtype":"completed","session_id":"s1"}',
+		'{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]},"session_id":"s1"}',
+		'{"type":"result","subtype":"success","is_error":false,"result":"hi","session_id":"s1","usage":{"inputTokens":3,"outputTokens":4}}',
+	];
+	const stream = streamViaCursorAgent(model, context, {
+		_cursorAgentRunnerForTest: async () => ({ stdout: `${lines.join("\n")}\n`, stderr: "", code: 0, signal: null }),
+	});
+
+	const events = [];
+	for await (const event of stream) events.push(event);
+
+	const deltas = events.filter((event) => event.type === "text_delta").map((event) => event.delta);
+	assert.deepEqual(deltas, ["hi"], "only assistant text may stream as text_delta");
+
+	const done = events.find((event) => event.type === "done");
+	assert.ok(done && done.type === "done");
+	assert.equal(done.message.content[0].type, "text");
+	assert.equal(done.message.content[0].text, "hi");
+});
+
 test("parseCursorAgentLine ignores Cursor-owned nested tool events so GSD does not redispatch them", () => {
 	const started = parseCursorAgentLine(
 		'{"type":"tool_call","subtype":"started","call_id":"tool_1","tool_call":{"readToolCall":{"args":{"path":"a.ts"}}}}',
