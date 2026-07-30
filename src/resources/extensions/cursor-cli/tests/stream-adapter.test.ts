@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { Context, Model } from "@gsd/pi-ai";
+import type { Context, Message, Model } from "@gsd/pi-ai";
+import { agentLoop } from "@gsd/pi-agent-core";
+import type { AgentEvent, AgentMessage } from "@gsd/pi-agent-core";
 import {
 	buildCursorAgentRunPlan,
 	buildCursorPrompt,
@@ -114,6 +116,65 @@ test("streamViaCursorAgent does not prepend the prompt echo to assistant text", 
 	assert.ok(done && done.type === "done");
 	assert.equal(done.message.content[0].type, "text");
 	assert.equal(done.message.content[0].text, "hi");
+});
+
+test("RPC v2 message_update/message_end expose only assistant text from cursor-agent", async () => {
+	// Drives the real agent loop, which is the producer of the RPC v2 protocol events the
+	// bug report observed: streamed `message_update.assistantMessageEvent.text_delta` and the
+	// final `message_end.message.content`.
+	const lines = [
+		'{"type":"system","subtype":"init","session_id":"s1","model":"Composer 2.5"}',
+		'{"type":"user","message":{"role":"user","content":[{"type":"text","text":"System instructions:\\nBe concise.\\n\\nUser:\\nSay hi."}]},"session_id":"s1"}',
+		'{"type":"thinking","subtype":"delta","text":"The user requested a reply.","session_id":"s1"}',
+		'{"type":"thinking","subtype":"completed","session_id":"s1"}',
+		'{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]},"session_id":"s1"}',
+		'{"type":"result","subtype":"success","is_error":false,"result":"hi","session_id":"s1","usage":{"input_tokens":3,"output_tokens":4}}',
+	];
+	const prompt: AgentMessage = { role: "user", content: "Say hi.", timestamp: Date.now() };
+	const stream = agentLoop(
+		[prompt],
+		{ systemPrompt: "Be concise.", messages: [] },
+		{ model, convertToLlm: (messages) => messages as Message[] },
+		undefined,
+		(_model, llmContext) =>
+			streamViaCursorAgent(model, llmContext, {
+				_cursorAgentRunnerForTest: async () => ({
+					stdout: `${lines.join("\n")}\n`,
+					stderr: "",
+					code: 0,
+					signal: null,
+				}),
+			}),
+	);
+
+	const events: AgentEvent[] = [];
+	for await (const event of stream) events.push(event);
+
+	const updates = events.filter(
+		(event): event is Extract<AgentEvent, { type: "message_update" }> => event.type === "message_update",
+	);
+	const deltas = updates
+		.map((event) => event.assistantMessageEvent)
+		.filter((ame) => ame.type === "text_delta")
+		.map((ame) => (ame as { delta: string }).delta);
+	assert.deepEqual(deltas, ["hi"], "message_update text_delta must carry only assistant text");
+	assert.ok(
+		!updates.some((event) => event.assistantMessageEvent.type.startsWith("thinking")),
+		"cursor-agent thinking events must not surface as RPC v2 reasoning deltas",
+	);
+
+	const assistantEnd = events
+		.filter((event): event is Extract<AgentEvent, { type: "message_end" }> => event.type === "message_end")
+		.find((event) => event.message.role === "assistant");
+	assert.ok(assistantEnd, "expected a final assistant message_end");
+	const finalMessage = assistantEnd.message;
+	const finalText = finalMessage.role !== "assistant"
+		? ""
+		: finalMessage.content
+			.filter((block) => block.type === "text")
+			.map((block) => (block as { text: string }).text)
+			.join("");
+	assert.equal(finalText, "hi", "message_end content must carry only assistant text");
 });
 
 test("parseCursorAgentLine ignores Cursor-owned nested tool events so GSD does not redispatch them", () => {

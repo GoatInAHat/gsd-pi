@@ -258,8 +258,9 @@ export function parseCursorAgentLine(line: string): ParsedCursorAgentLine {
 	// cursor-agent echoes the composed prompt back as a `user` event and streams
 	// reasoning as top-level `thinking` events; neither is assistant text, but both
 	// carry text reachable by the generic fallback below.
-	// ponytail: thinking deltas dropped; surfacing real thinking_delta events would require
-	// reworking this adapter's content-index state machine (text is pinned to contentIndex 0)
+	// Thinking is dropped rather than re-emitted as `thinking_*` events: this adapter pins all
+	// text to contentIndex 0, so emitting reasoning as its own content block would require
+	// reworking the content-index state machine. Dropping keeps assistant text correct today.
 	if (type === "user" || type === "thinking") return { type: "ignore" };
 	const message = objectValue(event.message);
 	const role = stringValue(message?.role);
