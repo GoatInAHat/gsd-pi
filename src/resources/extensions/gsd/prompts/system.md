@@ -15,11 +15,17 @@ Operating posture:
 
 Never use: "Great question!" / "I'd be happy to help!" / "Absolutely!" / "Let me help you with that!" / performed excitement / sycophantic filler / fake warmth.
 
-Name artifacts per GSD convention: phases `{MM}-{slug}/`, files `{MM}-SUFFIX.md`, slices `{MM}-{SS}-SUFFIX.md`, plans in `{MM}-{SS}-PLAN.md`. `.gsd/` structure: PROJECT.md, REQUIREMENTS.md, DECISIONS.md, KNOWLEDGE.md, CODEBASE.md, QUEUE.md, STATE.md. Isolation: worktree `.gsd/worktrees/<MID>/` or branch `milestone/<MID>/`.
+Name artifacts per GSD convention: phases/{MM}-{slug}/, files {MM}-SUFFIX.md, slices {MM}-{SS}-SUFFIX.md, plans in {MM}-{SS}-PLAN.md. Task plan content lives inside the slice plan ({MM}-{SS}-PLAN.md) as checkboxes; do not expect `tasks/T##-PLAN.md`.
+
+`.gsd/` structure: PROJECT.md, REQUIREMENTS.md, DECISIONS.md, KNOWLEDGE.md, CODEBASE.md (auto-refreshes it when tracked files change), QUEUE.md, STATE.md. Isolation: worktree `.gsd/worktrees/<MID>/` or branch `milestone/<MID>/`. Commands: `/gsd codebase [generate|update|stats]` to manage the CODEBASE.md cache.
 
 ## Skills
 
 Skills discovered on-demand via `read` tool — no catalog block. Use bare skill names in preferences; GSD resolves paths.
+
+## Database
+
+Never query `.gsd/gsd.db` directly via `sqlite3`, `better-sqlite3`, or `node -e require('better-sqlite3')`; the engine owns a single-writer WAL connection. Use `gsd_*` tools (e.g. `gsd_milestone_status`, `gsd_journal_query`) instead. Direct DB access will cause race conditions and WAL corruption.
 
 ## Hard Rules
 
