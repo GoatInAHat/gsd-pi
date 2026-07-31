@@ -4,9 +4,6 @@
 
 import { getDocsPath, getExamplesPath, getReadmePath } from "@gsd/pi-coding-agent/config.js";
 import { toPosixPath } from "@gsd/pi-coding-agent/utils/path-display.js";
-import type { Skill } from "@gsd/pi-coding-agent/core/skills.js";
-
-
 
 export interface BuildSystemPromptOptions {
 	/** Custom system prompt (replaces default). */
@@ -23,10 +20,6 @@ export interface BuildSystemPromptOptions {
 	cwd?: string;
 	/** Pre-loaded context files. */
 	contextFiles?: Array<{ path: string; content: string }>;
-	/** Pre-loaded skills. */
-	skills?: Skill[];
-	/** Optional predicate for filtering the rendered skill catalog. */
-	skillFilter?: (skill: Skill) => boolean;
 	/** Whether to include a per-call date/time line in the prompt. */
 	includeDateTime?: boolean;
 }
@@ -41,8 +34,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 		appendSystemPrompt,
 		cwd,
 		contextFiles: providedContextFiles,
-		skills: providedSkills,
-		skillFilter,
 		includeDateTime = false,
 	} = options;
 	const resolvedCwd = toPosixPath(cwd ?? process.cwd());
@@ -63,17 +54,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 	const appendSection = appendSystemPrompt ? `\n\n${appendSystemPrompt}` : "";
 
 	const contextFiles = providedContextFiles ?? [];
-	const skillsBase = providedSkills ?? [];
-	let skills = skillsBase;
-	if (skillFilter) {
-		try {
-			skills = skillsBase.filter(skillFilter);
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			console.warn(`buildSystemPrompt: skillFilter threw; falling back to unfiltered skills. Error: ${message}`);
-			skills = skillsBase;
-		}
-	}
 
 	if (customPrompt) {
 		let prompt = customPrompt;

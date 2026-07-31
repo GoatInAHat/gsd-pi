@@ -33,6 +33,7 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
+import { sanitizeToolSchema } from "../utils/sanitize-tool-schema.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
@@ -1121,39 +1122,6 @@ export function convertMessages(
  *
  * Used in convertTools() before sending tools to any provider API.
  */
-function sanitizeToolSchema(schema: unknown): unknown {
-	if (schema === null || typeof schema !== "object") return schema;
-	if (Array.isArray(schema)) return schema.map(sanitizeToolSchema);
-
-	const cleaned: Record<string, unknown> = { ...schema };
-
-	// Remove verbose metadata (model already has tool-level description)
-	delete cleaned.description;
-	delete cleaned.examples;
-	delete cleaned.default;
-
-	// Recurse into nested schema objects
-	if (cleaned.properties && typeof cleaned.properties === "object") {
-		cleaned.properties = Object.fromEntries(
-			Object.entries(cleaned.properties as Record<string, unknown>).map(([k, v]) => [k, sanitizeToolSchema(v)]),
-		);
-	}
-	if (cleaned.items && typeof cleaned.items === "object") {
-		cleaned.items = sanitizeToolSchema(cleaned.items);
-	}
-	if (Array.isArray(cleaned.allOf)) {
-		cleaned.allOf = cleaned.allOf.map(sanitizeToolSchema);
-	}
-	if (Array.isArray(cleaned.anyOf)) {
-		cleaned.anyOf = cleaned.anyOf.map(sanitizeToolSchema);
-	}
-	if (Array.isArray(cleaned.oneOf)) {
-		cleaned.oneOf = cleaned.oneOf.map(sanitizeToolSchema);
-	}
-
-	return cleaned;
-}
-
 /**
  * Truncate a tool description to ~50 characters at a word boundary.
  * Used for GSD workflow tools whose descriptions are already in the system prompt.
@@ -1202,6 +1170,8 @@ function convertTools(
 				name: tool.name,
 				description,
 				parameters,
+				// Only include strict if provider supports it. Some reject unknown fields.
+				...(compat.supportsStrictMode !== false && { strict: false }),
 			},
 		};
 	});
