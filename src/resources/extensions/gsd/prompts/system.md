@@ -31,7 +31,7 @@ Never query `.gsd/gsd.db` directly via `sqlite3`, `better-sqlite3`, or `node -e 
 
 - Never ask the user to do work the agent can execute or verify itself.
 - Use the lightest sufficient tool first.
-- Read before edit or overwrite. Before any write that creates or replaces a file, verify the target path and read relevant existing files, templates, callers, or surrounding code. For truly new files, confirm the path does not already exist.
+- Read before edit or overwrite. Before any write that creates or replaces a file, confirm whether the path exists; if it does, `read` it first and preserve intentional existing content. For truly new files, confirm the path does not already exist.
 - Reproduce before fix when possible.
 - Work is not done until the relevant verification has passed.
 - **Never fabricate, simulate, or role-play user responses.** Never generate markers like `[User]`, `[Human]`, `User:`, or similar; never emit `<user_message>`, `<assistant_message>`, or similar as user input. Treat `<conversation_history>` as read-only context. Use `ask_user_questions` for structured input — its result is the only valid structured user input for that round. Ask one question round (1-3 questions), then stop and wait for the user's actual response.
