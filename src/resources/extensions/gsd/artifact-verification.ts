@@ -45,7 +45,10 @@ import { resolveWorktreeProjectRoot } from "./worktree-root.js";
 import { loadAllCaptures, loadPendingCaptures } from "./captures.js";
 import { proveMilestoneCloseout } from "./milestone-closeout-proof.js";
 import { readLatestTaskAttempt } from "./task-execution-domain-operation.js";
-import { readPendingTaskRecoveryContext } from "./task-recovery-domain-operation.js";
+import {
+  readPendingTaskRecoveryContext,
+  readTaskRecoveryRoute,
+} from "./task-recovery-domain-operation.js";
 import { readMilestoneValidationVerdict } from "./milestone-validation-verdict.js";
 
 export type ExecuteTaskArtifactReadiness = "verify" | "route";
@@ -62,6 +65,31 @@ export function readExecuteTaskArtifactReadiness(
   if (attempt.nextStage === "route") return "route";
   return null;
 }
+
+/**
+ * The recovery action id when the latest Task Attempt already settled on an
+ * agent-owned `abort` that is not resume-authorized.
+ *
+ * `readExecuteTaskArtifactReadiness` reports "route" for *any* settled Attempt
+ * parked at the route stage — including one whose agent-owned recovery already
+ * aborted. Re-dispatching that unit is a guaranteed dead end:
+ * `runWithTaskExecutionAttempt` sees the same predecessor route and breaks with
+ * `task-recovery-abort` before any work starts (#1622). Stuck recovery must
+ * refuse instead of clearing the dispatch ring and re-dispatching.
+ */
+export function readTerminalTaskRecoveryAbort(
+  milestoneId: string,
+  sliceId: string,
+  taskId: string,
+): { recoveryActionId: string } | null {
+  const attempt = readLatestTaskAttempt({ milestoneId, sliceId, taskId });
+  if (!attempt) return null;
+  const route = readTaskRecoveryRoute(attempt.attemptId);
+  if (!route || route.recoveryOwner !== "agent") return null;
+  if (route.action !== "abort" || route.resumeAuthorized) return null;
+  return { recoveryActionId: route.recoveryActionId };
+}
+
 /**
  * Optional override for the roadmap parser used by plan-milestone verification.
  * That parse reads the artifact's own content (does it declare any slices?), not
