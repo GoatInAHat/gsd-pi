@@ -350,7 +350,7 @@ export const UNIT_REGISTRY = {
     },
   },
   "replan-task": {
-    kind: "variant",
+    kind: "primary",
     scopeClass: "standard",
     phaseChain: ["planning"],
     promptTemplate: "replan-task",
