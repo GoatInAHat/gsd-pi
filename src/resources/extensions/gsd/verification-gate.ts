@@ -548,6 +548,9 @@ export function isLikelyCommand(cmd: string): boolean {
   const effectiveTokens = firstToken === "!" ? tokens.slice(1) : tokens;
   if (firstToken === "!" && effectiveTokens.length === 0) return false;
 
+  // GSD motor tools are agent tool names, not shell executables.
+  if (effectiveFirstToken.startsWith("gsd_")) return false;
+
   // Known command prefix → command, unless the rest reads as English prose
   if (KNOWN_COMMAND_PREFIXES.has(effectiveFirstToken)) {
     return !readsAsProseAfterCommandWord(effectiveTokens);

@@ -255,6 +255,27 @@ describe("verification-gate: discovery", () => {
     assert.deepStrictEqual(result.commands, []);
   });
 
+  test("GSD tool taskPlanVerify is non-runnable and does not fail the gate (issue #1628)", () => {
+    for (const toolCall of [
+      "gsd_exec_search limit 1 query D023",
+      "gsd_milestone_status M002",
+      "gsd_decision_get D023",
+    ]) {
+      assert.deepStrictEqual(validateVerificationCommand(toolCall), {
+        ok: false,
+        reason: "does not look like a runnable command",
+      });
+    }
+
+    const result = runVerificationGate({
+      taskPlanVerify: "gsd_exec_search limit 1 query D023",
+      cwd: tmp,
+    });
+    assert.equal(result.passed, true);
+    assert.equal(result.discoverySource, "task-plan-prose");
+    assert.deepStrictEqual(result.checks, []);
+  });
+
   test("prose with shell metachars and a leading command word → task-plan-prose (issue #1567)", () => {
     const result = discoverCommands({
       taskPlanVerify:
