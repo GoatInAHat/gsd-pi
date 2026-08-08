@@ -23,15 +23,33 @@ gsd --web --host 0.0.0.0 --port 8080 --allowed-origins "https://example.com"
 | `--allowed-origins` | (none) | Comma-separated CORS origins |
 | `--no-auth` | disabled | Disable the built-in bearer token gate |
 
-`--no-auth` leaves the web interface unprotected unless another layer controls access. By default, GSD only allows unauthenticated web mode on loopback hosts such as `127.0.0.1`, `localhost`, `::1`, or another `127.x.x.x` address. If you combine `--no-auth` or `GSD_WEB_NO_AUTH=1` with a non-loopback bind such as `--host 0.0.0.0`, startup is refused.
-
-To deliberately run unauthenticated web mode on a LAN-facing host, set `GSD_WEB_ALLOW_UNAUTHENTICATED_LAN=1` in the same environment:
+`--no-auth` explicitly allows unauthenticated web mode on any bind address, including a non-loopback host such as `--host 0.0.0.0`:
 
 ```bash
-GSD_WEB_ALLOW_UNAUTHENTICATED_LAN=1 gsd --web --host 0.0.0.0 --no-auth
+gsd --web --host 0.0.0.0 --no-auth
 ```
 
-This exposes terminal and file APIs to any client that can reach the server unless trusted external access control is already in place. Use the override only behind authentication you control, such as a reverse proxy, VPN, or private network boundary. Headless launches can set `GSD_WEB_NO_AUTH=1`.
+For environment-only launches, `GSD_WEB_NO_AUTH=1` is limited to loopback hosts by default. Set `GSD_WEB_ALLOW_UNAUTHENTICATED_LAN=1` as well to use a non-loopback host. The syntax depends on your shell:
+
+macOS/Linux:
+
+```bash
+GSD_WEB_NO_AUTH=1 GSD_WEB_ALLOW_UNAUTHENTICATED_LAN=1 gsd --web --host 0.0.0.0
+```
+
+PowerShell:
+
+```powershell
+$env:GSD_WEB_NO_AUTH='1'; $env:GSD_WEB_ALLOW_UNAUTHENTICATED_LAN='1'; gsd --web --host 0.0.0.0
+```
+
+Command Prompt:
+
+```batch
+set "GSD_WEB_NO_AUTH=1" && set "GSD_WEB_ALLOW_UNAUTHENTICATED_LAN=1" && gsd --web --host 0.0.0.0
+```
+
+Unauthenticated LAN mode exposes terminal and file APIs to any client that can reach the server unless trusted external access control is already in place. Use it only behind authentication you control, such as a reverse proxy, VPN, or private network boundary.
 
 ## Features
 

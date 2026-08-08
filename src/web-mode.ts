@@ -642,8 +642,9 @@ export async function launchWebMode(
   stderr.write(`[gsd] Starting web mode…\n`)
 
   const baseEnv = deps.env ?? process.env
-  const noAuth = options.noAuth ?? isWebNoAuthEnabled(baseEnv)
-  if (noAuth && !isLoopbackHost(host) && baseEnv.GSD_WEB_ALLOW_UNAUTHENTICATED_LAN !== '1') {
+  const noAuthFromEnvironment = options.noAuth === undefined && isWebNoAuthEnabled(baseEnv)
+  const noAuth = options.noAuth ?? noAuthFromEnvironment
+  if (noAuthFromEnvironment && !isLoopbackHost(host) && baseEnv.GSD_WEB_ALLOW_UNAUTHENTICATED_LAN !== '1') {
     const failure: WebModeLaunchFailure = {
       mode: 'web',
       ok: false,

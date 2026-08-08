@@ -158,9 +158,11 @@ function standaloneStub(prefix: string): string {
   return tmp
 }
 
-test('launchWebMode refuses --no-auth on non-loopback host without override', async (t) => {
+test('launchWebMode allows explicit --no-auth on non-loopback host without override', async (t) => {
   const tmp = standaloneStub('gsd-web-interlock-')
   t.after(() => { rmSync(tmp, { recursive: true, force: true }) });
+
+  let spawnEnv: Record<string, string> | undefined
 
   const status = await webMode.launchWebMode(
     {
@@ -175,6 +177,37 @@ test('launchWebMode refuses --no-auth on non-loopback host without override', as
       initResources: () => {},
       resolvePort: async () => 45000,
       env: {},
+      spawn: (_command, _args, options) => {
+        spawnEnv = (options as { env: Record<string, string> }).env
+        return { once: () => undefined, unref: () => {} } as any
+      },
+      waitForBootReady: async () => undefined,
+      openBrowser: () => {},
+      stderr: { write: () => true },
+    },
+  )
+
+  assert.equal(status.ok, true)
+  assert.equal(spawnEnv?.GSD_WEB_NO_AUTH, '1')
+  assert.equal(spawnEnv?.GSD_WEB_AUTH_TOKEN, undefined)
+})
+
+test('launchWebMode refuses environment-driven no-auth on non-loopback host without override', async (t) => {
+  const tmp = standaloneStub('gsd-web-interlock-env-')
+  t.after(() => { rmSync(tmp, { recursive: true, force: true }) });
+
+  const status = await webMode.launchWebMode(
+    {
+      cwd: '/tmp/project',
+      projectSessionsDir: '/tmp/.gsd/sessions',
+      agentDir: '/tmp/.gsd/agent',
+      packageRoot: tmp,
+      host: '0.0.0.0',
+    },
+    {
+      initResources: () => {},
+      resolvePort: async () => 45000,
+      env: { GSD_WEB_NO_AUTH: '1' },
       spawn: () => { throw new Error('spawn should not be reached') },
       waitForBootReady: async () => undefined,
       openBrowser: () => {},
@@ -187,7 +220,7 @@ test('launchWebMode refuses --no-auth on non-loopback host without override', as
   assert.match(status.failureReason, /refusing to disable auth/)
 })
 
-test('launchWebMode allows --no-auth on non-loopback host with explicit override', async (t) => {
+test('launchWebMode allows environment-driven no-auth on non-loopback host with explicit override', async (t) => {
   const tmp = standaloneStub('gsd-web-interlock-override-')
   t.after(() => { rmSync(tmp, { recursive: true, force: true }) });
 
@@ -198,12 +231,11 @@ test('launchWebMode allows --no-auth on non-loopback host with explicit override
       agentDir: '/tmp/.gsd/agent',
       packageRoot: tmp,
       host: '0.0.0.0',
-      noAuth: true,
     },
     {
       initResources: () => {},
       resolvePort: async () => 45000,
-      env: { GSD_WEB_ALLOW_UNAUTHENTICATED_LAN: '1' },
+      env: { GSD_WEB_NO_AUTH: '1', GSD_WEB_ALLOW_UNAUTHENTICATED_LAN: '1' },
       spawn: (_command, _args, options) => {
         void (options as { env: Record<string, string> }).env
         return { pid: 99999, once: () => undefined, unref: () => {} } as any
@@ -292,12 +324,11 @@ test('launchWebMode fires interlock for a 127.-prefixed hostname that is not an 
       agentDir: '/tmp/.gsd/agent',
       packageRoot: tmp,
       host: '127.example.com',
-      noAuth: true,
     },
     {
       initResources: () => {},
       resolvePort: async () => { throw new Error('resolvePort should not be reached') },
-      env: {},
+      env: { GSD_WEB_NO_AUTH: '1' },
       spawn: () => { throw new Error('spawn should not be reached') },
       waitForBootReady: async () => undefined,
       openBrowser: () => {},
@@ -360,13 +391,12 @@ test('launchWebMode refusal does not clean up an existing instance (no side effe
       agentDir: '/tmp/.gsd/agent',
       packageRoot: tmp,
       host: '0.0.0.0',
-      noAuth: true,
     },
     {
       initResources: () => {},
       registryPath,
       resolvePort: async () => { throw new Error('resolvePort should not be reached') },
-      env: {},
+      env: { GSD_WEB_NO_AUTH: '1' },
       spawn: () => { throw new Error('spawn should not be reached') },
       waitForBootReady: async () => undefined,
       openBrowser: () => {},
