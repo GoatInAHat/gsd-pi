@@ -8,6 +8,27 @@ This changelog starts from the `open-gsd/gsd-pi` ownership baseline. Earlier pro
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-08-08
+
+### Added
+- **gsd**: cut project state over to DB authority (#1627)
+
+### Fixed
+- **issue**: fix: forensics redactForGitHub misses OS username, workspace repo IDs, and doctor issue paths (#1633)
+- **migrate**: slice completion guard + decision field extraction (fixes #1606, #1607) (#1611)
+- **model-router**: add claude-sonnet-5 catalog entry; classify recon subagents as light (#1609)
+- **gsd**: make auto mode complete a milestone end to end (#1605)
+- **issue**: bug: dispatch-guard.js blocks research-slice/parallel-research sentinel — missing DB exemption (#1617)
+- **issue**: roadmap-divergence reconciliation never converges when a slice is skipped (detector includes skipped slices, renderer omits them) (#1620)
+- **issue**: Auto-mode silent re-dispatch loop: execute-task refreshRecoveryDbForArtifact is a read-only no-op, projection-drift stuck-recovery never advances state (#1624)
+- **issue**: [Bug]: [drift-check] /gsd auto enters a two-state drift loop: disk-slice-id-divergence fix triggers roadmap-divergence (#1625)
+- **issue**: bug: gsd_milestone_status does not return persisted dependsOn / milestone dependencies (#1602)
+- **issue**: bug: `gsd extensions` throws ESYNC — lockSync called with unsupported `retries` option (v1.12.0) (#1599)
+- **issue**: task-recovery-abort loop after verify timeout: gsd_task_recovery_resume requires a recoveryActionId that is never surfaced anywhere (#1597)
+- **issue**: v1.12.0: passing gsd_task_complete verificationEvidence is not considered before blocking project-wide verification_commands (#1596)
+- **issue**: [Bug]: SOURCE_PATHSPEC hardcodes literal ".gsd/**", never excludes tracked GSD bookkeeping files when .gsd is a symlink (always true) — causes stuck-loop on first execute-task verdict replay (#1595)
+- **issue**: [Bug]: prompt-golden-fixtures Phase 2 reduction gate fails on macOS — prompt size is fixture-path-length sensitive (#1594)
+
 ## [1.12.0] - 2026-08-03
 
 ### Added

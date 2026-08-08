@@ -28,16 +28,16 @@ See [CHANGELOG.md](./CHANGELOG.md) for release-by-release fixes and [Legacy Rele
 ## Latest Release Highlights
 
 <!-- release-highlights:start -->
-Latest release: **v1.12.0**
+Latest release: **v1.13.0**
 
-- **Added:** Add gsd update --models to refresh the model catalog without a full upgrade.
-- **web:** Per-surface nav registry with host-supplied entries.
-- **gsd:** Add forward import repair.
-- **gsd:** Add crash-safe live import restore.
-- **gsd:** Add pure restore assessment.
-- **gsd:** Add typed authority cutover.
-- **gsd:** Add authority recovery receipt schema.
-- **gsd:** Route explicit recover through import application.
+- **gsd:** Cut project state over to DB authority (#1627).
+- **issue:** Fix: forensics redactForGitHub misses OS username, workspace repo IDs, and doctor issue paths (#1633).
+- **migrate:** Slice completion guard + decision field extraction (fixes #1606, #1607) (#1611).
+- **model-router:** Add claude-sonnet-5 catalog entry; classify recon subagents as light (#1609).
+- **gsd:** Make auto mode complete a milestone end to end (#1605).
+- **issue:** Bug: dispatch-guard.js blocks research-slice/parallel-research sentinel — missing DB exemption (#1617).
+- **issue:** Roadmap-divergence reconciliation never converges when a slice is skipped (detector includes skipped slices, renderer omits them) (#1620).
+- **issue:** Auto-mode silent re-dispatch loop: execute-task refreshRecoveryDbForArtifact is a read-only no-op, projection-drift stuck-recovery never advances state (#1624).
 
 <!-- release-highlights:end -->
 
