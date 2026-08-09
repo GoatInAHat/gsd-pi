@@ -177,7 +177,7 @@ test("direct /gsd auto stale paused-session metadata is treated as stale when no
   }
 });
 
-test("direct /gsd auto discards a paused milestone superseded by the active milestone", async (t) => {
+test("direct /gsd auto never restores a paused milestone superseded by the active milestone", async (t) => {
   const base = makeTmpBase();
   const priorProjectId = process.env.GSD_PROJECT_ID;
   process.env.GSD_PROJECT_ID = "invalid project id";
@@ -236,9 +236,18 @@ test("direct /gsd auto discards a paused milestone superseded by the active mile
   await startAuto(ctx, pi, base, false, { interrupted });
 
   assert.equal(getRuntimeKv("global", "", PAUSED_SESSION_KV_KEY), null);
-  assert.equal(autoSession.currentMilestoneId, null, "superseded milestone must not be pinned");
+  // #1644 required that the stale pin never be restored; #1643 goes one step
+  // further and adopts the project's current active milestone instead of
+  // starting from no milestone at all.
+  assert.notEqual(
+    autoSession.currentMilestoneId,
+    pausedMilestoneId,
+    "superseded milestone must not be pinned",
+  );
+  assert.equal(autoSession.currentMilestoneId, activeMilestoneId);
   assert.ok(notifications.some((message) =>
-    message.includes(`Paused milestone ${pausedMilestoneId} was superseded by ${activeMilestoneId}`)
+    message.includes(`Paused milestone ${pausedMilestoneId} was superseded`)
+    && message.includes(activeMilestoneId)
   ));
   assert.ok(notifications.some((message) => message.includes("GSD_PROJECT_ID must contain only")),
     "clearing the stale pause should continue through fresh bootstrap");

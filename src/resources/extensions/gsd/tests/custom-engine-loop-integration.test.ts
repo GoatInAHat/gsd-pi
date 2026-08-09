@@ -8,7 +8,7 @@
 
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -19,6 +19,8 @@ import { WorktreeStateProjection } from "../worktree-state-projection.js";
 import type { SessionLockStatus } from "../session-lock.js";
 import { writeGraph, readGraph, type WorkflowGraph, type GraphStep } from "../graph.ts";
 import { SourceObservationStore } from "../source-observations.js";
+import { closeDatabase, openDatabase } from "../gsd-db.js";
+import { recordNonAdvancingOutcome } from "../auto-liveness-backstop.js";
 import { stringify } from "yaml";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
@@ -114,6 +116,7 @@ function makeLoopSession(overrides?: Record<string, unknown>) {
     originalBasePath: "",
     currentMilestoneId: null,
     currentUnit: null,
+    unitExecutionInFlight: false,
     currentUnitRouting: null,
     sourceObservations: new SourceObservationStore(),
     completedUnits: [],
@@ -163,6 +166,11 @@ function makeMockDeps(overrides?: Partial<LoopDeps>): LoopDeps & { callLog: stri
   const callLog: string[] = [];
 
   const baseDeps: LoopDeps = {
+    // These loop-integration cases run against a bare temp run dir with no
+    // workflow DB, so the ADR-047 backstop would fail closed on its first
+    // non-advancing turn and stop the loop before the behaviour under test.
+    // Backstop adjudication has its own coverage in auto-loop.test.ts.
+    adjudicateNonAdvancingOutcome: () => null,
     lockBase: () => "/tmp/test-lock",
     buildSnapshotOpts: () => ({}),
     stopAuto: async (_ctx, _pi, reason) => {
@@ -272,6 +280,51 @@ function makeMockDeps(overrides?: Partial<LoopDeps>): LoopDeps & { callLog: stri
 // ─── Tests ───────────────────────────────────────────────────────────────
 
 describe("Custom engine loop integration", () => {
+  it("threads custom-engine runGuards ids and budget inputs through adjudication", async () => {
+    _resetPendingResolve();
+    const runDir = makeTmpDir();
+    const graph = makeGraph([makeStep({ id: "guarded-step" })], "guarded-workflow");
+    writeGraph(runDir, graph);
+    writeDefinition(runDir, graph.steps, "guarded-workflow");
+
+    const ctx = makeMockCtx();
+    const pi = makeMockPi();
+    const s = makeLoopSession({
+      activeEngineId: "custom",
+      activeRunDir: runDir,
+      basePath: runDir,
+    });
+    let adjudicated: { guardId: string; inputPayload: string } | undefined;
+    const deps = makeMockDeps({
+      loadEffectiveGSDPreferences: () => ({
+        preferences: { budget_ceiling: 5, budget_enforcement: "pause" },
+      } as any),
+      getLedger: () => ({ units: [{}] } as any),
+      getProjectTotals: () => ({ cost: 10 } as any),
+      getNewBudgetAlertLevel: () => 100,
+      getBudgetAlertLevel: () => 100,
+      getBudgetEnforcementAction: () => "pause",
+      adjudicateNonAdvancingOutcome: (_session, input) => {
+        adjudicated = { guardId: input.guardId, inputPayload: input.inputPayload };
+        return null;
+      },
+    });
+
+    await autoLoop(ctx, pi, s, deps);
+
+    assert.equal(adjudicated?.guardId, "budget-pause");
+    assert.deepEqual(JSON.parse(adjudicated!.inputPayload), {
+      budgetCeiling: 5,
+      totalCost: 10,
+      budgetPct: 2,
+      enforcement: "pause",
+      effectiveAction: "pause",
+      hookAction: null,
+      newBudgetAlertLevel: 100,
+      thresholdPct: 100,
+    });
+  });
+
   it("dispatches a 3-step workflow through autoLoop and all steps complete", async () => {
     _resetPendingResolve();
 
@@ -555,7 +608,7 @@ describe("Custom engine loop integration", () => {
     assert.equal(turnResults.length, 1);
     assert.equal(turnResults[0].status, "stopped");
     assert.equal(turnResults[0].failureClass, "manual-attention");
-    assert.match(turnResults[0].error ?? "", /custom-engine-dispatch-stop/);
+    assert.match(turnResults[0].error ?? "", /Workflow blocked: no pending steps are ready/);
     assert.ok(
       deps.callLog.includes("journal:iteration-end"),
       `blocked workflow should emit iteration-end; log=${deps.callLog.join(",")}`,
@@ -910,6 +963,147 @@ describe("Custom engine loop integration", () => {
     assert.equal(pi2.calls.length, 2, "second session should exhaust after attempts 3 and 4");
     const stopEntry = deps2.callLog.find((e: string) => e.startsWith("stopAuto:"));
     assert.match(stopEntry ?? "", /requested retry 4 times without passing/);
+  });
+
+  it("#1672: custom-engine stop persists its signature before database teardown", async (t) => {
+    // Gap 1 (#1672): the custom-engine verification adapters used to call
+    // finishTurn with three arguments, so pendingLoopLiveness stayed unset and
+    // a verification retry could recur forever without a block signature.
+    // Every retry turn must now hand the adjudication boundary a guard id and
+    // an actionable sanctioned exit.
+    _resetPendingResolve();
+
+    const runDir = makeTmpDir();
+    const graph = makeGraph([makeStep({ id: "retry-step" })], "retry-liveness");
+    writeGraph(runDir, graph);
+    writeFileSync(join(runDir, "DEFINITION.yaml"), stringify({
+      version: 1,
+      name: "retry-liveness",
+      steps: [{
+        id: "retry-step",
+        name: "retry-step",
+        prompt: "Do retry-step",
+        produces: "retry-step/output.md",
+        verify: { policy: "shell-command", command: "exit 1" },
+      }],
+    }));
+
+    const ctx = makeMockCtx();
+    const pi = makeMockPi();
+    const s = makeLoopSession({
+      activeEngineId: "custom",
+      activeRunDir: runDir,
+      basePath: runDir,
+    });
+    const dbPath = join(runDir, ".gsd", "gsd.db");
+    mkdirSync(join(runDir, ".gsd"), { recursive: true });
+    openDatabase(dbPath);
+    t.after(() => {
+      try { closeDatabase(); } catch { /* noop */ }
+    });
+    let stopOutcome: {
+      guardId: string;
+      unitType: string;
+      unitId: string;
+      inputPayload: string;
+      sanctionedExit?: string;
+    } | undefined;
+    const verifyOutcomes: Array<{
+      guardId: string;
+      inputPayload: string;
+      count: number;
+      tripped: boolean;
+    }> = [];
+    const deps = makeMockDeps({
+      adjudicateNonAdvancingOutcome: (_session, input) => {
+        const recorded = recordNonAdvancingOutcome({
+          scopeId: realpathSync(runDir),
+          guardId: input.guardId,
+          unitType: input.unitType,
+          unitId: input.unitId,
+          inputPayload: input.inputPayload,
+        }, input.sanctionedExit ? { sanctionedExit: input.sanctionedExit } : undefined);
+        if (input.guardId === "custom-engine-verify") {
+          verifyOutcomes.push({
+            guardId: input.guardId,
+            inputPayload: input.inputPayload,
+            count: recorded.count,
+            tripped: recorded.tripped,
+          });
+          stopOutcome = input;
+        }
+        return null;
+      },
+      stopAuto: async (_ctx, _pi, reason) => {
+        deps.callLog.push(`stopAuto:${reason ?? "no-reason"}`);
+        s.active = false;
+        closeDatabase();
+      },
+    });
+
+    const resolver = setInterval(() => {
+      if (_hasPendingResolveForTest()) {
+        resolveAgentEnd({ messages: [{ role: "assistant" }] });
+      }
+    }, 25);
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        autoLoop(ctx, pi, s, deps),
+        new Promise((_, reject) =>
+          timeout = setTimeout(() => {
+            s.active = false;
+            resolveAgentEnd({ messages: [{ role: "assistant" }] });
+            reject(new Error(
+              `autoLoop did not stop; log=${deps.callLog.join(",")}`,
+            ));
+          }, 3_000),
+        ),
+      ]);
+    } finally {
+      clearInterval(resolver);
+      if (timeout) clearTimeout(timeout);
+    }
+
+    assert.ok(stopOutcome, "the exhausted custom-engine verification stop must reach adjudication");
+    assert.equal(verifyOutcomes.length, 4, "every verification retry, including exhaustion, must reach adjudication");
+    const retryEvidence = verifyOutcomes.slice(0, 3).map((outcome) => JSON.parse(outcome.inputPayload));
+    assert.deepEqual(retryEvidence, [
+      { policy: "shell-command", command: "exit 1", exitCode: 1, signal: null, error: null },
+      { policy: "shell-command", command: "exit 1", exitCode: 1, signal: null, error: null },
+      { policy: "shell-command", command: "exit 1", exitCode: 1, signal: null, error: null },
+    ]);
+    assert.equal(verifyOutcomes[0]?.tripped, false);
+    assert.equal(verifyOutcomes[1]?.tripped, true, "identical engine evidence must trip at occurrence two");
+
+    const distinctScope = `${realpathSync(runDir)}:different-engine-evidence`;
+    const differentFirst = recordNonAdvancingOutcome({
+      scopeId: distinctScope,
+      guardId: "custom-engine-verify",
+      unitType: stopOutcome.unitType,
+      unitId: stopOutcome.unitId,
+      inputPayload: JSON.stringify({ policy: "shell-command", exitCode: 1 }),
+    });
+    const differentSecond = recordNonAdvancingOutcome({
+      scopeId: distinctScope,
+      guardId: "custom-engine-verify",
+      unitType: stopOutcome.unitType,
+      unitId: stopOutcome.unitId,
+      inputPayload: JSON.stringify({ policy: "shell-command", exitCode: 2 }),
+    });
+    assert.equal(differentFirst.tripped, false);
+    assert.equal(differentSecond.tripped, false, "changed engine evidence must not share a signature");
+    assert.equal(stopOutcome.guardId, "custom-engine-verify");
+    assert.match(stopOutcome.sanctionedExit ?? "", /`\/gsd forensics`/);
+    openDatabase(dbPath);
+    const repeated = recordNonAdvancingOutcome({
+      scopeId: realpathSync(runDir),
+      guardId: stopOutcome.guardId,
+      unitType: stopOutcome.unitType,
+      unitId: stopOutcome.unitId,
+      inputPayload: stopOutcome.inputPayload,
+    }, stopOutcome.sanctionedExit ? { sanctionedExit: stopOutcome.sanctionedExit } : undefined);
+    assert.equal(repeated.tripped, true, "the stop signature must survive database reopen as occurrence one");
   });
 
   it("two-step workflow drives both steps to complete and stops when isComplete fires", async () => {

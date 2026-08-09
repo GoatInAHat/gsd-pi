@@ -39,6 +39,7 @@ import type {
   VerifiedTaskPublicationInput,
 } from "./task-execution-cutover.js";
 import type { UnitPhaseResult } from "./workflow-unit-dispatch.js";
+import type { MemoryPressureSnapshot } from "./workflow-memory-pressure.js";
 
 export interface StopAutoOptions {
   preserveWorktree?: boolean;
@@ -80,6 +81,22 @@ type PauseAutoFn = (
  * can access private functions from auto.ts without exporting them.
  */
 export interface LoopDeps {
+  /**
+   * Heap-pressure reading for the loop's preflight memory check. Injected so
+   * the preflight liveness path (ADR-047, #1672) is testable without an
+   * actually-exhausted heap; defaults to the real process measurement.
+   */
+  measureMemoryPressure?: () => MemoryPressureSnapshot;
+  adjudicateNonAdvancingOutcome?: (
+    session: AutoSession,
+    input: {
+      guardId: string;
+      unitType: string;
+      unitId: string;
+      inputPayload: string;
+      sanctionedExit?: string;
+    },
+  ) => string | null;
   taskExecutionBoundary?: (
     input: TaskExecutionCutoverInput,
     run: () => Promise<UnitPhaseResult>,

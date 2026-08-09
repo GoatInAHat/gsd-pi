@@ -167,6 +167,9 @@ test("blocking evidence-xref routes recovery and clears evidence before pausing"
       skipWorktreeSync: true,
     });
 
+    // #1641 / #1642 / #1649: the blocking branch now settles/routes the Attempt
+    // and returns the dedicated "evidence-xref-blocked" signal so finalize never
+    // enters the verified-task publication boundary.
     assert.equal(result, "evidence-xref-blocked");
     assert.equal(pauseCalled, true);
     assert.ok(

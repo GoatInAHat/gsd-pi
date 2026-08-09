@@ -347,7 +347,7 @@ test('handlePlanTask persists targetRepositories for parent-workspace tasks', as
   }
 });
 
-test('handlePlanTask leaves implicit parent-workspace targets unset for root verification', async () => {
+test('handlePlanTask keeps implicit parent-workspace tasks scoped to the root for verification', async () => {
   const base = makeTmpBase();
   openDatabase(join(base, '.gsd', 'gsd.db'));
 
@@ -359,7 +359,10 @@ test('handlePlanTask leaves implicit parent-workspace targets unset for root ver
 
     const task = getTask('M001', 'S02', 'T02');
     const slice = getSlice('M001', 'S02');
-    assert.deepEqual(task?.target_repositories, []);
+    // #1630 derives the concrete target from the task's root-only planned paths,
+    // so the row is explicit rather than empty; #1656's requirement is that
+    // verification never fans out to the child repositories, asserted below.
+    assert.deepEqual(task?.target_repositories, ['project']);
 
     const resolved = resolveVerificationRepositoryTargets(base, {
       workspace: {

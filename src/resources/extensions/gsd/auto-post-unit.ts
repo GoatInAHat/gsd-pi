@@ -113,6 +113,34 @@ import {
 import { recordTaskTechnicalVerdict } from "./task-verification-domain-operation.js";
 import { recordFailureAndSelectRecovery } from "./task-recovery-domain-operation.js";
 import { isTaskExecutionReadyForHostVerification } from "./auto/task-execution-cutover.js";
+import {
+  routeEvidenceCrossReferenceBlock,
+  type EvidenceCrossReferenceBlockResult,
+} from "./auto-verification.js";
+
+export function resolveEvidenceRoutePresentation(
+  routed: EvidenceCrossReferenceBlockResult | null,
+  routeFailure: string | null,
+): {
+  recovery: { recoveryActionId?: string; resumeInstruction: string };
+  exitInstruction: string;
+} {
+  let resumeInstruction = "resume with /gsd auto to retry evidence recovery routing";
+  if (routed?.outcome === "abort") {
+    resumeInstruction = "resume with gsd_task_recovery_resume";
+  } else if (routed) {
+    resumeInstruction = "resume with /gsd auto to re-run the task";
+  }
+  return {
+    recovery: {
+      ...(routed ? { recoveryActionId: routed.recoveryActionId } : {}),
+      resumeInstruction,
+    },
+    exitInstruction: routed
+      ? `Recovery routed (recoveryActionId: ${routed.recoveryActionId}); ${resumeInstruction}.`
+      : `Recovery routing did not commit (${routeFailure ?? "unknown failure"}); ${resumeInstruction}.`,
+  };
+}
 
 // ─── Path Comparison Helper ───────────────────────────────────────────────
 /** Compare two paths for physical identity, tolerating trailing slashes and symlinks. */
@@ -1439,7 +1467,10 @@ async function runCloseoutGitAction(
  * - "dispatched" — a signal caused stop/pause
  * - "continue" — proceed normally
  * - "retry" — artifact verification failed, s.pendingVerificationRetry set for loop re-iteration
- * - "evidence-xref-blocked" — claimed evidence failed safety verification and was routed to recovery
+ * - "evidence-xref-blocked" — blocking safety evidence mismatch; the Attempt was
+ *   routed through the canonical recovery seam (s.lastSafetyBlockRecovery carries
+ *   the recoveryActionId) and auto-mode paused. The finalize break must NOT enter
+ *   the verified-task publication boundary (#1641 / #1642 / #1649).
  */
 export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreVerificationOpts): Promise<PreVerificationResult> {
   const { s, ctx, pi, stopAuto, pauseAuto } = pctx;
@@ -1664,8 +1695,7 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
             // Without the flag, subsequent hooks (triage,
             // DB writes) would keep running against a conflicted main
             // checkout after the loop was already told to stop.
-            const { stopAuto } = await import("./auto.js");
-            await stopAuto(ctx, undefined, `slice-merge-conflict on ${sid}`);
+            await stopAuto(ctx, pi, `slice-merge-conflict on ${sid}`);
             sliceMergeStopped = true;
             return;
           }
@@ -1675,8 +1705,7 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
           // Non-conflict failures (dirty main, rev-walk error, etc.) can
           // leave the checkout in an unexpected state. Stop auto-mode so
           // the next slice doesn't dispatch on top of it.
-          const { stopAuto } = await import("./auto.js");
-          await stopAuto(ctx, undefined, `slice-merge-error on ${sid}`);
+          await stopAuto(ctx, pi, `slice-merge-error on ${sid}`);
           sliceMergeStopped = true;
         }
       });
@@ -1876,69 +1905,53 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
 
                 const blockingMismatch = mismatches.find((mismatch) => mismatch.severity === "error");
                 if (blockingMismatch) {
+                  // #1641 / #1649: a safety refusal must carry its sanctioned exit.
+                  // Settle the withheld verdict and route the Attempt through the
+                  // canonical recovery seam so a recoveryActionId exists, the
+                  // awaiting-verification wedge ends, and the operator has a
+                  // supported way out — instead of a pure read that replays the
+                  // identical blocking pause on every resume.
+                  let routed: EvidenceCrossReferenceBlockResult | null = null;
+                  let routeFailure: string | null = null;
+                  try {
+                    routed = routeEvidenceCrossReferenceBlock({
+                      attempt,
+                      basePath: s.basePath,
+                      mismatch: {
+                        command: blockingMismatch.claimed.command,
+                        claimedExitCode: blockingMismatch.claimed.exitCode,
+                        actualExitCode: blockingMismatch.actual?.exitCode ?? null,
+                        reason: blockingMismatch.reason,
+                      },
+                    });
+                  } catch (routeError) {
+                    routeFailure = routeError instanceof Error ? routeError.message : String(routeError);
+                    debugLog("postUnit", {
+                      phase: "safety-evidence-xref-route",
+                      error: routeFailure,
+                    });
+                  }
+                  const routePresentation = resolveEvidenceRoutePresentation(routed, routeFailure);
+                  s.lastSafetyBlockRecovery = routePresentation.recovery;
+                  // Clear the persisted evidence file on the blocked path too, so a
+                  // retry cross-references fresh execution instead of replaying the
+                  // same stale rows indefinitely (#1641).
+                  try {
+                    clearEvidenceFromDisk(s.basePath, sMid, sSid, sTid);
+                  } catch (clearError) {
+                    debugLog("postUnit", { phase: "safety-evidence-clear", error: String(clearError) });
+                  }
+                  const mismatchDetail =
+                    `"${blockingMismatch.claimed.command.slice(0, 80)}" — ${blockingMismatch.reason}`;
                   ctx.ui.notify(
-                    `Safety: task ${sTid} claimed passing verification that failed in recorded execution`,
+                    `Safety: task ${sTid} claimed passing verification that failed in recorded execution (${mismatchDetail}). ${routePresentation.exitInstruction}`,
                     "error",
                   );
-                  if (!attempt.resultId) {
-                    logError("safety", "evidence-xref: settled Task Attempt Result identity is missing");
-                    await pauseAuto(ctx, pi);
-                    return "evidence-xref-blocked";
-                  }
-                  try {
-                    const actualMismatch = blockingMismatch.actual;
-                    const observedAt = new Date(actualMismatch?.timestamp ?? Date.now()).toISOString();
-                    const verdict = recordTaskTechnicalVerdict({
-                      invocation: internalExecutionInvocation(
-                        `internal:auto:attempt.verify:${attempt.attemptId}`,
-                      ),
-                      attemptId: attempt.attemptId,
-                      testedSourceRevision: "unavailable",
-                      verdict: "fail",
-                      rationale: blockingMismatch.reason,
-                      evidence: {
-                        evidenceClass: "command",
-                        commandOrTool: blockingMismatch.claimed.command,
-                        workingDirectory: s.basePath,
-                        startedAt: observedAt,
-                        endedAt: observedAt,
-                        exitCode: actualMismatch?.exitCode ?? 1,
-                        observation: "failed",
-                        durableOutputRef: `db://evidence-xref/${attempt.attemptId}`,
-                        environment: {
-                          verificationPolicy: "evidence-cross-reference",
-                          claimedExitCode: blockingMismatch.claimed.exitCode,
-                          actualExitCode: actualMismatch?.exitCode ?? null,
-                          toolCallId: actualMismatch?.toolCallId ?? null,
-                        },
-                      },
-                    });
-                    recordFailureAndSelectRecovery({
-                      invocation: internalExecutionInvocation(
-                        `internal:auto:attempt.route:${attempt.resultId}`,
-                      ),
-                      attemptId: attempt.attemptId,
-                      resultId: attempt.resultId,
-                      owner: "agent",
-                      classification: { failureKind: "verification-failed" },
-                      summary: "Claimed passing verification failed in recorded execution",
-                      evidence: {
-                        verdictId: verdict.verdictId,
-                        evidenceId: verdict.evidenceId,
-                        mismatch: blockingMismatch.reason,
-                      },
-                      rationale: "Route the blocking evidence cross-reference mismatch through durable Task recovery",
-                    });
-                    clearEvidenceFromDisk(s.basePath, sMid, sSid, sTid);
-                  } catch (e) {
-                    logError("safety", `evidence-xref recovery routing failed: ${String(e)}`);
-                    ctx.ui.notify(
-                      `Safety: task ${sTid} evidence mismatch could not be routed; auto-mode remains paused`,
-                      "error",
-                    );
-                    await pauseAuto(ctx, pi);
-                    return "evidence-xref-blocked";
-                  }
+                  // Commit the unit's work before pausing so the blocked Attempt
+                  // is never resumed against an uncommitted tree (#1649). The
+                  // Attempt is already settled and routed above, so a git
+                  // closeout that pauses on its own still exits through the
+                  // safety break reason carrying the recoveryActionId.
                   const gitActionResult = await runCloseoutGitAction(pctx, s.currentUnit);
                   if (gitActionResult === "dispatched") {
                     return "evidence-xref-blocked";
