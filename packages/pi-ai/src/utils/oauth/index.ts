@@ -22,6 +22,8 @@ export {
 export { loginOpenAICodex, openaiCodexOAuthProvider, refreshOpenAICodexToken } from "./openai-codex.js";
 // xAI Grok (SuperGrok / X Premium OAuth)
 export { enforceXaiTokenOrigin, loginXai, refreshXaiToken, xaiOAuthProvider } from "./xai.js";
+// Kimi Code (subscription OAuth)
+export { kimiCodingOAuthProvider, loginKimiCoding, refreshKimiCodingToken } from "./kimi-coding.js";
 
 export * from "./types.js";
 
@@ -34,12 +36,14 @@ import { githubCopilotOAuthProvider } from "./github-copilot.js";
 import { openaiCodexOAuthProvider } from "./openai-codex.js";
 import type { OAuthCredentials, OAuthProviderId, OAuthProviderInfo, OAuthProviderInterface } from "./types.js";
 import { xaiOAuthProvider } from "./xai.js";
+import { kimiCodingOAuthProvider } from "./kimi-coding.js";
 
 const BUILT_IN_OAUTH_PROVIDERS: OAuthProviderInterface[] = [
 	anthropicOAuthProvider,
 	githubCopilotOAuthProvider,
 	openaiCodexOAuthProvider,
 	xaiOAuthProvider,
+	kimiCodingOAuthProvider,
 ];
 
 const oauthProviderRegistry = new Map<string, OAuthProviderInterface>(
