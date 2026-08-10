@@ -42,6 +42,7 @@ import type { GsdWorkspace, MilestoneScope } from "../workspace.js";
 import { logError, logWarning } from "../workflow-logger.js";
 import { createDbAdapter, type DbAdapter } from "../db-adapter.js";
 import { createBaseSchemaObjects } from "../db-base-schema.js";
+import { hasLivenessBackstopSchema } from "../db-liveness-backstop-schema.js";
 import { createCoordinationTablesV24 } from "../db-coordination-schema.js";
 import { createDbConnectionCache, type DbConnectionCacheEntry } from "../db-connection-cache.js";
 import { backupDatabaseBeforeMigration, isMigrationBackupError } from "../db-migration-backup.js";
@@ -212,6 +213,7 @@ function assessStartupRepair(db: DbAdapter): StartupRepairAssessment {
     || !hasCanonicalOutboxInvariantsV31(db)
     || !hasVerificationEvidenceDedupIndex(db)
     || !hasRuntimeKvSchemaV25(db)
+    || !hasLivenessBackstopSchema(db)
     || (fts.supported && (!fts.schemaComplete || !fts.rebuildMarked));
   return {
     required,
@@ -2268,7 +2270,15 @@ function openDatabaseInternal(path: string, allowReplacementWrite: boolean): boo
     } else {
       try {
         assertDatabaseAdapterMatchesPath(currentDb, path);
-        return true;
+        if (
+          path === ":memory:"
+          || _replacementObservationDatabases.has(currentDb)
+          || !assessStartupRepair(currentDb).required
+        ) {
+          return true;
+        }
+        closeDatabase();
+        _dbOpenState.markAttempted();
       } catch {
         closeDatabase();
       }
