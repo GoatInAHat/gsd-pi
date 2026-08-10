@@ -2,7 +2,7 @@
 // File Purpose: Base table, index, and view DDL for the GSD database facade.
 
 import type { DbAdapter } from "./db-adapter.js";
-import { createLivenessBackstopSchema } from "./db-liveness-backstop-schema.js";
+import { createRequiredSchemaObjects } from "./db-required-schema.js";
 
 export interface BaseSchemaHooks {
   tryCreateMemoriesFts(db: DbAdapter): boolean;
@@ -420,5 +420,5 @@ export function createBaseSchemaObjects(db: DbAdapter, hooks: BaseSchemaHooks): 
   // Registered as idempotent base objects (not a numbered migration) so the
   // backstop's restart-surviving ledger exists on every open without moving
   // the schema-version boundary the legacy-import contract pins at v46.
-  createLivenessBackstopSchema(db);
+  createRequiredSchemaObjects(db);
 }

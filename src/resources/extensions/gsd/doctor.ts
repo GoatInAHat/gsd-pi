@@ -7,7 +7,7 @@ import {
   openWorkflowDatabaseIsolated,
   resolveWorkflowDatabaseLocation,
 } from "./db-workspace.js";
-import { hasLivenessBackstopSchema } from "./db-liveness-backstop-schema.js";
+import { hasRequiredSchemaFeature } from "./db-required-schema.js";
 import { resolveMilestoneFile, milestonesDir, legacyMilestonesDir, resolveGsdRootFile } from "./paths.js";
 import { deriveState } from "./state.js";
 import { invalidateAllCaches } from "./cache.js";
@@ -40,7 +40,7 @@ function inspectLivenessBackstopSchema(basePath: string): boolean | undefined {
   const db = openWorkflowDatabaseIsolated(databasePath);
   if (!db) return undefined;
   try {
-    return hasLivenessBackstopSchema(db);
+    return hasRequiredSchemaFeature(db, "liveness-backstop");
   } catch {
     return undefined;
   } finally {
@@ -54,7 +54,7 @@ function recordLivenessBackstopStartupRepair(
   fixesApplied: string[],
 ): void {
   if (wasComplete !== false) return;
-  const repaired = isDbAvailable() && hasLivenessBackstopSchema(_getAdapter()!);
+  const repaired = isDbAvailable() && hasRequiredSchemaFeature(_getAdapter()!, "liveness-backstop");
   issues.push({
     severity: repaired ? "info" : "error",
     code: "liveness_backstop_schema_missing",
