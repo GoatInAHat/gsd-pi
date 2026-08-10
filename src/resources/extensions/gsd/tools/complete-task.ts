@@ -45,9 +45,9 @@ import {
 } from "../paths.js";
 import { resolveCanonicalMilestoneRoot } from "../worktree-manager.js";
 import { checkOwnership, taskUnitKey } from "../unit-ownership.js";
-import { saveFile, clearParseCache, normalizePlannedFileReference } from "../files.js";
+import { clearParseCache, normalizePlannedFileReference } from "../files.js";
 import { invalidateStateCache } from "../state.js";
-import { renderPlanCheckboxes } from "../markdown-renderer.js";
+import { renderPlanCheckboxes, writeTaskSummaryProjection } from "../markdown-renderer.js";
 import {
   renderMilestoneShellProjections,
   renderSummaryContent,
@@ -172,7 +172,13 @@ async function repairMissingTaskSummaryProjection(
   let stale = false;
 
   try {
-    await saveFile(summaryPath, summaryMd);
+    await writeTaskSummaryProjection(
+      artifactBasePath,
+      taskRow.milestone_id,
+      taskRow.slice_id,
+      taskRow.id,
+      summaryMd,
+    );
     await renderPlanCheckboxes(artifactBasePath, taskRow.milestone_id, taskRow.slice_id);
   } catch (renderErr) {
     stale = true;
@@ -631,7 +637,13 @@ export async function handleCompleteTask(
   );
 
   try {
-    await saveFile(summaryPath, summaryMd);
+    await writeTaskSummaryProjection(
+      artifactBasePath,
+      params.milestoneId,
+      params.sliceId,
+      params.taskId,
+      summaryMd,
+    );
 
     // Toggle or regenerate the plan projection from DB. Missing projection
     // files are rebuilt by the renderer instead of being skipped.

@@ -869,17 +869,38 @@ export async function renderTaskSummary(
     return false; // No summary to render — skip silently
   }
 
+  await writeTaskSummaryProjection(
+    basePath,
+    milestoneId,
+    sliceId,
+    taskId,
+    task.full_summary_md,
+  );
+
+  return true;
+}
+
+/**
+ * Persist task-summary projection bytes through the canonical projection seam.
+ * Callers may render content differently, but stamping, disk placement,
+ * artifact lineage, compatibility markers, and cache invalidation stay here.
+ */
+export async function writeTaskSummaryProjection(
+  basePath: string,
+  milestoneId: string,
+  sliceId: string,
+  taskId: string,
+  content: string,
+): Promise<string> {
   const absPath = targetTaskFile(basePath, milestoneId, sliceId, taskId, "SUMMARY", getMilestone(milestoneId)?.title);
   const artifactPath = toArtifactPath(absPath, basePath);
 
-  await writeAndStore(absPath, artifactPath, task.full_summary_md, {
+  return writeAndStore(absPath, artifactPath, content, {
     artifact_type: "SUMMARY",
     milestone_id: milestoneId,
     slice_id: sliceId,
     task_id: taskId,
   }, basePath);
-
-  return true;
 }
 
 // ─── Slice Summary Rendering ──────────────────────────────────────────────
