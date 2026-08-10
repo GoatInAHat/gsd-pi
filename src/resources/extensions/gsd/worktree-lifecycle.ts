@@ -805,11 +805,11 @@ export function _enterMilestoneCore(
         s.basePath = basePath;
         rebuildGitService(s, deps);
         invalidateAllCaches();
-        if (mode === "branch") {
-          s.isolationDegraded = false;
-          ctx.notify(`Recovered branch isolation on milestone/${milestoneId}.`, "info");
-        } else {
+        if (mode === "branch") s.isolationDegraded = false;
+        if (mode === "worktree") {
           ctx.notify(isolationDegradedFallbackGuidance(milestoneId), "warning");
+        } else {
+          ctx.notify(`Recovered branch isolation on milestone/${milestoneId}.`, "info");
         }
         return { ok: true, mode: "branch", path: basePath };
       } catch (err) {
