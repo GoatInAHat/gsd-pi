@@ -89,7 +89,7 @@ import { flushWorkflowProjections } from "../projection-flush.js";
 import { loadEffectiveGSDPreferences } from "../preferences.js";
 import { parseProject } from "../schemas/parsers.js";
 import { autoSession, getAutoRuntimeSnapshot, isAutoActive } from "../auto-runtime-state.js";
-import { renderPlanFromDb } from "../markdown-renderer.js";
+import { renderPlanFromDb, writeTaskSummaryProjection } from "../markdown-renderer.js";
 import { readUnitHarnessAbort, type UnitHarnessAbortRecord } from "../unit-runtime.js";
 import {
   prepareUatRun,
@@ -673,18 +673,32 @@ export async function executeSummarySave(
       }
     }
 
-    await saveArtifactToDb(
-      {
-        path: relativePath,
-        artifact_type: params.artifact_type,
-        content: contentToSave,
-        milestone_id: isRootArtifact ? undefined : params.milestone_id,
-        slice_id: isRootArtifact ? undefined : params.slice_id,
-        task_id: isRootArtifact ? undefined : params.task_id,
-      },
-      basePath,
-    );
-    await mirrorArtifactToActiveWorktreeProjection(basePath, relativePath, contentToSave);
+    let projectedContent = contentToSave;
+    if (params.artifact_type === "SUMMARY" && params.milestone_id && params.slice_id && params.task_id) {
+      const contract = resolveGsdPathContract(basePath);
+      const projection = await writeTaskSummaryProjection(
+        contract.projectRoot,
+        params.milestone_id,
+        params.slice_id,
+        params.task_id,
+        contentToSave,
+      );
+      relativePath = projection.artifactPath;
+      projectedContent = projection.content;
+    } else {
+      await saveArtifactToDb(
+        {
+          path: relativePath,
+          artifact_type: params.artifact_type,
+          content: contentToSave,
+          milestone_id: isRootArtifact ? undefined : params.milestone_id,
+          slice_id: isRootArtifact ? undefined : params.slice_id,
+          task_id: isRootArtifact ? undefined : params.task_id,
+        },
+        basePath,
+      );
+    }
+    await mirrorArtifactToActiveWorktreeProjection(basePath, relativePath, projectedContent);
 
     if (params.artifact_type === "CONTEXT" && !params.task_id) {
       try {

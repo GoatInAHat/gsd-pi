@@ -42,6 +42,35 @@ function makeTmp(options: { withTask?: boolean } = {}): string {
   tmpDirs.push(base);
   return base;
 }
+
+function makeAliasTmp(milestoneIds: string[]): string {
+  const base = mkdtempSync(join(tmpdir(), `gsd-mig-alias-${randomUUID()}`));
+  mkdirSync(
+    join(base, ".gsd", "milestones", "M001", "slices", "S01", "tasks", "T01"),
+    { recursive: true },
+  );
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  for (const milestoneId of milestoneIds) {
+    insertMilestone({ id: milestoneId, title: "Foundation", status: "active" });
+    insertSlice({
+      milestoneId,
+      id: "S01",
+      title: "Set up tooling",
+      status: "pending",
+      sequence: 1,
+    });
+    insertTask({
+      milestoneId,
+      sliceId: "S01",
+      id: "T01",
+      title: "Init repo",
+      status: "pending",
+      sequence: 1,
+    });
+  }
+  tmpDirs.push(base);
+  return base;
+}
 afterEach(() => {
   _setFlatPhaseMigrationBoundaryForTest(null);
   closeDatabase();
@@ -539,6 +568,33 @@ test("migrateToFlatPhase rejects content-bearing unparseable milestone directori
 
   assert.equal(existsSync(join(base, ".gsd", "phases")), false);
   assert.equal(existsSync(join(unknownMilestone, "CONTEXT.md")), true);
+});
+
+test("migrateToFlatPhase aligns a bare legacy milestone with one suffixed DB identity", async () => {
+  const base = makeAliasTmp(["M001-abc123"]);
+
+  await migrateToFlatPhase(base);
+
+  assert.equal(existsSync(join(base, ".gsd", "milestones")), false);
+  assert.ok(resolveMilestonePath(base, "M001-abc123"));
+});
+
+test("migrateToFlatPhase aligns a padded legacy milestone with one numeric DB identity", async () => {
+  const base = makeAliasTmp(["1"]);
+
+  await migrateToFlatPhase(base);
+
+  assert.equal(existsSync(join(base, ".gsd", "milestones")), false);
+  assert.ok(resolveMilestonePath(base, "1"));
+});
+
+test("migrateToFlatPhase rejects ambiguous bare milestone aliases", async () => {
+  const base = makeAliasTmp(["M001-abc123", "M001-def456"]);
+
+  await assert.rejects(() => migrateToFlatPhase(base), /Recommended: run `\/gsd recover`/);
+
+  assert.equal(existsSync(join(base, ".gsd", "milestones", "M001")), true);
+  assert.equal(existsSync(join(base, ".gsd", "phases")), false);
 });
 
 test("pruneStaleFlatPhaseBackups removes migrate-* dirs older than retention window", async () => {

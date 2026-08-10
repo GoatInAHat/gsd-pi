@@ -911,16 +911,17 @@ export async function writeTaskSummaryProjection(
   sliceId: string,
   taskId: string,
   content: string,
-): Promise<string> {
+): Promise<{ artifactPath: string; content: string }> {
   const absPath = targetTaskFile(basePath, milestoneId, sliceId, taskId, "SUMMARY", getMilestone(milestoneId)?.title);
   const artifactPath = toArtifactPath(absPath, basePath);
 
-  return writeAndStore(absPath, artifactPath, content, {
+  const stamped = await writeAndStore(absPath, artifactPath, content, {
     artifact_type: "SUMMARY",
     milestone_id: milestoneId,
     slice_id: sliceId,
     task_id: taskId,
   }, basePath);
+  return { artifactPath, content: stamped };
 }
 
 // ─── Slice Summary Rendering ──────────────────────────────────────────────

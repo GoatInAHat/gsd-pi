@@ -266,15 +266,23 @@ export function nativeDetectMainBranch(basePath: string): string {
 export function nativeBranchExists(basePath: string, branch: string): boolean {
   const native = loadNative();
   if (native) {
-    return native.gitBranchExists(basePath, branch);
+    return branchExistsIncludingUnborn(
+      native.gitBranchExists(basePath, branch),
+      native.gitCurrentBranch(basePath),
+      branch,
+    );
   }
   const result = gitExec(basePath, ["show-ref", "--verify", `refs/heads/${branch}`], true);
-  if (result !== "") return true;
-
-  // show-ref fails for unborn branches (zero commits). Fall back to checking
-  // whether the requested branch is the current (unborn) branch.
   const current = gitExec(basePath, ["branch", "--show-current"], true);
-  return current === branch;
+  return branchExistsIncludingUnborn(result !== "", current, branch);
+}
+
+export function branchExistsIncludingUnborn(
+  refExists: boolean,
+  currentBranch: string | null,
+  branch: string,
+): boolean {
+  return refExists || currentBranch === branch;
 }
 
 /**

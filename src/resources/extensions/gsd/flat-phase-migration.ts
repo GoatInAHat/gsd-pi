@@ -118,6 +118,33 @@ function milestoneIdFromLegacyDirName(name: string): string | null {
   return name.match(/^(M\d{3}(?:-[a-z0-9]{6})?)(?:-|$)/)?.[1] ?? null;
 }
 
+function canonicalLegacyMilestoneId(
+  legacyId: string,
+  dbMilestones: ReadonlySet<string>,
+): string | null {
+  if (dbMilestones.has(legacyId)) return legacyId;
+  const bare = legacyId.match(/^M(\d{3})$/);
+  if (!bare) return null;
+
+  const candidates = new Set<string>();
+  const numericId = String(Number(bare[1]));
+  if (dbMilestones.has(numericId)) candidates.add(numericId);
+  const suffixedIdPattern = new RegExp(`^${legacyId}-[a-z0-9]{6}$`);
+  for (const dbId of dbMilestones) {
+    if (suffixedIdPattern.test(dbId)) candidates.add(dbId);
+  }
+  return candidates.size === 1 ? [...candidates][0]! : null;
+}
+
+function alignLegacyHierarchyIdentity(
+  identity: string,
+  milestoneAliases: ReadonlyMap<string, string>,
+): string | null {
+  const [milestoneId, ...rest] = identity.split("/");
+  const canonicalMilestoneId = milestoneAliases.get(milestoneId!);
+  return canonicalMilestoneId ? [canonicalMilestoneId, ...rest].join("/") : null;
+}
+
 function legacyHierarchyContainsUnknownIdentity(basePath: string, legacyRoot: string): boolean {
   const milestones = getAllMilestones();
   const dbMilestones = new Set(milestones.map((milestone) => milestone.id));
@@ -133,15 +160,18 @@ function legacyHierarchyContainsUnknownIdentity(basePath: string, legacyRoot: st
     }
   }
 
-  const legacyMilestoneIds = new Set<string>();
+  const milestoneAliases = new Map<string, string>();
   for (const milestoneEntry of readdirSync(legacyRoot, { withFileTypes: true })) {
     if (!milestoneEntry.isDirectory()) continue;
     const milestonePath = join(legacyRoot, milestoneEntry.name);
     if (!dirIsContentBearingLegacyMilestone(milestonePath)) continue;
 
-    const milestoneId = milestoneIdFromLegacyDirName(milestoneEntry.name);
-    if (!milestoneId || !dbMilestones.has(milestoneId)) return true;
-    legacyMilestoneIds.add(milestoneId);
+    const legacyMilestoneId = milestoneIdFromLegacyDirName(milestoneEntry.name);
+    if (!legacyMilestoneId) return true;
+    const milestoneId = canonicalLegacyMilestoneId(legacyMilestoneId, dbMilestones);
+    if (!milestoneId) return true;
+    milestoneAliases.set(legacyMilestoneId, milestoneId);
+    milestoneAliases.set(milestoneId, milestoneId);
 
     const slicesPath = join(milestonePath, "slices");
     if (!existsSync(slicesPath)) continue;
@@ -162,9 +192,18 @@ function legacyHierarchyContainsUnknownIdentity(basePath: string, legacyRoot: st
 
   const markdown = scanMarkdownHierarchy(basePath);
   return (
-    [...markdown.milestones].some((id) => legacyMilestoneIds.has(id) && !dbMilestones.has(id)) ||
-    [...markdown.slices].some((id) => legacyMilestoneIds.has(id.split("/")[0]!) && !dbSlices.has(id)) ||
-    [...markdown.tasks].some((id) => legacyMilestoneIds.has(id.split("/")[0]!) && !dbTasks.has(id))
+    [...markdown.milestones].some((id) => {
+      const aligned = alignLegacyHierarchyIdentity(id, milestoneAliases);
+      return aligned !== null && !dbMilestones.has(aligned);
+    }) ||
+    [...markdown.slices].some((id) => {
+      const aligned = alignLegacyHierarchyIdentity(id, milestoneAliases);
+      return aligned !== null && !dbSlices.has(aligned);
+    }) ||
+    [...markdown.tasks].some((id) => {
+      const aligned = alignLegacyHierarchyIdentity(id, milestoneAliases);
+      return aligned !== null && !dbTasks.has(aligned);
+    })
   );
 }
 

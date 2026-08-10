@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
-import { nativeBranchExists } from "../native-git-bridge.ts";
+import { branchExistsIncludingUnborn, nativeBranchExists } from "../native-git-bridge.ts";
 
 function git(args: string[], cwd: string): string {
   return execFileSync("git", args, {
@@ -59,6 +59,17 @@ test("nativeBranchExists: returns false for non-existent branch in unborn repo",
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("native branch lookup recognizes symbolic unborn HEAD across reruns", () => {
+  assert.equal(
+    branchExistsIncludingUnborn(false, "milestone/M001", "milestone/M001"),
+    true,
+  );
+  assert.equal(
+    branchExistsIncludingUnborn(false, "milestone/M001", "milestone/M002"),
+    false,
+  );
 });
 
 test("nativeBranchExists: still works for real branches with commits", () => {
