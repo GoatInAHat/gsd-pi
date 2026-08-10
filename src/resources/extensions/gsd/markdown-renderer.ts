@@ -124,6 +124,19 @@ export interface ProjectStateVersion {
   authorityEpoch: number;
 }
 
+export class ProjectionWriteError extends Error {
+  readonly stage = "artifact-persistence" as const;
+
+  constructor(artifactPath: string, artifactType: string, taskScoped: boolean, cause: unknown) {
+    const scope = taskScoped ? "task " : "";
+    super(
+      `${scope}${artifactType} projection artifact persistence failed: ${artifactPath}`,
+      cause instanceof Error ? { cause } : undefined,
+    );
+    this.name = "ProjectionWriteError";
+  }
+}
+
 /**
  * Current DB project revision/authority epoch — the same authority row the
  * cutover receipt (T006) advances. Falls back to 0:0 when the DB or its
@@ -275,9 +288,16 @@ async function writeAndStore(
       task_id: opts.task_id ?? null,
       full_content: stamped,
     });
-  } catch {
-    // Non-fatal: file is on disk, DB is best-effort
-    logWarning("renderer", `failed to update artifact in DB: ${artifactPath}`);
+  } catch (error) {
+    // Disk is a rebuildable projection, but callers must not report success
+    // without its authoritative artifact lineage. The unstored disk copy is
+    // intentionally left for drift reconciliation and post-mortem evidence.
+    throw new ProjectionWriteError(
+      artifactPath,
+      opts.artifact_type,
+      Boolean(opts.task_id),
+      error,
+    );
   }
 
   // Record the projection write so invalidateCaches() can refresh the compat
