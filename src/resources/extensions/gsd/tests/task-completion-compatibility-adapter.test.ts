@@ -25,8 +25,10 @@ import { clearParseCache } from "../files.js";
 import {
   _getAdapter,
   closeDatabase,
+  insertArtifact,
   openDatabase,
 } from "../gsd-db.js";
+import { stripProjectionStamp } from "../markdown-renderer.js";
 import { clearPathCache } from "../paths.js";
 import {
   claimTaskAttempt,
@@ -435,20 +437,20 @@ function reconciliationState(): GSDState {
   };
 }
 
-async function taskSummaryDivergence(basePath: string): Promise<{
+async function taskSummaryDivergence(basePath: string, taskId = "T01"): Promise<{
   doctorDivergence: boolean;
   reconciliationDivergence: boolean;
 }> {
   const issues: DoctorIssue[] = [];
   await checkEngineHealth(basePath, issues, []);
   const doctorDivergence = issues.some((issue) =>
-    issue.code === "artifact_db_status_divergence" && issue.unitId === "M001/S01/T01"
+    issue.code === "artifact_db_status_divergence" && issue.unitId === `M001/S01/${taskId}`
   );
 
   const state = reconciliationState();
   const drifts = detectArtifactDbDrift(state, { basePath, state });
   const reconciliationDivergence = drifts.some((drift) =>
-    drift.kind === "artifact-db-status-divergence" && drift.taskId === "T01"
+    drift.kind === "artifact-db-status-divergence" && drift.taskId === taskId
   );
   return { doctorDivergence, reconciliationDivergence };
 }
@@ -531,6 +533,133 @@ test("#1677: a canonical staged Task SUMMARY is current while awaiting host veri
     row("SELECT status, completed_at FROM tasks WHERE id = 'T01'"),
     { status: "in_progress", completed_at: null },
   );
+  const artifactContent = String(row(
+    "SELECT full_content FROM artifacts WHERE artifact_type = 'SUMMARY' AND task_id = 'T01'",
+  ).full_content);
+  const taskContent = String(row(
+    "SELECT full_summary_md FROM tasks WHERE milestone_id = 'M001' AND slice_id = 'S01' AND id = 'T01'",
+  ).full_summary_md);
+  assert.equal(readFileSync(staged.summaryPath, "utf8"), artifactContent);
+  assert.equal(stripProjectionStamp(artifactContent), stripProjectionStamp(taskContent));
+  await assertStagedSummaryIsCurrent(basePath);
+});
+
+function registerFailClosedSummaryMutation(
+  name: string,
+  mutate: (basePath: string, summaryPath: string) => string | void,
+): void {
+  test(`#1677: ${name} remains fail-closed`, async () => {
+    const { stageTaskCompletion } = await subject();
+    const { basePath } = createFixture();
+    const staged = await stageTaskCompletion(stageInput(basePath));
+    const expectedTaskId = mutate(basePath, staged.summaryPath) ?? "T01";
+
+    assert.deepEqual(
+      await taskSummaryDivergence(basePath, expectedTaskId),
+      { doctorDivergence: true, reconciliationDivergence: true },
+    );
+  });
+}
+
+registerFailClosedSummaryMutation("mismatched artifact identity", () => {
+  db().prepare(`
+    UPDATE artifacts SET task_id = 'T99'
+    WHERE artifact_type = 'SUMMARY' AND task_id = 'T01'
+  `).run();
+  return "T99";
+});
+
+registerFailClosedSummaryMutation("non-canonical artifact path", (basePath, summaryPath) => {
+  const alternatePath = join(basePath, ".gsd", "phases", "01-test", "T01-ALT-SUMMARY.md");
+  writeFileSync(alternatePath, readFileSync(summaryPath, "utf8"));
+  db().prepare(`
+    UPDATE artifacts SET path = :path
+    WHERE artifact_type = 'SUMMARY' AND task_id = 'T01'
+  `).run({ ":path": alternatePath });
+});
+
+registerFailClosedSummaryMutation("disk and artifact byte mismatch", (_basePath, summaryPath) => {
+  writeFileSync(summaryPath, `${readFileSync(summaryPath, "utf8")}disk-only mutation\n`);
+});
+
+registerFailClosedSummaryMutation("artifact and Task summary mismatch", () => {
+  db().prepare(`
+    UPDATE tasks SET full_summary_md = full_summary_md || '\nDB-only mutation\n'
+    WHERE milestone_id = 'M001' AND slice_id = 'S01' AND id = 'T01'
+  `).run();
+});
+
+test("#1677: an in-progress Task SUMMARY without an Attempt remains fail-closed", async () => {
+  const { stageTaskCompletion } = await subject();
+  const { basePath } = createFixture();
+  const staged = await stageTaskCompletion(stageInput(basePath));
+  const summaryPath = staged.summaryPath.replace("T01-SUMMARY.md", "T02-SUMMARY.md");
+  assert.notEqual(summaryPath, staged.summaryPath);
+  const taskSummary = "# T02 Summary\n\nNo Attempt exists for this projection.\n";
+  const artifactContent = `${taskSummary}<!-- gsd:state-version=1:1 -->\n`;
+  db().prepare(`
+    INSERT INTO tasks (
+      milestone_id, slice_id, id, title, status, full_summary_md, sequence
+    ) VALUES (
+      'M001', 'S01', 'T02', 'Missing Attempt', 'in_progress', :summary, 2
+    )
+  `).run({ ":summary": taskSummary });
+  writeFileSync(summaryPath, artifactContent);
+  insertArtifact({
+    path: summaryPath,
+    artifact_type: "SUMMARY",
+    milestone_id: "M001",
+    slice_id: "S01",
+    task_id: "T02",
+    full_content: artifactContent,
+  });
+
+  assert.deepEqual(
+    await taskSummaryDivergence(basePath, "T02"),
+    { doctorDivergence: true, reconciliationDivergence: true },
+  );
+});
+
+test("#1677: a newer running Attempt keeps an older successful staged SUMMARY fail-closed", async () => {
+  const { stageTaskCompletion } = await subject();
+  const { basePath, attemptId } = createFixture();
+  await stageTaskCompletion(stageInput(basePath));
+  db().prepare(`
+    INSERT INTO unit_dispatches (
+      trace_id, turn_id, worker_id, milestone_lease_token,
+      milestone_id, slice_id, task_id, unit_type, unit_id,
+      status, attempt_n, started_at
+    ) VALUES (
+      'trace-dispatch-2', 'turn-dispatch-2', 'worker-1', 7,
+      'M001', 'S01', 'T01', 'execute-task', 'M001/S01/T01',
+      'claimed', 2, '2026-07-12T00:10:00.000Z'
+    )
+  `).run();
+  const dispatchId = Number(row("SELECT MAX(id) AS id FROM unit_dispatches").id);
+  const retry = claimTaskAttempt({
+    invocation: invocation("task-completion/retry-claim"),
+    task: TASK,
+    workerId: "worker-1",
+    milestoneLeaseToken: 7,
+    coordinationDispatchId: dispatchId,
+    retryOfAttemptId: attemptId,
+  });
+  assert.equal(retry.attemptNumber, 2);
+
+  assert.deepEqual(
+    await taskSummaryDivergence(basePath),
+    { doctorDivergence: true, reconciliationDivergence: true },
+  );
+});
+
+test("#1677: a verify-stage SUMMARY remains current after a passing verdict until publication", async () => {
+  const { stageTaskCompletion } = await subject();
+  const { basePath, attemptId } = createFixture();
+  await stageTaskCompletion(stageInput(basePath));
+  recordPassingHostVerdict(basePath, attemptId);
+
+  const attempt = readLatestTaskAttempt(TASK);
+  assert.equal(attempt?.nextStage, "verify");
   await assertStagedSummaryIsCurrent(basePath);
 });
 
