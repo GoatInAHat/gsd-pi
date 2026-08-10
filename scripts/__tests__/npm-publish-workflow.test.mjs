@@ -203,10 +203,19 @@ test("production release runs optional live workflow test on the configured Open
 
 test("prerelease verification blocks release planning on the auto-mode acceptance bed", () => {
   const steps = workflow.jobs["prerelease-verify"].steps;
+  const buildHelpersIndex = steps.findIndex(
+    (step) => step.name === "Build auto-mode acceptance bed helpers",
+  );
+  const acceptanceBedIndex = steps.findIndex(
+    (step) => step.name === "Run auto-mode acceptance bed (against installed binary)",
+  );
   const acceptanceBed = steps.find(
     (step) => step.name === "Run auto-mode acceptance bed (against installed binary)",
   );
 
+  assert.ok(buildHelpersIndex > -1, "prerelease verification must build the acceptance bed helpers");
+  assert.match(steps[buildHelpersIndex].run, /pnpm run build:core/);
+  assert.ok(buildHelpersIndex < acceptanceBedIndex, "acceptance bed helpers must exist before the bed runs");
   assert.ok(acceptanceBed, "prerelease verification must run the auto-mode acceptance bed");
   assert.notEqual(
     acceptanceBed["continue-on-error"],

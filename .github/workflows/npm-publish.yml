@@ -258,6 +258,9 @@ jobs:
           export GSD_SMOKE_BINARY
           pnpm run test:live-regression
 
+      - name: Build auto-mode acceptance bed helpers
+        run: pnpm run build:core
+
       - name: Run auto-mode acceptance bed (against installed binary)
         run: |
           GSD_SMOKE_BINARY=$(which gsd)

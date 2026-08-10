@@ -807,19 +807,16 @@ describe("prompt-budget: execute-task inline cap (039)", () => {
 });
 
 describe("prompt-budget: discuss-slice inline cap (039)", () => {
-  it("uses the flat-phase context target in its write contract", async () => {
+  it("uses the flat-phase context target in its write contract", async (t) => {
     const base = createFixtureBase();
-    try {
-      mkdirSync(join(base, ".gsd", "phases", "01-foundation"), { recursive: true });
+    t.after(() => cleanup(base));
+    mkdirSync(join(base, ".gsd", "phases", "01-foundation"), { recursive: true });
 
-      const prompt = await buildDiscussSlicePrompt("M001", "S01", "Current", base);
-      const expectedPath = relSlicePath(base, "M001", "S01");
+    const prompt = await buildDiscussSlicePrompt("M001", "S01", "Current", base);
+    const expectedPath = relSlicePath(base, "M001", "S01");
 
-      assert.ok(prompt.includes(expectedPath), `prompt must write ${expectedPath}`);
-      assert.doesNotMatch(prompt, /\.gsd\/milestones\/M001/);
-    } finally {
-      cleanup(base);
-    }
+    assert.ok(prompt.includes(expectedPath), `prompt must write ${expectedPath}`);
+    assert.doesNotMatch(prompt, /\.gsd\/milestones\/M001/);
   });
 
   it("prepends the configured response language", async () => {

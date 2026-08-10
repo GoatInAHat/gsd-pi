@@ -410,13 +410,20 @@ test("re-fired migration reuses the existing backup instead of leaking a new mig
   // Simulate the re-fire: the legacy .gsd/milestones/ layout reappears (e.g. a
   // marker-key mismatch re-imports the whole tree). The DB rows still exist, so
   // the migration gate proceeds again — it must not snapshot a second backup.
+  const resurrectedContext = join(base, ".gsd", "milestones", "M001", "slices", "S01", "S01-CONTEXT.md");
   mkdirSync(join(base, ".gsd", "milestones", "M001", "slices", "S01", "tasks", "T01"), { recursive: true });
+  writeFileSync(resurrectedContext, "# Resurrected context\n", "utf-8");
   assert.equal(needsFlatPhaseMigration(base), true, "reappeared legacy layout re-triggers migration");
 
   await migrateToFlatPhase(base);
 
   const afterBackups = readdirSync(backupRoot).filter((d) => d.startsWith("migrate-"));
   assert.deepEqual(afterBackups, firstBackups, "re-fire must not leak a second migrate-* backup");
+  assert.equal(
+    readFileSync(join(backupRoot, firstBackups[0]!, "M001", "slices", "S01", "S01-CONTEXT.md"), "utf-8"),
+    "# Resurrected context\n",
+    "the retained backup must archive the current legacy tree",
+  );
   assert.equal(existsSync(join(base, ".gsd", "milestones")), false, "legacy milestones/ removed again");
 });
 
@@ -508,6 +515,30 @@ test("migrateToFlatPhase still rejects legacy projections with unknown identitie
 
   assert.equal(existsSync(join(base, ".gsd", "phases")), false);
   assert.equal(existsSync(join(unknownDir, "M999-CONTEXT.md")), true);
+});
+
+test("migrateToFlatPhase rejects structurally unknown slice identities", async () => {
+  const base = makeTmp();
+  const unknownSlice = join(base, ".gsd", "milestones", "M001", "slices", "S99");
+  mkdirSync(unknownSlice, { recursive: true });
+  writeFileSync(join(unknownSlice, "S99-CONTEXT.md"), "# Unknown Slice\n", "utf-8");
+
+  await assert.rejects(() => migrateToFlatPhase(base), /Recommended: run `\/gsd recover`/);
+
+  assert.equal(existsSync(join(base, ".gsd", "phases")), false);
+  assert.equal(existsSync(join(unknownSlice, "S99-CONTEXT.md")), true);
+});
+
+test("migrateToFlatPhase rejects content-bearing unparseable milestone directories", async () => {
+  const base = makeTmp();
+  const unknownMilestone = join(base, ".gsd", "milestones", "unparseable-milestone");
+  mkdirSync(unknownMilestone, { recursive: true });
+  writeFileSync(join(unknownMilestone, "CONTEXT.md"), "# Unknown Milestone\n", "utf-8");
+
+  await assert.rejects(() => migrateToFlatPhase(base), /Recommended: run `\/gsd recover`/);
+
+  assert.equal(existsSync(join(base, ".gsd", "phases")), false);
+  assert.equal(existsSync(join(unknownMilestone, "CONTEXT.md")), true);
 });
 
 test("pruneStaleFlatPhaseBackups removes migrate-* dirs older than retention window", async () => {

@@ -119,13 +119,6 @@ function milestoneIdFromLegacyDirName(name: string): string | null {
 }
 
 function legacyHierarchyContainsUnknownIdentity(basePath: string, legacyRoot: string): boolean {
-  const markdown = scanMarkdownHierarchy(basePath);
-  const legacyMilestoneIds = new Set(
-    readdirSync(legacyRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => milestoneIdFromLegacyDirName(entry.name))
-      .filter((id): id is string => id !== null),
-  );
   const milestones = getAllMilestones();
   const dbMilestones = new Set(milestones.map((milestone) => milestone.id));
   const dbSlices = new Set<string>();
@@ -140,6 +133,34 @@ function legacyHierarchyContainsUnknownIdentity(basePath: string, legacyRoot: st
     }
   }
 
+  const legacyMilestoneIds = new Set<string>();
+  for (const milestoneEntry of readdirSync(legacyRoot, { withFileTypes: true })) {
+    if (!milestoneEntry.isDirectory()) continue;
+    const milestonePath = join(legacyRoot, milestoneEntry.name);
+    if (!dirIsContentBearingLegacyMilestone(milestonePath)) continue;
+
+    const milestoneId = milestoneIdFromLegacyDirName(milestoneEntry.name);
+    if (!milestoneId || !dbMilestones.has(milestoneId)) return true;
+    legacyMilestoneIds.add(milestoneId);
+
+    const slicesPath = join(milestonePath, "slices");
+    if (!existsSync(slicesPath)) continue;
+    for (const sliceEntry of readdirSync(slicesPath, { withFileTypes: true })) {
+      if (!sliceEntry.isDirectory()) continue;
+      const sliceId = sliceEntry.name.match(/^(S\d+)(?:-|$)/i)?.[1]?.toUpperCase();
+      if (!sliceId || !dbSlices.has(`${milestoneId}/${sliceId}`)) return true;
+
+      const tasksPath = join(slicesPath, sliceEntry.name, "tasks");
+      if (!existsSync(tasksPath)) continue;
+      for (const taskEntry of readdirSync(tasksPath, { withFileTypes: true })) {
+        const taskId = taskEntry.name.match(/^(T\d+)(?:-|$)/i)?.[1]?.toUpperCase();
+        if (taskId && !dbTasks.has(`${milestoneId}/${sliceId}/${taskId}`)) return true;
+        if (!taskId && taskEntry.isDirectory()) return true;
+      }
+    }
+  }
+
+  const markdown = scanMarkdownHierarchy(basePath);
   return (
     [...markdown.milestones].some((id) => legacyMilestoneIds.has(id) && !dbMilestones.has(id)) ||
     [...markdown.slices].some((id) => legacyMilestoneIds.has(id.split("/")[0]!) && !dbSlices.has(id)) ||
@@ -421,35 +442,24 @@ async function migrateToFlatPhaseLocked(basePath: string): Promise<void> {
     return;
   }
 
-  let backupDir: string;
-  let backupCreatedThisRun = false;
-  if (!resumingInterrupted) {
-    // 2. Backup (only reached when the DB has rows and migration will proceed).
-    // The comparison above proved that the legacy projection holds no identity
-    // absent from the DB. If a prior successful migration already snapshotted
-    // the legacy tree, a re-fire of this gate must not leak a fresh
-    // .gsd-backups/migrate-<ts>/ on every startup. Reuse the existing snapshot
-    // as the rollback fallback instead of creating a duplicate.
-    const priorBackup = existingMigrateBackup(basePath);
-    if (priorBackup) {
-      backupDir = priorBackup;
-      logWarning(
-        "migration",
-        `flat-phase migration re-fired; reusing existing backup ${priorBackup} instead of re-snapshotting (issue #1292)`,
-      );
-    } else {
-      const ts = Date.now();
-      backupDir = join(basePath, ".gsd-backups", `migrate-${ts}`);
-      try {
-        mkdirSync(join(basePath, ".gsd-backups"), { recursive: true });
-        cpSync(milestonesPath, backupDir, { recursive: true });
-        backupCreatedThisRun = true;
-      } catch (err) {
-        logWarning("migration", `flat-phase migration backup failed: ${(err as Error).message}`);
-        throw err;
-      }
-    }
+  const priorBackup = existingMigrateBackup(basePath);
+  const backupDir = priorBackup ?? join(basePath, ".gsd-backups", `migrate-${Date.now()}`);
+  const backupCreatedThisRun = !priorBackup;
+  try {
+    mkdirSync(join(basePath, ".gsd-backups"), { recursive: true });
+    cpSync(legacySource, backupDir, { recursive: true, force: true });
+  } catch (err) {
+    logWarning("migration", `flat-phase migration backup failed: ${(err as Error).message}`);
+    throw err;
+  }
+  if (priorBackup) {
+    logWarning(
+      "migration",
+      `flat-phase migration re-fired; refreshed existing backup ${priorBackup} instead of creating another (issue #1292)`,
+    );
+  }
 
+  if (!resumingInterrupted) {
     if (existsSync(migratingPath)) {
       removeManagedPath(migratingPath);
     }
@@ -462,25 +472,6 @@ async function migrateToFlatPhaseLocked(basePath: string): Promise<void> {
     } catch (err) {
       logWarning("migration", `failed to move legacy milestones/ before render: ${(err as Error).message}`);
       throw err;
-    }
-  } else {
-    const priorBackup = existingMigrateBackup(basePath);
-    if (priorBackup) {
-      backupDir = priorBackup;
-    } else {
-      const ts = Date.now();
-      backupDir = join(basePath, ".gsd-backups", `migrate-${ts}`);
-      try {
-        mkdirSync(join(basePath, ".gsd-backups"), { recursive: true });
-        cpSync(migratingPath, backupDir, { recursive: true });
-        backupCreatedThisRun = true;
-      } catch (err) {
-        logWarning(
-          "migration",
-          `flat-phase migration backup failed during resume: ${(err as Error).message}`,
-        );
-        throw err;
-      }
     }
   }
 
