@@ -31,7 +31,7 @@ import { removeProjectionTreeSync } from "../../atomic-write.js";
 import { invalidateStateCache } from "../../state.js";
 import type { GSDState } from "../../types.js";
 import { isAfter, latestExplicitReopenAt } from "../../milestone-reopen-events.js";
-import { classifyTaskSummaryProjection } from "../../task-summary-projection-classification.js";
+import { isCanonicalStagedTaskSummaryProjection } from "../../task-summary-projection-classification.js";
 import type { DriftContext, DriftHandler, DriftRecord } from "../types.js";
 
 type DiskSliceIdDivergenceDrift = Extract<
@@ -203,7 +203,7 @@ function detectArtifactDbStatusDriftForMilestone(
         continue;
       }
       if (isClosedStatus(task.status)) continue;
-      if (classifyTaskSummaryProjection(basePath, {
+      if (isCanonicalStagedTaskSummaryProjection(basePath, {
         path: row.path,
         milestoneId: row.milestone_id,
         sliceId: row.slice_id,
@@ -215,7 +215,7 @@ function detectArtifactDbStatusDriftForMilestone(
         taskId: task.id,
         status: task.status,
         fullSummaryMd: task.full_summary_md,
-      }) === "staged-current") {
+      })) {
         currentStagedTaskIds.add(task.id);
         continue;
       }

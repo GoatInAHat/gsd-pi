@@ -534,6 +534,20 @@ test("#1677: a canonical staged Task SUMMARY is current while awaiting host veri
   await assertStagedSummaryIsCurrent(basePath);
 });
 
+test("#1677: an unreadable canonical Task SUMMARY remains fail-closed", async () => {
+  const { stageTaskCompletion } = await subject();
+  const { basePath } = createFixture();
+  const staged = await stageTaskCompletion(stageInput(basePath));
+  unlinkSync(staged.summaryPath);
+  mkdirSync(staged.summaryPath);
+
+  assert.deepEqual(
+    await taskSummaryDivergence(basePath),
+    { doctorDivergence: true, reconciliationDivergence: true },
+    "diagnostics must report divergence when canonical content cannot be read",
+  );
+});
+
 test("#1677: a canonical staged Task SUMMARY remains current on a host-verification recovery route", async () => {
   const { stageTaskCompletion } = await subject();
   const { basePath, attemptId } = createFixture();

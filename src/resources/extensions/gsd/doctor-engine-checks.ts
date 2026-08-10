@@ -33,7 +33,7 @@ import { parseRoadmapSlices } from "./roadmap-slices.js";
 import { parseLegacyPlan } from "./schemas/parsers.js";
 import { LAYOUT_SEGMENTS } from "./layout-policy.js";
 import { resolveCanonicalMilestoneRoot } from "./worktree-manager.js";
-import { classifyTaskSummaryProjection } from "./task-summary-projection-classification.js";
+import { isCanonicalStagedTaskSummaryProjection } from "./task-summary-projection-classification.js";
 
 const USER_AUTHORED_ARTIFACT_TYPES = new Set(["CONTEXT", "RESEARCH"]);
 
@@ -727,7 +727,7 @@ export async function checkEngineHealth(
             row.task_status &&
             row.slice_id &&
             row.task_id &&
-            classifyTaskSummaryProjection(basePath, {
+            isCanonicalStagedTaskSummaryProjection(basePath, {
               path: row.path,
               milestoneId: row.milestone_id,
               sliceId: row.slice_id,
@@ -739,7 +739,7 @@ export async function checkEngineHealth(
               taskId: row.task_id,
               status: row.task_status,
               fullSummaryMd: row.task_full_summary_md ?? "",
-            }) === "staged-current"
+            })
           ) {
             continue;
           }
