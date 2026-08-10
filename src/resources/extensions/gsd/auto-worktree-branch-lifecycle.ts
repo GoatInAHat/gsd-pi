@@ -5,7 +5,7 @@
 // instead of keeping branch policy inside the legacy auto-worktree barrel.
 
 import { GSDError, GSD_GIT_ERROR } from "./errors.js";
-import { readIntegrationBranch } from "./git-service.js";
+import { readIntegrationBranch, runGit } from "./git-service.js";
 import { loadEffectiveGSDPreferences } from "./preferences.js";
 import { debugLog } from "./debug-logger.js";
 import { checkoutBranchWithStashGuard } from "./worktree-git-recovery.js";
@@ -69,6 +69,27 @@ export function enterBranchModeForMilestone(
       ) ??
       nativeDetectMainBranch(basePath);
 
+    if (
+      !startPoint ||
+      !runGit(
+        basePath,
+        ["rev-parse", "--verify", "--quiet", `${startPoint}^{commit}`],
+        { allowFailure: true },
+      )
+    ) {
+      // An unborn repository has no commit-backed ref to branch from. Let Git
+      // move symbolic HEAD directly while preserving the index and untracked
+      // project files that will become the first milestone commit.
+      runGit(basePath, ["checkout", "-b", branch]);
+      debugLog("auto-worktree", {
+        action: "enterBranchMode",
+        milestoneId,
+        branch,
+        created: true,
+      });
+      return;
+    }
+
     // TOCTOU ancestry guard (Issue #4980 HIGH-3).
     //
     // The outer `branchExists` check is racy: a concurrent process
@@ -108,6 +129,22 @@ export function enterBranchModeForMilestone(
       branch,
       reused: true,
     });
+  }
+
+  // A zero-commit repo has no commit-backed ref for the milestone branch even
+  // when it is already checked out, and `git checkout <branch>` then fails with
+  // "pathspec did not match". HEAD already points at the (unborn) milestone
+  // branch in that case, so branch entry is complete.
+  if (
+    !runGit(
+      basePath,
+      ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`],
+      { allowFailure: true },
+    ) &&
+    runGit(basePath, ["branch", "--show-current"], { allowFailure: true }) ===
+      branch
+  ) {
+    return;
   }
 
   checkoutBranchWithStashGuard(

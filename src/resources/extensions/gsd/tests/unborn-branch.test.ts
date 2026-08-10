@@ -10,12 +10,16 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
-import { nativeBranchExists } from "../native-git-bridge.ts";
+import {
+  nativeBranchExists,
+  nativeDetectMainBranch,
+} from "../native-git-bridge.ts";
+import { enterBranchModeForMilestone } from "../auto-worktree-branch-lifecycle.ts";
 
 function git(args: string[], cwd: string): string {
   return execFileSync("git", args, {
@@ -56,6 +60,60 @@ test("nativeBranchExists: returns false for non-existent branch in unborn repo",
     // A branch that is NOT the current unborn branch should still return false.
     const exists = nativeBranchExists(dir, "nonexistent-branch");
     assert.strictEqual(exists, false, "non-current branch should not exist in unborn repo");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("branch isolation enters the milestone branch in an unborn repo", () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "unborn-branch-test-")));
+  const previousCwd = process.cwd();
+  const previousGsdHome = process.env.GSD_HOME;
+  const gsdHome = realpathSync(mkdtempSync(join(tmpdir(), "unborn-branch-home-")));
+  try {
+    process.chdir(dir);
+    process.env.GSD_HOME = gsdHome;
+    git(["init", "--initial-branch=main"], dir);
+    writeFileSync(join(dir, "project.txt"), "untracked project content\n");
+    mkdirSync(join(dir, ".gsd"));
+    writeFileSync(
+      join(dir, ".gsd", "M001-META.json"),
+      JSON.stringify({ integrationBranch: "main" }),
+    );
+
+    assert.equal(nativeDetectMainBranch(dir), "");
+
+    enterBranchModeForMilestone(dir, "M001");
+
+    assert.equal(git(["branch", "--show-current"], dir), "milestone/M001");
+
+    // Re-entry while the repo is still unborn must not fail: the milestone
+    // branch has no commit-backed ref yet, so a plain checkout would abort
+    // with "pathspec did not match".
+    enterBranchModeForMilestone(dir, "M001");
+
+    assert.equal(git(["branch", "--show-current"], dir), "milestone/M001");
+    assert.equal(
+      git(["status", "--short"], dir),
+      "?? .gsd/\n?? project.txt",
+      "branch creation should preserve untracked project content",
+    );
+  } finally {
+    process.chdir(previousCwd);
+    if (previousGsdHome === undefined) delete process.env.GSD_HOME;
+    else process.env.GSD_HOME = previousGsdHome;
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(gsdHome, { recursive: true, force: true });
+  }
+});
+
+test("nativeDetectMainBranch: still throws for a path that is not a repo", () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "unborn-branch-nonrepo-")));
+  try {
+    // "" is reserved for an unborn HEAD inside a real repo. A non-repo path
+    // must keep failing loudly so callers (e.g. the orchestrator's branch
+    // discovery guard) still take their error path.
+    assert.throws(() => nativeDetectMainBranch(dir));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
