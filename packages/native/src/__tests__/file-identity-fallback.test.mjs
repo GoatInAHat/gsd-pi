@@ -116,7 +116,9 @@ test("projection root lock permits root writes, excludes a second owner, and rea
   assert.equal(lock.readFile("PROJECT.md").toString(), "# Project\n");
   assert.ok(lock.listDirectory("").includes("PROJECT.md"));
 
-  lock.close();
-  lock = acquireProjectionRootIdentityLock(root, stat.dev.toString(), stat.ino.toString());
-  assert.equal(lock.readFile("PROJECT.md").toString(), "# Project\n");
+  for (let acquisition = 2; acquisition <= 4; acquisition++) {
+    lock.close();
+    lock = acquireProjectionRootIdentityLock(root, stat.dev.toString(), stat.ino.toString());
+    assert.equal(lock.readFile("PROJECT.md").toString(), "# Project\n", `acquisition ${acquisition}`);
+  }
 });
