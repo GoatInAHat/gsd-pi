@@ -8,6 +8,9 @@ This changelog starts from the `open-gsd/gsd-pi` ownership baseline. Earlier pro
 
 ## [Unreleased]
 
+### Removed
+- **cloud**: remove the unused legacy Cloud v1 agent, MCP gateway, and macOS monitor; this retired code is unrelated to the current `gsd-cloud` project
+
 ## [1.14.0] - 2026-08-10
 
 ### Added
