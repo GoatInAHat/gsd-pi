@@ -2047,10 +2047,11 @@ export function closeAllDatabases(): void {
  * Open (or reuse) the database connection scoped to the given workspace.
  *
  * Uses workspace.identityKey as the cache key, so sibling worktrees of the
- * same project resolve to the same connection. On a cache hit the existing
- * adapter is reactivated as the current connection without re-opening the
- * file. On a cache miss, delegates to openDatabase() for the full
- * open + schema-init + migration flow, then caches the result.
+ * same project resolve to the same connection. On a cache hit with complete
+ * startup invariants, the existing adapter is reactivated without re-opening
+ * the file. A cache hit that needs repair is closed and reopened through the
+ * guarded schema-init flow. On a cache miss, delegates to openDatabase() for
+ * the full open + schema-init + migration flow, then caches the result.
  *
  * When switching to a different workspace, the previously active connection
  * is preserved in the cache (not closed), so callers can switch back to it

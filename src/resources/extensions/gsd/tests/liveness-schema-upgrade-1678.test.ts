@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -9,6 +9,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { getOpenWedge } from "../auto-liveness-backstop.ts";
+import { databaseMaintenanceIntentPath } from "../database-maintenance-fence.ts";
 import { runGSDDoctor } from "../doctor.ts";
 import { createDbAdapter, type DbAdapter } from "../db-adapter.ts";
 import { _setStartupInitializationBoundaryForTest } from "../db/engine.ts";
@@ -311,12 +312,15 @@ test("#1678: failed cached repair preserves the active workspace", (t) => {
   assert.equal(openDatabaseByWorkspace(targetWorkspace), true);
   dropLivenessSchema();
   assert.equal(openDatabaseByWorkspace(activeWorkspace), true);
-  _setStartupInitializationBoundaryForTest((path) => {
-    if (path === target.dbPath) throw new Error("repair blocked");
+  _setStartupInitializationBoundaryForTest(() => {
+    throw new Error("repair blocked");
   });
 
   assert.throws(() => openDatabaseByWorkspace(targetWorkspace), /repair blocked/);
-  assert.equal(_getAdapter()!.prepare("PRAGMA database_list").get()?.["file"], active.dbPath);
+  assert.equal(
+    _getAdapter()!.prepare("PRAGMA database_list").get()?.["file"],
+    activeWorkspace.contract.projectDb,
+  );
   assert.equal(_getAdapter()!.prepare("SELECT 1 AS value").get()?.["value"], 1);
 });
 
@@ -344,6 +348,7 @@ for (const [name, dropStatement] of [
 test("#1678: same-process doctor fix reports and repairs missing liveness schema", async (t) => {
   const { basePath, dbPath } = createProject();
   t.after(() => {
+    _setStartupInitializationBoundaryForTest(null);
     closeDatabase();
     rmSync(basePath, { recursive: true, force: true });
   });
@@ -355,9 +360,15 @@ test("#1678: same-process doctor fix reports and repairs missing liveness schema
   assert.equal(failedRead.ok, false);
   if (!failedRead.ok) assert.match(failedRead.error, /no such table: liveness_wedge_records/);
   const rowsBefore = snapshotWorkflowRows();
+  let guardedStartupObserved = false;
+  _setStartupInitializationBoundaryForTest((path) => {
+    guardedStartupObserved = true;
+    assert.equal(existsSync(databaseMaintenanceIntentPath(path)), true);
+  });
 
   const report = await runGSDDoctor(basePath, { fix: true });
 
+  assert.equal(guardedStartupObserved, true, "doctor repair must run through guarded startup maintenance");
   assert.ok(
     report.issues.some((issue) => String(issue.code) === "liveness_backstop_schema_missing"),
     "doctor records the schema defect it encountered",
