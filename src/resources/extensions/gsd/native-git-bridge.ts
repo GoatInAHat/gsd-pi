@@ -419,6 +419,15 @@ export function nativeHasCommittedHead(basePath: string): boolean {
   }
 }
 
+export function nativeIsCurrentUnbornBranch(basePath: string, branch: string): boolean {
+  const native = loadNative();
+  const currentBranch = currentBranchIncludingUnborn(
+    () => native?.gitCurrentBranch(basePath) ?? null,
+    () => gitExec(basePath, ["symbolic-ref", "--quiet", "--short", "HEAD"], true),
+  );
+  return currentBranch === branch && !nativeHasCommittedHead(basePath);
+}
+
 /**
  * Check if there are staged changes (index differs from HEAD).
  * Native: libgit2 tree-to-index diff.
@@ -1045,12 +1054,8 @@ export function nativeCommit(
  * Fallback: `git checkout <branch>`.
  */
 export function nativeCheckoutBranch(basePath: string, branch: string): void {
+  if (nativeIsCurrentUnbornBranch(basePath, branch)) return;
   const native = loadNative();
-  const currentBranch = currentBranchIncludingUnborn(
-    () => native?.gitCurrentBranch(basePath) ?? null,
-    () => gitExec(basePath, ["symbolic-ref", "--quiet", "--short", "HEAD"], true),
-  );
-  if (currentBranch === branch && !nativeHasCommittedHead(basePath)) return;
   if (native) {
     native.gitCheckoutBranch(basePath, branch);
     return;

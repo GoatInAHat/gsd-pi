@@ -89,15 +89,17 @@ test("native branch lookup falls back when unborn HEAD throws", () => {
   assert.equal(branchExistsIncludingUnborn(false, currentBranch, "milestone/M001"), true);
 });
 
-test("branch mode re-enters the current unborn milestone branch", (t) => {
+test("branch mode re-enters a dirty current unborn milestone branch", (t) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "unborn-branch-test-")));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   git(["init"], dir);
 
   enterBranchModeForMilestone(dir, "M001");
+  writeFileSync(join(dir, "draft.txt"), "uncommitted work\n");
   enterBranchModeForMilestone(dir, "M001");
 
   assert.equal(git(["symbolic-ref", "--short", "HEAD"], dir), "milestone/M001");
+  assert.equal(git(["status", "--short", "draft.txt"], dir), "?? draft.txt");
 });
 
 test("nativeBranchExists: still works for real branches with commits", () => {
