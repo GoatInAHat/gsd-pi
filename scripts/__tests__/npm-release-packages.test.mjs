@@ -140,16 +140,23 @@ test("workspace discovery emits portable package directory IDs", (t) => {
 });
 
 test("workspace packages are ordered so dependencies publish first", () => {
-  const order = getOrderedWorkspacePublishList().map((p) => p.name);
-  const idx = (name) => order.indexOf(name);
-  // daemon depends on contracts, mcp-server, rpc-client
-  assert.ok(idx("@opengsd/contracts") < idx("@opengsd/daemon"));
-  assert.ok(idx("@opengsd/rpc-client") < idx("@opengsd/daemon"));
-  assert.ok(idx("@opengsd/mcp-server") < idx("@opengsd/daemon"));
-  // cloud-mcp-gateway depends on mcp-server; mcp-server depends on contracts + rpc-client
-  assert.ok(idx("@opengsd/mcp-server") < idx("@opengsd/cloud-mcp-gateway"));
-  assert.ok(idx("@opengsd/contracts") < idx("@opengsd/mcp-server"));
-  assert.ok(idx("@opengsd/rpc-client") < idx("@opengsd/mcp-server"));
+  const packages = getOrderedWorkspacePublishList();
+  const indexByName = new Map(packages.map((pkg, index) => [pkg.name, index]));
+
+  for (const pkg of packages) {
+    const manifest = JSON.parse(
+      readFileSync(path.join(repoRoot, pkg.dir, "package.json"), "utf8"),
+    );
+    for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+      for (const dependency of Object.keys(manifest[field] ?? {})) {
+        if (!indexByName.has(dependency)) continue;
+        assert.ok(
+          indexByName.get(dependency) < indexByName.get(pkg.name),
+          `${dependency} must publish before ${pkg.name}`,
+        );
+      }
+    }
+  }
 });
 
 test("--workspace-dirs CLI output has no trailing blank line (regression: empty list must not emit a lone newline)", () => {
