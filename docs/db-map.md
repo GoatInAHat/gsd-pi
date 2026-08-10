@@ -55,6 +55,7 @@ After commit: regenerate markdown artifacts → write to disk → invalidate cac
 - Keyed by workspace `identityKey` (realpath of project root)
 - Sibling worktrees share the same `.gsd/gsd.db` via SQLite WAL
 - Only one connection is "active" at a time; others cached for fast re-activation
+- Fresh, active, and cached opens verify startup schema invariants before reuse. Missing non-versioned ADR-047 liveness tables or the open-wedge index force the same guarded startup-maintenance reopen used for other schema repairs; this preserves version stamps and existing rows.
 - On process exit: close without checkpointing; coordinated maintenance owns checkpoint and vacuum
 - Before file-backed schema migrations, `db-migration-backup.ts` checkpoints WAL and replaces `.gsd/gsd.db.backup-vN` with a copy of the database being migrated. The copy must report the expected schema version and pass SQLite `quick_check`; checkpoint, copy, or validation failures warn and fail closed before migration DDL.
 
@@ -118,6 +119,7 @@ history below explains each migration without duplicating that live value.
 | V43 | **Milestone completion transition**: permits only a causally matching `milestone.complete` operation to move a Milestone lifecycle directly to canonical `completed` |
 | V44 | **Hierarchy reopen authorization**: permits terminal-to-`ready` transitions only through the matching Task, Slice, or Milestone reopen operation for each hierarchy level |
 | V45 | **Authority recovery receipts**: immutable, operation-bound receipts for Authority Cutover, pre-later-write Import Restore, and retained-Application Forward Repair |
+| V46 | **State-DB cutover stamp**: records schema version 46 and stamps `PRAGMA application_id` and `PRAGMA user_version`; adds no tables |
 
 ---
 
@@ -577,7 +579,7 @@ Fallback: LIKE scan if FTS5 unavailable
 
 ---
 
-### 3c. Auto-Mode Coordination (V24)
+### 3c. Auto-Mode Coordination (V24 and ADR-047)
 
 #### `workers`
 ```
@@ -671,6 +673,16 @@ result_json  TEXT
 ```
 - Index: `idx_command_queue_pending` (target_worker, claimed_at)
 - Claiming is a read-then-write path and uses `immediateTransaction()` so WAL workers serialize before selecting the pending row instead of failing a deferred write upgrade with `SQLITE_BUSY_SNAPSHOT`.
+
+---
+
+#### ADR-047 liveness ledger (non-versioned)
+
+`db-liveness-backstop-schema.ts` is the authoritative schema source for the
+liveness tables and open-wedge index. These objects are startup invariants
+rather than a numbered migration: missing objects are recreated through guarded
+startup maintenance without changing `schema_version`, `application_id`, or
+`user_version`; `/gsd doctor` records a detected repair.
 
 ---
 

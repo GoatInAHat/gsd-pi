@@ -92,6 +92,7 @@ export type DoctorIssueCode =
   | "completed_milestone_reopened"
   | "db_duplicate_id"
   | "db_unavailable"
+  | "liveness_backstop_schema_missing"
   | "memories_fts_rebuild_missing"
   | "projection_drift"
   | "unresolved_projection_evidence"
