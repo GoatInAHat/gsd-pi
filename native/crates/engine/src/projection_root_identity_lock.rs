@@ -39,6 +39,8 @@ use std::os::windows::fs::OpenOptionsExt;
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
 #[cfg(windows)]
+use std::os::windows::io::IntoRawHandle;
+#[cfg(windows)]
 use std::path::Path;
 
 #[cfg(unix)]
@@ -100,6 +102,7 @@ static MUTATION_BOUNDARY_FAULT: DisabledMutationBoundaryFault = DisabledMutation
 #[cfg(windows)]
 #[link(name = "kernel32")]
 extern "system" {
+    fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
     fn GetFileInformationByHandle(
         handle: *mut std::ffi::c_void,
         information: *mut WindowsFileInformation,
@@ -1559,8 +1562,19 @@ impl ProjectionRootIdentityLock {
     }
 
     #[napi]
-    pub fn close(&mut self) {
-        self.file.take();
+    pub fn close(&mut self) -> Result<()> {
+        let Some(file) = self.file.take() else {
+            return Ok(());
+        };
+        #[cfg(windows)]
+        {
+            return close_windows_root_directory(file);
+        }
+        #[cfg(not(windows))]
+        {
+            drop(file);
+            Ok(())
+        }
     }
 }
 
@@ -2008,6 +2022,19 @@ fn open_windows_root_directory(path: &Path) -> Result<File> {
         ));
     }
     Ok(file)
+}
+
+#[cfg(windows)]
+fn close_windows_root_directory(file: File) -> Result<()> {
+    // Transfer ownership out of `File` and close the root handle explicitly so
+    // close failures reach JavaScript instead of being discarded by `File`'s
+    // infallible Drop. This is the only handle whose sharing contract excludes
+    // another projection mutation owner.
+    let handle = file.into_raw_handle();
+    if unsafe { CloseHandle(handle) } == 0 {
+        return Err(projection_error(std::io::Error::last_os_error()));
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
