@@ -20,6 +20,7 @@ import {
   currentBranchIncludingUnborn,
   nativeBranchExists,
 } from "../native-git-bridge.ts";
+import { enterBranchModeForMilestone } from "../auto-worktree-branch-lifecycle.ts";
 
 function git(args: string[], cwd: string): string {
   return execFileSync("git", args, {
@@ -86,6 +87,17 @@ test("native branch lookup falls back when unborn HEAD throws", () => {
 
   assert.equal(currentBranch, "milestone/M001");
   assert.equal(branchExistsIncludingUnborn(false, currentBranch, "milestone/M001"), true);
+});
+
+test("branch mode re-enters the current unborn milestone branch", (t) => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "unborn-branch-test-")));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  git(["init"], dir);
+
+  enterBranchModeForMilestone(dir, "M001");
+  enterBranchModeForMilestone(dir, "M001");
+
+  assert.equal(git(["symbolic-ref", "--short", "HEAD"], dir), "milestone/M001");
 });
 
 test("nativeBranchExists: still works for real branches with commits", () => {

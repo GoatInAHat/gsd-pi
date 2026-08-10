@@ -1046,6 +1046,11 @@ export function nativeCommit(
  */
 export function nativeCheckoutBranch(basePath: string, branch: string): void {
   const native = loadNative();
+  const currentBranch = currentBranchIncludingUnborn(
+    () => native?.gitCurrentBranch(basePath) ?? null,
+    () => gitExec(basePath, ["symbolic-ref", "--quiet", "--short", "HEAD"], true),
+  );
+  if (currentBranch === branch && !nativeHasCommittedHead(basePath)) return;
   if (native) {
     native.gitCheckoutBranch(basePath, branch);
     return;
