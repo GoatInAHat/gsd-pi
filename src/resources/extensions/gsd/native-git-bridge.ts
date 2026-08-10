@@ -253,8 +253,12 @@ export function nativeDetectMainBranch(basePath: string): string {
   const masterExists = gitExec(basePath, ["show-ref", "--verify", "refs/heads/master"], true);
   if (masterExists) return "master";
 
+  // An unborn HEAD (zero-commit repo) still reports a current branch name,
+  // which callers would use as a start point and hit "not a valid object
+  // name". Report "" instead — but only when this really is a repo, so a
+  // non-repo path keeps throwing the way the native path does.
   const head = gitExec(basePath, ["rev-parse", "--verify", "--quiet", "HEAD"], true);
-  if (!head) return "";
+  if (!head && gitExec(basePath, ["rev-parse", "--git-dir"], true)) return "";
 
   return gitExec(basePath, ["branch", "--show-current"]);
 }

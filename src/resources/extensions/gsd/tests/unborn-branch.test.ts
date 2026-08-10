@@ -107,6 +107,18 @@ test("branch isolation enters the milestone branch in an unborn repo", () => {
   }
 });
 
+test("nativeDetectMainBranch: still throws for a path that is not a repo", () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "unborn-branch-nonrepo-")));
+  try {
+    // "" is reserved for an unborn HEAD inside a real repo. A non-repo path
+    // must keep failing loudly so callers (e.g. the orchestrator's branch
+    // discovery guard) still take their error path.
+    assert.throws(() => nativeDetectMainBranch(dir));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("nativeBranchExists: still works for real branches with commits", () => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "unborn-branch-test-")));
   try {
