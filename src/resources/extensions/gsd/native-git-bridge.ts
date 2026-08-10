@@ -1032,6 +1032,16 @@ export function nativeCheckoutBranch(basePath: string, branch: string): void {
   });
 }
 
+/** Create and enter a branch when HEAD is unborn and has no commit target. */
+export function nativeCheckoutNewBranch(basePath: string, branch: string): void {
+  execFileSync("git", ["checkout", "-b", branch], {
+    cwd: basePath,
+    stdio: ["ignore", "pipe", "pipe"],
+    encoding: "utf-8",
+    env: GIT_NO_PROMPT_ENV,
+  });
+}
+
 /**
  * Resolve index conflicts by accepting "theirs" version.
  * Native: libgit2 index conflict resolution.

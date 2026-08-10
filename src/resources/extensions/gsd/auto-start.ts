@@ -124,7 +124,10 @@ import {
   resolveDefaultSessionModel,
   resolveDynamicRoutingConfig,
 } from "./preferences-models.js";
-import type { WorktreeLifecycle } from "./worktree-lifecycle.js";
+import {
+  prepareIsolationForNewRun,
+  type WorktreeLifecycle,
+} from "./worktree-lifecycle.js";
 import { getSessionModelOverride } from "./session-model-override.js";
 import { setAutoActiveStatus } from "./auto-dashboard.js";
 
@@ -1040,6 +1043,8 @@ export async function bootstrapAutoSession(
   deps: BootstrapDeps,
   interrupted: InterruptedSessionAssessment,
 ): Promise<boolean> {
+  prepareIsolationForNewRun(s);
+
   const {
     shouldUseWorktreeIsolation,
     registerSigtermHandler,
