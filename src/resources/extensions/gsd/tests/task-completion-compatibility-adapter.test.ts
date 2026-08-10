@@ -38,7 +38,11 @@ import {
   appendKernelCheckpoint,
   readDomainOperationFence,
 } from "../db/writers/lifecycle-commands.js";
+import { checkEngineHealth } from "../doctor-engine-checks.js";
+import type { DoctorIssue } from "../doctor-types.js";
 import type { ExecutionInvocation } from "../execution-invocation.js";
+import { detectArtifactDbDrift } from "../state-reconciliation/drift/artifact-db.js";
+import type { GSDState } from "../types.js";
 
 interface TaskIdentity {
   milestoneId: string;
@@ -416,6 +420,47 @@ function taskState(): Record<string, unknown> {
   `);
 }
 
+function reconciliationState(): GSDState {
+  return {
+    activeMilestone: { id: "M001", title: "Compatibility adapter" },
+    activeSlice: null,
+    activeTask: null,
+    phase: "executing",
+    recentDecisions: [],
+    blockers: [],
+    nextAction: "Verify task",
+    registry: [],
+    requirements: { active: 0, validated: 0, deferred: 0, outOfScope: 0, blocked: 0, total: 0 },
+    progress: { milestones: { done: 0, total: 1 } },
+  };
+}
+
+async function taskSummaryDivergence(basePath: string): Promise<{
+  doctorDivergence: boolean;
+  reconciliationDivergence: boolean;
+}> {
+  const issues: DoctorIssue[] = [];
+  await checkEngineHealth(basePath, issues, []);
+  const doctorDivergence = issues.some((issue) =>
+    issue.code === "artifact_db_status_divergence" && issue.unitId === "M001/S01/T01"
+  );
+
+  const state = reconciliationState();
+  const drifts = detectArtifactDbDrift(state, { basePath, state });
+  const reconciliationDivergence = drifts.some((drift) =>
+    drift.kind === "artifact-db-status-divergence" && drift.taskId === "T01"
+  );
+  return { doctorDivergence, reconciliationDivergence };
+}
+
+async function assertStagedSummaryIsCurrent(basePath: string): Promise<void> {
+  assert.deepEqual(
+    await taskSummaryDivergence(basePath),
+    { doctorDivergence: false, reconciliationDivergence: false },
+    "doctor and reconciliation must accept a canonical staged Task SUMMARY",
+  );
+}
+
 function settlementState(): Record<string, unknown> {
   return {
     authority: row("SELECT revision, authority_epoch FROM project_authority"),
@@ -473,6 +518,53 @@ test("staging settles the canonical Attempt but leaves legacy completion and its
   assert.match(readFileSync(staged.summaryPath, "utf8"), /host verification is still required/i);
   assert.match(readFileSync(planPath, "utf8"), /\[ \][^\n]*\*\*T01/);
   assert.equal(count("verification_evidence"), 1);
+});
+
+test("#1677: a canonical staged Task SUMMARY is current while awaiting host verification", async () => {
+  const { stageTaskCompletion } = await subject();
+  const { basePath } = createFixture();
+
+  const staged = await stageTaskCompletion(stageInput(basePath));
+
+  assert.equal(staged.nextStage, "verify");
+  assert.deepEqual(
+    row("SELECT status, completed_at FROM tasks WHERE id = 'T01'"),
+    { status: "in_progress", completed_at: null },
+  );
+  await assertStagedSummaryIsCurrent(basePath);
+});
+
+test("#1677: a canonical staged Task SUMMARY remains current on a host-verification recovery route", async () => {
+  const { stageTaskCompletion } = await subject();
+  const { basePath, attemptId } = createFixture();
+  await stageTaskCompletion(stageInput(basePath));
+
+  recordFailingHostVerdict(basePath, attemptId);
+
+  const attempt = readLatestTaskAttempt(TASK);
+  assert.equal(attempt?.state, "settled");
+  assert.equal(attempt?.outcome, "succeeded");
+  assert.equal(attempt?.nextStage, "route");
+  await assertStagedSummaryIsCurrent(basePath);
+});
+
+test("#1677: a failed executor Attempt cannot legitimize an open Task SUMMARY", async () => {
+  const { stageTaskCompletion } = await subject();
+  const { basePath } = createFixture();
+  const input = stageInput(basePath);
+  input.completion.blockerDiscovered = true;
+
+  const staged = await stageTaskCompletion(input);
+
+  const attempt = readLatestTaskAttempt(TASK);
+  assert.equal(staged.nextStage, "route");
+  assert.equal(attempt?.state, "settled");
+  assert.equal(attempt?.outcome, "failed");
+  assert.deepEqual(
+    await taskSummaryDivergence(basePath),
+    { doctorDivergence: true, reconciliationDivergence: true },
+    "executor failure evidence must remain fail-closed",
+  );
 });
 
 test("staging normalizes a pending legacy Task and clears its stale completion timestamp", async () => {

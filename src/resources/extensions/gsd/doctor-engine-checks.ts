@@ -33,6 +33,7 @@ import { parseRoadmapSlices } from "./roadmap-slices.js";
 import { parseLegacyPlan } from "./schemas/parsers.js";
 import { LAYOUT_SEGMENTS } from "./layout-policy.js";
 import { resolveCanonicalMilestoneRoot } from "./worktree-manager.js";
+import { classifyTaskSummaryProjection } from "./task-summary-projection-classification.js";
 
 const USER_AUTHORED_ARTIFACT_TYPES = new Set(["CONTEXT", "RESEARCH"]);
 
@@ -686,10 +687,11 @@ export async function checkEngineHealth(
       try {
         const rows = adapter
           .prepare(
-            `SELECT a.path, a.artifact_type, a.milestone_id, a.slice_id, a.task_id, a.imported_at,
+            `SELECT a.path, a.artifact_type, a.milestone_id, a.slice_id, a.task_id,
+                    a.full_content, a.imported_at,
                     m.status AS milestone_status,
                     s.status AS slice_status,
-                    t.status AS task_status,
+                    t.status AS task_status, t.full_summary_md AS task_full_summary_md,
                     (SELECT COUNT(*) FROM tasks tt WHERE tt.milestone_id = a.milestone_id AND tt.slice_id = a.slice_id) AS task_count
              FROM artifacts a
              JOIN milestones m ON m.id = a.milestone_id
@@ -704,9 +706,11 @@ export async function checkEngineHealth(
             milestone_id: string;
             slice_id: string | null;
             task_id: string | null;
+            full_content: string;
             imported_at: string | null;
             slice_status: string | null;
             task_status: string | null;
+            task_full_summary_md: string | null;
             task_count: number;
           }>;
 
@@ -718,6 +722,27 @@ export async function checkEngineHealth(
           const isSliceSummary = row.slice_id && !row.task_id && row.slice_status && !["complete", "done", "skipped", "closed"].includes(row.slice_status);
           const isTaskSummary = row.slice_id && row.task_id && (!row.task_status || !["complete", "done", "skipped", "closed"].includes(row.task_status));
           const isTaskArtifactWithoutDbTasks = row.slice_id && row.task_id && Number(row.task_count) === 0;
+          if (
+            isTaskSummary &&
+            row.task_status &&
+            row.slice_id &&
+            row.task_id &&
+            classifyTaskSummaryProjection(basePath, {
+              path: row.path,
+              milestoneId: row.milestone_id,
+              sliceId: row.slice_id,
+              taskId: row.task_id,
+              fullContent: row.full_content,
+            }, {
+              milestoneId: row.milestone_id,
+              sliceId: row.slice_id,
+              taskId: row.task_id,
+              status: row.task_status,
+              fullSummaryMd: row.task_full_summary_md ?? "",
+            }) === "staged-current"
+          ) {
+            continue;
+          }
           if (!isSliceSummary && !isTaskSummary && !isTaskArtifactWithoutDbTasks) continue;
 
           const unitId = row.task_id

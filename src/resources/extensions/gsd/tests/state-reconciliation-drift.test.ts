@@ -2045,12 +2045,10 @@ test("ADR-017: orphan task completion artifact fails closed", async (t) => {
   assert.match(result.blockers.join("\n"), /Artifact\/DB status drift/);
 });
 
-test("ADR-017 (#414): failure-path summary artifact blocker matches auto.ts filter phrase", async (t) => {
+test("ADR-017 (#414): an unproven failure-path summary remains a blocker", async (t) => {
   // When gsd_summary_save writes a SUMMARY artifact row for a task that never
   // called gsd_task_complete, the task stays pending and the artifact DB row
-  // produces an artifact-db-status-divergence blocker. The auto.ts dispatch
-  // wrapper must be able to filter this class of blocker to allow re-dispatch.
-  // If this test fails, update the filter strings in auto.ts to match.
+  // remains fail-closed without a canonical staged Attempt/Result.
   const base = mkdtempSync(join(tmpdir(), "gsd-failure-path-summary-drift-"));
   t.after(() => cleanup(base));
 
@@ -2075,17 +2073,11 @@ test("ADR-017 (#414): failure-path summary artifact blocker matches auto.ts filt
 
   assert.equal(result.ok, true);
   assert.ok(result.blockers.length > 0, "blocker must be produced for pending-task SUMMARY drift");
-  const blocker = result.blockers.join("\n");
-  assert.match(
-    blocker,
-    /has SUMMARY artifact while DB status is/,
-    "blocker phrase must match the filter in auto.ts reconcileBeforeDispatch wrapper",
-  );
+  assert.match(result.blockers.join("\n"), /Artifact\/DB status drift/);
 });
 
-test("ADR-017 (#414): no-db-tasks summary artifact blocker matches auto.ts filter phrase", async (t) => {
-  // When a slice has SUMMARY artifacts in the DB but no DB tasks, the auto.ts
-  // filter must be able to recognise this as a failure-path case and skip it.
+test("ADR-017 (#414): a summary artifact without DB tasks remains a blocker", async (t) => {
+  // No task identity means the SUMMARY cannot be proven as a DB-backed staged projection.
   const base = mkdtempSync(join(tmpdir(), "gsd-no-db-tasks-summary-drift-"));
   t.after(() => cleanup(base));
 
@@ -2110,20 +2102,14 @@ test("ADR-017 (#414): no-db-tasks summary artifact blocker matches auto.ts filte
 
   assert.equal(result.ok, true);
   assert.ok(result.blockers.length > 0, "blocker must be produced for no-db-tasks SUMMARY drift");
-  const blocker = result.blockers.join("\n");
-  assert.match(
-    blocker,
-    /has task SUMMARY artifacts but no DB tasks/,
-    "blocker phrase must match the filter in auto.ts reconcileBeforeDispatch wrapper",
-  );
+  assert.match(result.blockers.join("\n"), /Artifact\/DB status drift/);
 });
 
-test("ADR-017 (#414): task-level on-disk summary blocker matches auto.ts filter phrase", async (t) => {
+test("ADR-017 (#414): a disk-only task summary remains a blocker", async (t) => {
   // When gsd_summary_save writes a SUMMARY file to disk for a task that never
   // called gsd_task_complete, but the artifact DB row was not yet written (or
-  // the process crashed before insertion), reconciliation emits
-  // "has SUMMARY on disk while DB status is". The auto.ts filter must match
-  // this phrase so re-dispatch is not blocked.
+  // the process crashed before insertion), no durable projection identity can
+  // prove that the file is current.
   const base = mkdtempSync(join(tmpdir(), "gsd-task-disk-summary-drift-"));
   t.after(() => cleanup(base));
 
@@ -2144,19 +2130,12 @@ test("ADR-017 (#414): task-level on-disk summary blocker matches auto.ts filter 
 
   assert.equal(result.ok, true);
   assert.ok(result.blockers.length > 0, "blocker must be produced for on-disk task SUMMARY drift");
-  const blocker = result.blockers.join("\n");
-  assert.match(
-    blocker,
-    /has SUMMARY on disk while DB status is/,
-    "blocker phrase must match the filter in auto.ts reconcileBeforeDispatch wrapper",
-  );
+  assert.match(result.blockers.join("\n"), /Artifact\/DB status drift/);
 });
 
-test("ADR-017 (#414): slice-level on-disk summary blocker matches auto.ts filter phrase", async (t) => {
+test("ADR-017 (#414): a disk-only slice summary remains a blocker", async (t) => {
   // When a SUMMARY file exists on disk for a slice that is still pending
-  // (no gsd_task_complete for the slice), reconciliation emits
-  // "has SUMMARY on disk while DB status is". The auto.ts filter must match
-  // this phrase so re-dispatch is not blocked.
+  // (no gsd_task_complete for the slice), it remains unproven projection drift.
   const base = mkdtempSync(join(tmpdir(), "gsd-slice-disk-summary-drift-"));
   t.after(() => cleanup(base));
 
@@ -2176,12 +2155,7 @@ test("ADR-017 (#414): slice-level on-disk summary blocker matches auto.ts filter
 
   assert.equal(result.ok, true);
   assert.ok(result.blockers.length > 0, "blocker must be produced for on-disk slice SUMMARY drift");
-  const blocker = result.blockers.join("\n");
-  assert.match(
-    blocker,
-    /has SUMMARY on disk while DB status is/,
-    "blocker phrase must match the filter in auto.ts reconcileBeforeDispatch wrapper",
-  );
+  assert.match(result.blockers.join("\n"), /Artifact\/DB status drift/);
 });
 
 test("completedMilestoneReopenedGuidance tells active milestones to finish closeout", async () => {
