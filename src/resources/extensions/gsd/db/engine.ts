@@ -2077,13 +2077,16 @@ export function openDatabaseByWorkspace(workspace: GsdWorkspace): boolean {
   }
   const validCached = _dbCache.get(key);
   if (validCached) {
-    // Reactivate the cached connection as the current singleton.
     currentDb = validCached.db;
     currentPath = validCached.dbPath;
     currentPid = process.pid;
-    _dbOpenState.markAttempted();
     _currentIdentityKey = key;
-    return true;
+    const opened = openDatabase(validCached.dbPath);
+    if (opened && currentDb) {
+      _dbCache.set(key, { dbPath: validCached.dbPath, db: currentDb });
+      _currentIdentityKey = key;
+    }
+    return opened;
   }
 
   // Cache miss — need to open a new connection.
