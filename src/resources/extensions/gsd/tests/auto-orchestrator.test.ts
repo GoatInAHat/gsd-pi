@@ -32,6 +32,7 @@ import type { UnifiedRule } from "../rule-types.js";
 import { supportsStructuredQuestions } from "../workflow-mcp.js";
 import {
   closeDatabase,
+  insertArtifact,
   insertAssessment,
   insertGateRow,
   insertMilestone,
@@ -356,6 +357,40 @@ test("advance() dispatches the resolved unit and journals advance", async (t) =>
   const names = f.journalNames();
   assert.ok(names.includes("advance"));
   assert.ok(!names.includes("advance-blocked"));
+});
+
+test("#1677: advance() blocks an unproven open-task SUMMARY instead of filtering its text", async (t) => {
+  const f = makeFixture();
+  t.after(() => f.cleanup());
+  const summaryPath = join(
+    f.base,
+    ".gsd",
+    "milestones",
+    "M001",
+    "slices",
+    "S01",
+    "tasks",
+    "T01-SUMMARY.md",
+  );
+  const summary = "# T01 Summary\n\nUnproven failure-path output.\n";
+  writeFileSync(summaryPath, summary);
+  insertArtifact({
+    path: summaryPath,
+    artifact_type: "SUMMARY",
+    milestone_id: "M001",
+    slice_id: "S01",
+    task_id: "T01",
+    full_content: summary,
+  });
+
+  const result = await f.orchestrator.advance();
+
+  assert.equal(result.kind, "blocked");
+  if (result.kind !== "blocked") return;
+  assert.equal(result.action, "pause");
+  assert.match(result.reason, /Artifact\/DB status drift/);
+  assert.ok(f.journalNames().includes("advance-blocked"));
+  assert.ok(!f.journalNames().includes("advance"));
 });
 
 test("advance() sets active unit and is reflected in status", async (t) => {
