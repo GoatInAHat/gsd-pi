@@ -81,6 +81,12 @@ Render entry points (all route through the single `writeAndStore` seam in
 `renderTaskSummary`, `renderReplanFromDb`, `renderAssessmentFromDb`, and the
 sweep `renderAllFromDb`.
 
+Every task-summary producer routes through `writeTaskSummaryProjection`, which
+owns layout-aware placement and delegates stamping, disk persistence, artifact
+lineage, compatibility-marker updates, and cache invalidation to
+`writeAndStore`. A lineage-write failure is surfaced to the caller; the disk
+copy remains a non-authoritative projection for reconciliation evidence.
+
 ### 2.3 What the freeze covers
 
 Frozen: file names, directory shapes, both layouts, section ordering, heading

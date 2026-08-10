@@ -324,7 +324,8 @@ ${taskRow.key_files && taskRow.key_files.length > 0 ? taskRow.key_files.map(f =>
 
 /**
  * Render SUMMARY.md projection to disk for a specific task.
- * Queries DB via helper functions, renders content, writes via atomicWriteSync.
+ * Queries DB via helper functions, renders content, and persists through the
+ * canonical task-summary projection seam.
  */
 export async function renderSummaryProjection(basePath: string, milestoneId: string, sliceId: string, taskId: string): Promise<boolean> {
   const taskRows = getSliceTasks(milestoneId, sliceId);

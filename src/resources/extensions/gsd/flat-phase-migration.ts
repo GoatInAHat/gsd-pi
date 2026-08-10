@@ -72,12 +72,10 @@ function expectedPhaseDirs(basePath: string): string[] {
 /**
  * Return the most-recent existing `.gsd-backups/migrate-<ts>/` snapshot, or null.
  *
- * The flat-phase migration can re-fire on later dispatches when the legacy
- * `.gsd/milestones/` layout reappears (issue #1292). Re-snapshotting an
- * identical legacy projection on every startup only leaks a fresh
- * `migrate-<ts>/` directory each time. When a prior snapshot already exists we
- * reuse it as the rollback fallback instead of creating a duplicate, bounding
- * the accumulation to one recovery copy.
+ * The flat-phase migration can re-fire when the legacy `.gsd/milestones/`
+ * layout reappears (issue #1292). Creating a new snapshot on every startup
+ * leaks `migrate-<ts>/` directories. Refresh an existing snapshot in place to
+ * retain one recovery copy of the current legacy projection.
  */
 function existingMigrateBackup(basePath: string): string | null {
   const backupRoot = join(basePath, ".gsd-backups");

@@ -1908,6 +1908,7 @@ fn projection_error(error: impl std::fmt::Display) -> Error {
     )
 }
 
+#[cfg(any(windows, test))]
 fn is_windows_sharing_violation(error: &std::io::Error) -> bool {
     error.raw_os_error() == Some(32)
 }
@@ -6351,8 +6352,12 @@ mod sharing_violation_tests {
 
     #[test]
     fn windows_sharing_violation_is_the_only_transient_projection_error() {
-        assert!(is_windows_sharing_violation(&std::io::Error::from_raw_os_error(32)));
-        assert!(!is_windows_sharing_violation(&std::io::Error::from_raw_os_error(5)));
+        assert!(is_windows_sharing_violation(
+            &std::io::Error::from_raw_os_error(32)
+        ));
+        assert!(!is_windows_sharing_violation(
+            &std::io::Error::from_raw_os_error(5)
+        ));
     }
 }
 
