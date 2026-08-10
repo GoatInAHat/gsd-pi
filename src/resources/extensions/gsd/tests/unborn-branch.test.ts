@@ -15,7 +15,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
-import { branchExistsIncludingUnborn, nativeBranchExists } from "../native-git-bridge.ts";
+import {
+  branchExistsIncludingUnborn,
+  currentBranchIncludingUnborn,
+  nativeBranchExists,
+} from "../native-git-bridge.ts";
 
 function git(args: string[], cwd: string): string {
   return execFileSync("git", args, {
@@ -70,6 +74,18 @@ test("native branch lookup recognizes symbolic unborn HEAD across reruns", () =>
     branchExistsIncludingUnborn(false, "milestone/M001", "milestone/M002"),
     false,
   );
+});
+
+test("native branch lookup falls back when unborn HEAD throws", () => {
+  const currentBranch = currentBranchIncludingUnborn(
+    () => {
+      throw new Error("unborn HEAD");
+    },
+    () => "milestone/M001",
+  );
+
+  assert.equal(currentBranch, "milestone/M001");
+  assert.equal(branchExistsIncludingUnborn(false, currentBranch, "milestone/M001"), true);
 });
 
 test("nativeBranchExists: still works for real branches with commits", () => {

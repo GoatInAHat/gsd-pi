@@ -588,6 +588,24 @@ test("migrateToFlatPhase aligns a padded legacy milestone with one numeric DB id
   assert.ok(resolveMilestonePath(base, "1"));
 });
 
+test("migrateToFlatPhase aligns a legacy milestone with a zero-padded numeric DB identity", async () => {
+  const base = makeAliasTmp(["001"]);
+
+  await migrateToFlatPhase(base);
+
+  assert.equal(existsSync(join(base, ".gsd", "milestones")), false);
+  assert.ok(resolveMilestonePath(base, "001"));
+});
+
+test("migrateToFlatPhase rejects ambiguous numeric milestone aliases", async () => {
+  const base = makeAliasTmp(["1", "001"]);
+
+  await assert.rejects(() => migrateToFlatPhase(base), /Recommended: run `\/gsd recover`/);
+
+  assert.equal(existsSync(join(base, ".gsd", "milestones", "M001")), true);
+  assert.equal(existsSync(join(base, ".gsd", "phases")), false);
+});
+
 test("migrateToFlatPhase rejects ambiguous bare milestone aliases", async () => {
   const base = makeAliasTmp(["M001-abc123", "M001-def456"]);
 

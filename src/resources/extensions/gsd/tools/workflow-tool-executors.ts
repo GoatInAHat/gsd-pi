@@ -436,6 +436,7 @@ async function mirrorArtifactToActiveWorktreeProjection(
   basePath: string,
   relativePath: string,
   content: string,
+  required: boolean = false,
 ): Promise<void> {
   const contract = resolveGsdPathContract(basePath);
   if (!contract.worktreeGsd) return;
@@ -451,6 +452,7 @@ async function mirrorArtifactToActiveWorktreeProjection(
     logWarning("tool", `gsd_summary_save worktree projection mirror failed: ${(err as Error).message}`, {
       path: relativePath,
     });
+    if (required) throw err;
   }
 }
 
@@ -673,14 +675,15 @@ export async function executeSummarySave(
       }
     }
 
+    const isTaskSummary = params.artifact_type === "SUMMARY" && !!params.milestone_id && !!params.slice_id && !!params.task_id;
     let projectedContent = contentToSave;
-    if (params.artifact_type === "SUMMARY" && params.milestone_id && params.slice_id && params.task_id) {
+    if (isTaskSummary) {
       const contract = resolveGsdPathContract(basePath);
       const projection = await writeTaskSummaryProjection(
         contract.projectRoot,
-        params.milestone_id,
-        params.slice_id,
-        params.task_id,
+        params.milestone_id!,
+        params.slice_id!,
+        params.task_id!,
         contentToSave,
       );
       relativePath = projection.artifactPath;
@@ -698,7 +701,7 @@ export async function executeSummarySave(
         basePath,
       );
     }
-    await mirrorArtifactToActiveWorktreeProjection(basePath, relativePath, projectedContent);
+    await mirrorArtifactToActiveWorktreeProjection(basePath, relativePath, projectedContent, isTaskSummary);
 
     if (params.artifact_type === "CONTEXT" && !params.task_id) {
       try {

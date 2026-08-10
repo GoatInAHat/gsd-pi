@@ -266,15 +266,32 @@ export function nativeDetectMainBranch(basePath: string): string {
 export function nativeBranchExists(basePath: string, branch: string): boolean {
   const native = loadNative();
   if (native) {
+    const refExists = native.gitBranchExists(basePath, branch);
+    if (refExists) return true;
     return branchExistsIncludingUnborn(
-      native.gitBranchExists(basePath, branch),
-      native.gitCurrentBranch(basePath),
+      false,
+      currentBranchIncludingUnborn(
+        () => native.gitCurrentBranch(basePath),
+        () => gitExec(basePath, ["symbolic-ref", "--quiet", "--short", "HEAD"], true),
+      ),
       branch,
     );
   }
   const result = gitExec(basePath, ["show-ref", "--verify", `refs/heads/${branch}`], true);
-  const current = gitExec(basePath, ["branch", "--show-current"], true);
+  const current = gitExec(basePath, ["symbolic-ref", "--quiet", "--short", "HEAD"], true);
   return branchExistsIncludingUnborn(result !== "", current, branch);
+}
+
+export function currentBranchIncludingUnborn(
+  nativeCurrentBranch: () => string | null,
+  symbolicCurrentBranch: () => string,
+): string | null {
+  try {
+    const currentBranch = nativeCurrentBranch();
+    if (currentBranch) return currentBranch;
+  } catch {
+  }
+  return symbolicCurrentBranch() || null;
 }
 
 export function branchExistsIncludingUnborn(

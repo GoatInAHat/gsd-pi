@@ -127,10 +127,9 @@ function canonicalLegacyMilestoneId(
   if (!bare) return null;
 
   const candidates = new Set<string>();
-  const numericId = String(Number(bare[1]));
-  if (dbMilestones.has(numericId)) candidates.add(numericId);
   const suffixedIdPattern = new RegExp(`^${legacyId}-[a-z0-9]{6}$`);
   for (const dbId of dbMilestones) {
+    if (/^\d+$/.test(dbId) && `M${dbId.padStart(3, "0")}` === legacyId) candidates.add(dbId);
     if (suffixedIdPattern.test(dbId)) candidates.add(dbId);
   }
   return candidates.size === 1 ? [...candidates][0]! : null;
