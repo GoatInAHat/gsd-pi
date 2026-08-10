@@ -14,6 +14,7 @@ import { createDbAdapter, type DbAdapter } from "../db-adapter.ts";
 import { _setStartupInitializationBoundaryForTest } from "../db/engine.ts";
 import {
   _getAdapter,
+  closeAllDatabases,
   closeDatabase,
   openDatabase,
   openDatabaseByScope,
@@ -169,6 +170,15 @@ function versionStamps(db: DbAdapter = _getAdapter()!): Record<string, number> {
   };
 }
 
+function assertLivenessSchemaReadOnly(dbPath: string): void {
+  const db = createDbAdapter(new DatabaseSync(dbPath, { readOnly: true }));
+  try {
+    assert.deepEqual(schemaObjects(db), expectedSchemaObjects());
+  } finally {
+    db.close();
+  }
+}
+
 test("#1678: opening a pre-v1.14 v46 database bootstraps liveness schema without changing workflow state", (t) => {
   const { basePath, dbPath } = createProject();
   t.after(() => {
@@ -195,40 +205,62 @@ test("#1678: opening a pre-v1.14 v46 database bootstraps liveness schema without
   assert.equal(fixtureHash(), sealedHash, "upgrade must not mutate its sealed source fixture");
 });
 
-test("#1678: cached workspace activation repairs missing liveness schema", (t) => {
-  const first = createProject();
-  const second = createProject();
-  t.after(() => {
-    closeDatabase();
-    rmSync(first.basePath, { recursive: true, force: true });
-    rmSync(second.basePath, { recursive: true, force: true });
-  });
+const OPEN_SURFACES = [
+  "direct",
+  "workspace cache miss",
+  "workspace cache hit",
+  "scope activation",
+  "fresh-process doctor",
+  "same-process doctor",
+] as const;
 
-  const firstWorkspace = createWorkspace(first.basePath);
-  const secondWorkspace = createWorkspace(second.basePath);
-  assert.equal(openDatabaseByWorkspace(firstWorkspace), true);
-  dropLivenessSchema();
-  assert.equal(openDatabaseByWorkspace(secondWorkspace), true);
-  assert.equal(openDatabaseByWorkspace(firstWorkspace), true);
-  assert.deepEqual(schemaObjects(), expectedSchemaObjects());
-});
+test("#1678: every open surface repairs missing liveness schema", async (t) => {
+  for (const surface of OPEN_SURFACES) {
+    await t.test(surface, async () => {
+      const target = createProject();
+      const alternate = createProject();
+      try {
+        if (surface === "workspace cache hit" || surface === "scope activation") {
+          assert.equal(openDatabaseByWorkspace(createWorkspace(target.basePath)), true);
+          dropLivenessSchema();
+          assert.equal(openDatabaseByWorkspace(createWorkspace(alternate.basePath)), true);
+        } else {
+          loadV113Fixture(target.dbPath);
+        }
 
-test("#1678: cached scope activation repairs missing liveness schema", (t) => {
-  const first = createProject();
-  const second = createProject();
-  t.after(() => {
-    closeDatabase();
-    rmSync(first.basePath, { recursive: true, force: true });
-    rmSync(second.basePath, { recursive: true, force: true });
-  });
+        if (surface === "direct") assert.equal(openDatabase(target.dbPath), true);
+        else if (surface === "workspace cache miss") {
+          assert.equal(openDatabaseByWorkspace(createWorkspace(target.basePath)), true);
+        } else if (surface === "workspace cache hit") {
+          assert.equal(openDatabaseByWorkspace(createWorkspace(target.basePath)), true);
+        } else if (surface === "scope activation") {
+          assert.equal(openDatabaseByScope(scopeMilestone(createWorkspace(target.basePath), "M001")), true);
+        } else if (surface === "same-process doctor") {
+          const report = await runGSDDoctor(target.basePath, { fix: true });
+          assert.ok(report.fixesApplied.some((fix) => fix.includes("liveness backstop schema")));
+        } else {
+          const output = execFileSync(process.execPath, [
+            "--import", TEST_LOADER,
+            "--experimental-strip-types",
+            "--input-type=module",
+            "--eval",
+            `import { runGSDDoctor } from ${JSON.stringify(DOCTOR_MODULE)};
+             const report = await runGSDDoctor(${JSON.stringify(target.basePath)}, { fix: true });
+             process.stdout.write(JSON.stringify(report));`,
+          ], { encoding: "utf8" });
+          const report = JSON.parse(output) as Awaited<ReturnType<typeof runGSDDoctor>>;
+          assert.ok(report.fixesApplied.some((fix) => fix.includes("liveness backstop schema")));
+        }
 
-  const firstScope = scopeMilestone(createWorkspace(first.basePath), "M001");
-  const secondScope = scopeMilestone(createWorkspace(second.basePath), "M001");
-  assert.equal(openDatabaseByScope(firstScope), true);
-  dropLivenessSchema();
-  assert.equal(openDatabaseByScope(secondScope), true);
-  assert.equal(openDatabaseByScope(firstScope), true);
-  assert.deepEqual(schemaObjects(), expectedSchemaObjects());
+        closeAllDatabases();
+        assertLivenessSchemaReadOnly(target.dbPath);
+      } finally {
+        closeAllDatabases();
+        rmSync(target.basePath, { recursive: true, force: true });
+        rmSync(alternate.basePath, { recursive: true, force: true });
+      }
+    });
+  }
 });
 
 test("#1678: failed cached repair preserves the active workspace", (t) => {
@@ -236,7 +268,7 @@ test("#1678: failed cached repair preserves the active workspace", (t) => {
   const active = createProject();
   t.after(() => {
     _setStartupInitializationBoundaryForTest(null);
-    closeDatabase();
+    closeAllDatabases();
     rmSync(target.basePath, { recursive: true, force: true });
     rmSync(active.basePath, { recursive: true, force: true });
   });
@@ -253,26 +285,6 @@ test("#1678: failed cached repair preserves the active workspace", (t) => {
   assert.throws(() => openDatabaseByWorkspace(targetWorkspace), /repair blocked/);
   assert.equal(_getAdapter()!.prepare("PRAGMA database_list").get()?.["file"], active.dbPath);
   assert.equal(_getAdapter()!.prepare("SELECT 1 AS value").get()?.["value"], 1);
-});
-
-test("#1678: fresh-process doctor reports and repairs v1.13 liveness schema", (t) => {
-  const { basePath, dbPath } = createProject();
-  t.after(() => rmSync(basePath, { recursive: true, force: true }));
-  loadV113Fixture(dbPath);
-
-  const output = execFileSync(process.execPath, [
-    "--import", TEST_LOADER,
-    "--experimental-strip-types",
-    "--input-type=module",
-    "--eval",
-    `import { runGSDDoctor } from ${JSON.stringify(DOCTOR_MODULE)};
-     const report = await runGSDDoctor(${JSON.stringify(basePath)}, { fix: true });
-     process.stdout.write(JSON.stringify(report));`,
-  ], { encoding: "utf8" });
-  const report = JSON.parse(output) as Awaited<ReturnType<typeof runGSDDoctor>>;
-  assert.ok(report.issues.some((issue) => String(issue.code) === "liveness_backstop_schema_missing"));
-  assert.ok(report.fixesApplied.some((fix) => fix.includes("liveness backstop schema")));
-  assert.deepEqual(getOpenWedge(basePath), { ok: true, wedge: null });
 });
 
 for (const [name, dropStatement] of [

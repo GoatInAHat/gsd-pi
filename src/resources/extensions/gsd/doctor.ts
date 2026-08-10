@@ -41,6 +41,8 @@ function inspectLivenessBackstopSchema(basePath: string): boolean | undefined {
   if (!db) return undefined;
   try {
     return hasLivenessBackstopSchema(db);
+  } catch {
+    return undefined;
   } finally {
     db.close();
   }
