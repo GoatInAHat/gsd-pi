@@ -469,7 +469,7 @@ test("migration ignores an empty/partial leftover backup and writes a complete o
   );
 });
 
-test("migrateToFlatPhase leaves unrepresented slice sidecars for explicit recovery", async () => {
+test("migrateToFlatPhase archives resurrected projections for known DB identities", async () => {
   const base = makeTmp({ withTask: false });
   const legacySliceDir = join(base, ".gsd", "milestones", "M001", "slices", "S01");
   writeFileSync(join(legacySliceDir, "S01-CONTEXT.md"), "# Final Slice Context\n\nPrior discussion.", "utf-8");
@@ -481,16 +481,33 @@ test("migrateToFlatPhase leaves unrepresented slice sidecars for explicit recove
     "utf-8",
   );
 
+  await migrateToFlatPhase(base);
+
+  assert.equal(existsSync(join(base, ".gsd", "phases", "01-foundation")), true);
+  assert.equal(existsSync(join(base, ".gsd", "milestones")), false);
+  const backup = readdirSync(join(base, ".gsd-backups"))
+    .map((entry) => join(base, ".gsd-backups", entry))
+    .find((candidate) => existsSync(join(candidate, "M001", "slices", "S01", "S01-CONTEXT.md")));
+  assert.ok(backup, "the stale projection must remain available in the migration backup");
+  assert.equal(
+    readFileSync(join(backup, "M001", "slices", "S01", "S01-CONTEXT.md"), "utf-8"),
+    "# Final Slice Context\n\nPrior discussion.",
+  );
+});
+
+test("migrateToFlatPhase still rejects legacy projections with unknown identities", async () => {
+  const base = makeTmp();
+  const unknownDir = join(base, ".gsd", "milestones", "M999");
+  mkdirSync(unknownDir, { recursive: true });
+  writeFileSync(join(unknownDir, "M999-CONTEXT.md"), "# Unknown Milestone\n", "utf-8");
+
   await assert.rejects(
     () => migrateToFlatPhase(base),
     /Recommended: run `\/gsd recover`/,
   );
 
   assert.equal(existsSync(join(base, ".gsd", "phases")), false);
-  assert.equal(readFileSync(join(legacySliceDir, "S01-CONTEXT.md"), "utf-8"), "# Final Slice Context\n\nPrior discussion.");
-  assert.equal(readFileSync(join(legacySliceDir, "S01-RESEARCH.md"), "utf-8"), "# Slice Research\n\nPrior research.");
-  assert.equal(readFileSync(join(legacySliceDir, "S01-CONTINUE.md"), "utf-8"), "# Continue\n\nCompacted marker.");
-  assert.equal(existsSync(join(base, ".gsd-backups")), false);
+  assert.equal(existsSync(join(unknownDir, "M999-CONTEXT.md")), true);
 });
 
 test("pruneStaleFlatPhaseBackups removes migrate-* dirs older than retention window", async () => {

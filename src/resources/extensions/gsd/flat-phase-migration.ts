@@ -2,7 +2,7 @@
 // File Purpose: One-time migration from legacy nested .gsd/milestones/ to
 // flat-phase .gsd/phases/. Runs on startup when the legacy structure is detected.
 
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { renderAllFromDb, renderRoadmapFromDb } from "./markdown-renderer.js";
@@ -145,27 +145,6 @@ function legacyHierarchyContainsUnknownIdentity(basePath: string, legacyRoot: st
     [...markdown.slices].some((id) => legacyMilestoneIds.has(id.split("/")[0]!) && !dbSlices.has(id)) ||
     [...markdown.tasks].some((id) => legacyMilestoneIds.has(id.split("/")[0]!) && !dbTasks.has(id))
   );
-}
-
-function legacyTreeContainsUnrepresentedMarkdown(
-  legacyRoot: string,
-  prefix = "",
-  artifacts = new Map(
-    getArtifactsByPathPrefix("milestones/").map((artifact) => [artifact.path, artifact.full_content]),
-  ),
-): boolean {
-  for (const entry of readdirSync(legacyRoot, { withFileTypes: true })) {
-    const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
-    const absolutePath = join(legacyRoot, entry.name);
-    if (entry.isDirectory()) {
-      if (legacyTreeContainsUnrepresentedMarkdown(absolutePath, relativePath, artifacts)) return true;
-      continue;
-    }
-    if (!entry.isFile()) return true;
-    if (!entry.name.toLowerCase().endsWith(".md")) continue;
-    if (artifacts.get(`milestones/${relativePath}`) !== readFileSync(absolutePath, "utf-8")) return true;
-  }
-  return false;
 }
 
 function backupFlatProjectionIfPresent(basePath: string, phasesPath: string, backupDir: string): void {
@@ -422,13 +401,11 @@ async function migrateToFlatPhaseLocked(basePath: string): Promise<void> {
     !hasLegacyMilestoneSubdirs(milestonesPath) && hasLegacyMilestoneSubdirs(migratingPath);
 
   // Markdown is a projection, never startup authority. Refuse the layout
-  // conversion before touching disk when the legacy tree contains identities
-  // the canonical DB does not hold; explicit recovery owns that import.
+  // conversion before touching disk only when the legacy tree contains identities
+  // the canonical DB does not hold; explicit recovery owns that import. Content
+  // for known identities is archived in the migration backup, then rebuilt from DB.
   const legacySource = resumingInterrupted ? migratingPath : milestonesPath;
-  if (
-    legacyHierarchyContainsUnknownIdentity(basePath, legacySource) ||
-    legacyTreeContainsUnrepresentedMarkdown(legacySource)
-  ) {
+  if (legacyHierarchyContainsUnknownIdentity(basePath, legacySource)) {
     throw new Error(
       "flat-phase migration skipped: legacy markdown contains state absent from the canonical DB. " +
       "Recommended: run `/gsd recover` and approve its exact Preview hash to import explicitly.",

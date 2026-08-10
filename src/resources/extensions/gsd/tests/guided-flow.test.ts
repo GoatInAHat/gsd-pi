@@ -22,3 +22,13 @@ test("guided milestone discussion callsites pass workingDirectory to loadPrompt"
   const calls = [...source.matchAll(/\bawait buildDiscussMilestonePrompt\(/g)];
   assert.equal(calls.length, 9, "all guided-flow guided-discuss-milestone callsites should be covered");
 });
+
+test("guided discussion prompts do not synthesize legacy milestone paths", () => {
+  const source = readFileSync(join(__dirname, "..", "guided-flow.ts"), "utf-8");
+
+  assert.doesNotMatch(
+    source,
+    /`\.gsd\/milestones\/\$\{/,
+    "discussion prompts must obtain write targets from the layout-aware path module",
+  );
+});
