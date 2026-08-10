@@ -205,52 +205,85 @@ test("#1678: opening a pre-v1.14 v46 database bootstraps liveness schema without
   assert.equal(fixtureHash(), sealedHash, "upgrade must not mutate its sealed source fixture");
 });
 
-const OPEN_SURFACES = [
-  "direct",
-  "workspace cache miss",
-  "workspace cache hit",
-  "scope activation",
-  "fresh-process doctor",
-  "same-process doctor",
-] as const;
+type OpenSurfaceContext = {
+  target: ReturnType<typeof createProject>;
+  alternate: ReturnType<typeof createProject>;
+};
+
+type OpenSurface = {
+  name: string;
+  setup(context: OpenSurfaceContext): void;
+  invoke(context: OpenSurfaceContext): void | Promise<void>;
+};
+
+const OPEN_SURFACES: OpenSurface[] = [
+  {
+    name: "direct",
+    setup: ({ target }) => loadV113Fixture(target.dbPath),
+    invoke: ({ target }) => assert.equal(openDatabase(target.dbPath), true),
+  },
+  {
+    name: "workspace cache miss",
+    setup: ({ target }) => loadV113Fixture(target.dbPath),
+    invoke: ({ target }) => assert.equal(openDatabaseByWorkspace(createWorkspace(target.basePath)), true),
+  },
+  {
+    name: "workspace cache hit",
+    setup: ({ target, alternate }) => {
+      assert.equal(openDatabaseByWorkspace(createWorkspace(target.basePath)), true);
+      dropLivenessSchema();
+      assert.equal(openDatabaseByWorkspace(createWorkspace(alternate.basePath)), true);
+    },
+    invoke: ({ target }) => assert.equal(openDatabaseByWorkspace(createWorkspace(target.basePath)), true),
+  },
+  {
+    name: "scope activation",
+    setup: ({ target, alternate }) => {
+      assert.equal(openDatabaseByWorkspace(createWorkspace(target.basePath)), true);
+      dropLivenessSchema();
+      assert.equal(openDatabaseByWorkspace(createWorkspace(alternate.basePath)), true);
+    },
+    invoke: ({ target }) => assert.equal(
+      openDatabaseByScope(scopeMilestone(createWorkspace(target.basePath), "M001")),
+      true,
+    ),
+  },
+  {
+    name: "fresh-process doctor",
+    setup: ({ target }) => loadV113Fixture(target.dbPath),
+    invoke: ({ target }) => {
+      const output = execFileSync(process.execPath, [
+        "--import", TEST_LOADER,
+        "--experimental-strip-types",
+        "--input-type=module",
+        "--eval",
+        `import { runGSDDoctor } from ${JSON.stringify(DOCTOR_MODULE)};
+         const report = await runGSDDoctor(${JSON.stringify(target.basePath)}, { fix: true });
+         process.stdout.write(JSON.stringify(report));`,
+      ], { encoding: "utf8" });
+      const report = JSON.parse(output) as Awaited<ReturnType<typeof runGSDDoctor>>;
+      assert.ok(report.fixesApplied.some((fix) => fix.includes("liveness backstop schema")));
+    },
+  },
+  {
+    name: "same-process doctor",
+    setup: ({ target }) => loadV113Fixture(target.dbPath),
+    invoke: async ({ target }) => {
+      const report = await runGSDDoctor(target.basePath, { fix: true });
+      assert.ok(report.fixesApplied.some((fix) => fix.includes("liveness backstop schema")));
+    },
+  },
+];
 
 test("#1678: every open surface repairs missing liveness schema", async (t) => {
   for (const surface of OPEN_SURFACES) {
-    await t.test(surface, async () => {
+    await t.test(surface.name, async () => {
       const target = createProject();
       const alternate = createProject();
       try {
-        if (surface === "workspace cache hit" || surface === "scope activation") {
-          assert.equal(openDatabaseByWorkspace(createWorkspace(target.basePath)), true);
-          dropLivenessSchema();
-          assert.equal(openDatabaseByWorkspace(createWorkspace(alternate.basePath)), true);
-        } else {
-          loadV113Fixture(target.dbPath);
-        }
-
-        if (surface === "direct") assert.equal(openDatabase(target.dbPath), true);
-        else if (surface === "workspace cache miss") {
-          assert.equal(openDatabaseByWorkspace(createWorkspace(target.basePath)), true);
-        } else if (surface === "workspace cache hit") {
-          assert.equal(openDatabaseByWorkspace(createWorkspace(target.basePath)), true);
-        } else if (surface === "scope activation") {
-          assert.equal(openDatabaseByScope(scopeMilestone(createWorkspace(target.basePath), "M001")), true);
-        } else if (surface === "same-process doctor") {
-          const report = await runGSDDoctor(target.basePath, { fix: true });
-          assert.ok(report.fixesApplied.some((fix) => fix.includes("liveness backstop schema")));
-        } else {
-          const output = execFileSync(process.execPath, [
-            "--import", TEST_LOADER,
-            "--experimental-strip-types",
-            "--input-type=module",
-            "--eval",
-            `import { runGSDDoctor } from ${JSON.stringify(DOCTOR_MODULE)};
-             const report = await runGSDDoctor(${JSON.stringify(target.basePath)}, { fix: true });
-             process.stdout.write(JSON.stringify(report));`,
-          ], { encoding: "utf8" });
-          const report = JSON.parse(output) as Awaited<ReturnType<typeof runGSDDoctor>>;
-          assert.ok(report.fixesApplied.some((fix) => fix.includes("liveness backstop schema")));
-        }
+        const context = { target, alternate };
+        surface.setup(context);
+        await surface.invoke(context);
 
         closeAllDatabases();
         assertLivenessSchemaReadOnly(target.dbPath);
