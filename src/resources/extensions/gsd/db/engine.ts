@@ -2077,16 +2077,19 @@ export function openDatabaseByWorkspace(workspace: GsdWorkspace): boolean {
   }
   const validCached = _dbCache.get(key);
   if (validCached) {
-    currentDb = validCached.db;
-    currentPath = validCached.dbPath;
-    currentPid = process.pid;
-    _currentIdentityKey = key;
-    const opened = openDatabase(validCached.dbPath);
-    if (opened && currentDb) {
-      _dbCache.set(key, { dbPath: validCached.dbPath, db: currentDb });
+    if (_replacementObservationDatabases.has(validCached.db) || !assessStartupRepair(validCached.db).required) {
+      currentDb = validCached.db;
+      currentPath = validCached.dbPath;
+      currentPid = process.pid;
+      _dbOpenState.markAttempted();
       _currentIdentityKey = key;
+      return true;
     }
-    return opened;
+    if (currentDb === validCached.db) closeDatabase();
+    else {
+      closeCachedConnection(validCached, "workspace");
+      _dbCache.delete(key);
+    }
   }
 
   // Cache miss — need to open a new connection.

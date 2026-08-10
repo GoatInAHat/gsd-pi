@@ -1,30 +1,32 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { getOpenWedge } from "../auto-liveness-backstop.ts";
 import { runGSDDoctor } from "../doctor.ts";
+import { createDbAdapter, type DbAdapter } from "../db-adapter.ts";
+import { _setStartupInitializationBoundaryForTest } from "../db/engine.ts";
 import {
   _getAdapter,
   closeDatabase,
-  insertArtifact,
-  insertMilestone,
-  insertSlice,
-  insertTask,
-  insertVerificationEvidence,
   openDatabase,
+  openDatabaseByScope,
   openDatabaseByWorkspace,
 } from "../gsd-db.ts";
-import { createWorkspace } from "../workspace.ts";
+import { createWorkspace, scopeMilestone } from "../workspace.ts";
 
 const V113_SCHEMA_V46_FIXTURE = join(
   dirname(fileURLToPath(import.meta.url)),
   "__fixtures__/legacy-import-corpus/v1/lifecycle-truth-matrix/source/.gsd/gsd.db",
 );
+const TEST_LOADER = fileURLToPath(new URL("./resolve-ts.mjs", import.meta.url));
+const DOCTOR_MODULE = new URL("../doctor.ts", import.meta.url).href;
 
 const LIVENESS_OBJECTS = [
   ["table", "liveness_block_signatures"],
@@ -51,34 +53,24 @@ function createProject(): { basePath: string; dbPath: string } {
   return { basePath, dbPath: join(basePath, ".gsd", "gsd.db") };
 }
 
-function seedWorkflowRows(): void {
-  insertMilestone({ id: "M003", title: "Upgrade safety", status: "active" });
-  insertSlice({ milestoneId: "M003", id: "S01", title: "Bootstrap", status: "active" });
-  insertTask({ milestoneId: "M003", sliceId: "S01", id: "T05", title: "Preserve state", status: "in_progress" });
-  insertVerificationEvidence({
-    milestoneId: "M003",
-    sliceId: "S01",
-    taskId: "T05",
-    command: "pnpm test",
-    exitCode: 0,
-    verdict: "pass",
-    durationMs: 42,
-  });
-  insertArtifact({
-    path: "milestones/M003/slices/S01/tasks/T05-SUMMARY.md",
-    artifact_type: "SUMMARY",
-    milestone_id: "M003",
-    slice_id: "S01",
-    task_id: "T05",
-    full_content: "# Preserved upgrade evidence\n",
-  });
-
-  const db = _getAdapter();
-  assert.ok(db);
+function seedWorkflowRows(db: DbAdapter): void {
   const triggers = db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'").all();
   db.exec("PRAGMA foreign_keys = OFF");
   for (const trigger of triggers) db.exec(`DROP TRIGGER ${String(trigger["name"])}`);
   db.exec(`
+    INSERT INTO milestones (id, title, status, created_at)
+      VALUES ('M003', 'Upgrade safety', 'active', '2026-01-01T00:00:00.000Z');
+    INSERT INTO slices (milestone_id, id, title, status, created_at)
+      VALUES ('M003', 'S01', 'Bootstrap', 'active', '2026-01-01T00:00:00.000Z');
+    INSERT INTO tasks (milestone_id, slice_id, id, title, status)
+      VALUES ('M003', 'S01', 'T05', 'Preserve state', 'in_progress');
+    INSERT INTO verification_evidence
+      (task_id, slice_id, milestone_id, command, exit_code, verdict, duration_ms, created_at)
+      VALUES ('T05', 'S01', 'M003', 'pnpm test', 0, 'pass', 42, '2026-01-01T00:02:00.000Z');
+    INSERT INTO artifacts
+      (path, artifact_type, milestone_id, slice_id, task_id, full_content, imported_at)
+      VALUES ('milestones/M003/slices/S01/tasks/T05-SUMMARY.md', 'SUMMARY', 'M003', 'S01', 'T05',
+        '# Preserved upgrade evidence', '2026-01-01T00:02:00.000Z');
     INSERT INTO workflow_execution_attempts (
       attempt_id, project_id, lifecycle_id, attempt_number, attempt_state,
       claimed_at, ended_at, claim_operation_id, claim_project_revision,
@@ -139,9 +131,11 @@ function loadV113Fixture(dbPath: string): void {
   copyFileSync(V113_SCHEMA_V46_FIXTURE, dbPath);
 }
 
-function schemaObjects(): Array<{ type: unknown; name: unknown }> {
-  const db = _getAdapter();
-  assert.ok(db);
+function fixtureHash(): string {
+  return createHash("sha256").update(readFileSync(V113_SCHEMA_V46_FIXTURE)).digest("hex");
+}
+
+function schemaObjects(db: DbAdapter = _getAdapter()!): Array<{ type: unknown; name: unknown }> {
   return db.prepare(`
     SELECT type, name
     FROM sqlite_master
@@ -160,18 +154,14 @@ function expectedSchemaObjects(): Array<{ type: string; name: string }> {
     .sort((left, right) => left.type.localeCompare(right.type) || left.name.localeCompare(right.name));
 }
 
-function snapshotWorkflowRows(): Record<string, Array<Record<string, unknown>>> {
-  const db = _getAdapter();
-  assert.ok(db);
+function snapshotWorkflowRows(db: DbAdapter = _getAdapter()!): Record<string, Array<Record<string, unknown>>> {
   return Object.fromEntries(PRESERVED_TABLES.map((table) => [
     table,
     db.prepare(`SELECT * FROM ${table}`).all(),
   ]));
 }
 
-function versionStamps(): Record<string, number> {
-  const db = _getAdapter();
-  assert.ok(db);
+function versionStamps(db: DbAdapter = _getAdapter()!): Record<string, number> {
   return {
     schemaVersion: Number(db.prepare("SELECT MAX(version) AS value FROM schema_version").get()?.["value"]),
     userVersion: Number(db.prepare("PRAGMA user_version").get()?.["user_version"]),
@@ -187,19 +177,22 @@ test("#1678: opening a pre-v1.14 v46 database bootstraps liveness schema without
   });
 
   loadV113Fixture(dbPath);
-  assert.equal(openDatabase(dbPath), true);
-  seedWorkflowRows();
-  dropLivenessSchema();
-  assert.deepEqual(schemaObjects(), [], "fixture must begin without every v1.14 liveness object");
-  const rowsBefore = snapshotWorkflowRows();
-  const stampsBefore = versionStamps();
-  closeDatabase();
+  const sealedHash = fixtureHash();
+  const raw = new DatabaseSync(dbPath);
+  const fixtureDb = createDbAdapter(raw);
+  seedWorkflowRows(fixtureDb);
+  assert.deepEqual(schemaObjects(fixtureDb), [], "v1.13 fixture must predate every liveness object");
+  const rowsBefore = snapshotWorkflowRows(fixtureDb);
+  const stampsBefore = versionStamps(fixtureDb);
+  fixtureDb.close();
+  assert.equal(fixtureHash(), sealedHash, "upgrade test must not mutate its sealed source fixture");
 
   assert.equal(openDatabase(dbPath), true);
   assert.deepEqual(schemaObjects(), expectedSchemaObjects());
   assert.deepEqual(versionStamps(), stampsBefore, "startup repair must not move any version stamp");
   assert.deepEqual(snapshotWorkflowRows(), rowsBefore, "startup repair must not rewrite workflow-owned rows");
   assert.deepEqual(getOpenWedge(basePath), { ok: true, wedge: null });
+  assert.equal(fixtureHash(), sealedHash, "upgrade must not mutate its sealed source fixture");
 });
 
 test("#1678: cached workspace activation repairs missing liveness schema", (t) => {
@@ -218,6 +211,68 @@ test("#1678: cached workspace activation repairs missing liveness schema", (t) =
   assert.equal(openDatabaseByWorkspace(secondWorkspace), true);
   assert.equal(openDatabaseByWorkspace(firstWorkspace), true);
   assert.deepEqual(schemaObjects(), expectedSchemaObjects());
+});
+
+test("#1678: cached scope activation repairs missing liveness schema", (t) => {
+  const first = createProject();
+  const second = createProject();
+  t.after(() => {
+    closeDatabase();
+    rmSync(first.basePath, { recursive: true, force: true });
+    rmSync(second.basePath, { recursive: true, force: true });
+  });
+
+  const firstScope = scopeMilestone(createWorkspace(first.basePath), "M001");
+  const secondScope = scopeMilestone(createWorkspace(second.basePath), "M001");
+  assert.equal(openDatabaseByScope(firstScope), true);
+  dropLivenessSchema();
+  assert.equal(openDatabaseByScope(secondScope), true);
+  assert.equal(openDatabaseByScope(firstScope), true);
+  assert.deepEqual(schemaObjects(), expectedSchemaObjects());
+});
+
+test("#1678: failed cached repair preserves the active workspace", (t) => {
+  const target = createProject();
+  const active = createProject();
+  t.after(() => {
+    _setStartupInitializationBoundaryForTest(null);
+    closeDatabase();
+    rmSync(target.basePath, { recursive: true, force: true });
+    rmSync(active.basePath, { recursive: true, force: true });
+  });
+
+  const targetWorkspace = createWorkspace(target.basePath);
+  const activeWorkspace = createWorkspace(active.basePath);
+  assert.equal(openDatabaseByWorkspace(targetWorkspace), true);
+  dropLivenessSchema();
+  assert.equal(openDatabaseByWorkspace(activeWorkspace), true);
+  _setStartupInitializationBoundaryForTest((path) => {
+    if (path === target.dbPath) throw new Error("repair blocked");
+  });
+
+  assert.throws(() => openDatabaseByWorkspace(targetWorkspace), /repair blocked/);
+  assert.equal(_getAdapter()!.prepare("PRAGMA database_list").get()?.["file"], active.dbPath);
+  assert.equal(_getAdapter()!.prepare("SELECT 1 AS value").get()?.["value"], 1);
+});
+
+test("#1678: fresh-process doctor reports and repairs v1.13 liveness schema", (t) => {
+  const { basePath, dbPath } = createProject();
+  t.after(() => rmSync(basePath, { recursive: true, force: true }));
+  loadV113Fixture(dbPath);
+
+  const output = execFileSync(process.execPath, [
+    "--import", TEST_LOADER,
+    "--experimental-strip-types",
+    "--input-type=module",
+    "--eval",
+    `import { runGSDDoctor } from ${JSON.stringify(DOCTOR_MODULE)};
+     const report = await runGSDDoctor(${JSON.stringify(basePath)}, { fix: true });
+     process.stdout.write(JSON.stringify(report));`,
+  ], { encoding: "utf8" });
+  const report = JSON.parse(output) as Awaited<ReturnType<typeof runGSDDoctor>>;
+  assert.ok(report.issues.some((issue) => String(issue.code) === "liveness_backstop_schema_missing"));
+  assert.ok(report.fixesApplied.some((fix) => fix.includes("liveness backstop schema")));
+  assert.deepEqual(getOpenWedge(basePath), { ok: true, wedge: null });
 });
 
 for (const [name, dropStatement] of [
@@ -249,7 +304,7 @@ test("#1678: same-process doctor fix reports and repairs missing liveness schema
   });
 
   assert.equal(openDatabase(dbPath), true);
-  seedWorkflowRows();
+  seedWorkflowRows(_getAdapter()!);
   dropLivenessSchema();
   const failedRead = getOpenWedge(basePath);
   assert.equal(failedRead.ok, false);
