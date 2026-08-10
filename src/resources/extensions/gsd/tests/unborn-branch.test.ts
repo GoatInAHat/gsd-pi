@@ -86,6 +86,13 @@ test("branch isolation enters the milestone branch in an unborn repo", () => {
     enterBranchModeForMilestone(dir, "M001");
 
     assert.equal(git(["branch", "--show-current"], dir), "milestone/M001");
+
+    // Re-entry while the repo is still unborn must not fail: the milestone
+    // branch has no commit-backed ref yet, so a plain checkout would abort
+    // with "pathspec did not match".
+    enterBranchModeForMilestone(dir, "M001");
+
+    assert.equal(git(["branch", "--show-current"], dir), "milestone/M001");
     assert.equal(
       git(["status", "--short"], dir),
       "?? .gsd/\n?? project.txt",

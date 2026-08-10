@@ -131,6 +131,22 @@ export function enterBranchModeForMilestone(
     });
   }
 
+  // A zero-commit repo has no commit-backed ref for the milestone branch even
+  // when it is already checked out, and `git checkout <branch>` then fails with
+  // "pathspec did not match". HEAD already points at the (unborn) milestone
+  // branch in that case, so branch entry is complete.
+  if (
+    !runGit(
+      basePath,
+      ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`],
+      { allowFailure: true },
+    ) &&
+    runGit(basePath, ["branch", "--show-current"], { allowFailure: true }) ===
+      branch
+  ) {
+    return;
+  }
+
   checkoutBranchWithStashGuard(
     basePath,
     branch,
