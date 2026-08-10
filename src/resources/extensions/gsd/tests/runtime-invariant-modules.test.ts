@@ -247,6 +247,7 @@ test("Recovery Classification covers ADR-015 failure families", () => {
     ["stale worker lease", "stale-worker", "stop"],
     ["worktree root missing .git", "worktree-invalid", "stop"],
     ["verification drift in state snapshot", "verification-drift", "escalate"],
+    ["projection root operation failed: C:\\repo\\.gsd\\worktrees\\M001: The process cannot access the file because it is being used by another process. (os error 32)", "projection-lock-transient", "retry"],
     ["rate limit 429", "provider", "retry"],
     ["unexpected invariant", "runtime-unknown", "escalate"],
   ] as const;
