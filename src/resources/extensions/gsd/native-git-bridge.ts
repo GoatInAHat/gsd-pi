@@ -253,6 +253,9 @@ export function nativeDetectMainBranch(basePath: string): string {
   const masterExists = gitExec(basePath, ["show-ref", "--verify", "refs/heads/master"], true);
   if (masterExists) return "master";
 
+  const head = gitExec(basePath, ["rev-parse", "--verify", "--quiet", "HEAD"], true);
+  if (!head) return "";
+
   return gitExec(basePath, ["branch", "--show-current"]);
 }
 

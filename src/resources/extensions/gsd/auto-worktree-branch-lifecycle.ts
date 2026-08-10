@@ -5,7 +5,7 @@
 // instead of keeping branch policy inside the legacy auto-worktree barrel.
 
 import { GSDError, GSD_GIT_ERROR } from "./errors.js";
-import { readIntegrationBranch } from "./git-service.js";
+import { readIntegrationBranch, runGit } from "./git-service.js";
 import { loadEffectiveGSDPreferences } from "./preferences.js";
 import { debugLog } from "./debug-logger.js";
 import { checkoutBranchWithStashGuard } from "./worktree-git-recovery.js";
@@ -68,6 +68,27 @@ export function enterBranchModeForMilestone(
         (branchName) => nativeBranchExists(basePath, branchName),
       ) ??
       nativeDetectMainBranch(basePath);
+
+    if (
+      !startPoint ||
+      !runGit(
+        basePath,
+        ["rev-parse", "--verify", "--quiet", `${startPoint}^{commit}`],
+        { allowFailure: true },
+      )
+    ) {
+      // An unborn repository has no commit-backed ref to branch from. Let Git
+      // move symbolic HEAD directly while preserving the index and untracked
+      // project files that will become the first milestone commit.
+      runGit(basePath, ["checkout", "-b", branch]);
+      debugLog("auto-worktree", {
+        action: "enterBranchMode",
+        milestoneId,
+        branch,
+        created: true,
+      });
+      return;
+    }
 
     // TOCTOU ancestry guard (Issue #4980 HIGH-3).
     //

@@ -10,12 +10,16 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
-import { nativeBranchExists } from "../native-git-bridge.ts";
+import {
+  nativeBranchExists,
+  nativeDetectMainBranch,
+} from "../native-git-bridge.ts";
+import { enterBranchModeForMilestone } from "../auto-worktree-branch-lifecycle.ts";
 
 function git(args: string[], cwd: string): string {
   return execFileSync("git", args, {
@@ -58,6 +62,41 @@ test("nativeBranchExists: returns false for non-existent branch in unborn repo",
     assert.strictEqual(exists, false, "non-current branch should not exist in unborn repo");
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("branch isolation enters the milestone branch in an unborn repo", () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "unborn-branch-test-")));
+  const previousCwd = process.cwd();
+  const previousGsdHome = process.env.GSD_HOME;
+  const gsdHome = realpathSync(mkdtempSync(join(tmpdir(), "unborn-branch-home-")));
+  try {
+    process.chdir(dir);
+    process.env.GSD_HOME = gsdHome;
+    git(["init", "--initial-branch=main"], dir);
+    writeFileSync(join(dir, "project.txt"), "untracked project content\n");
+    mkdirSync(join(dir, ".gsd"));
+    writeFileSync(
+      join(dir, ".gsd", "M001-META.json"),
+      JSON.stringify({ integrationBranch: "main" }),
+    );
+
+    assert.equal(nativeDetectMainBranch(dir), "");
+
+    enterBranchModeForMilestone(dir, "M001");
+
+    assert.equal(git(["branch", "--show-current"], dir), "milestone/M001");
+    assert.equal(
+      git(["status", "--short"], dir),
+      "?? .gsd/\n?? project.txt",
+      "branch creation should preserve untracked project content",
+    );
+  } finally {
+    process.chdir(previousCwd);
+    if (previousGsdHome === undefined) delete process.env.GSD_HOME;
+    else process.env.GSD_HOME = previousGsdHome;
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(gsdHome, { recursive: true, force: true });
   }
 });
 
