@@ -639,6 +639,13 @@ function validateMilestoneId(milestoneId: string): void {
 
 // ─── Implementation core ─────────────────────────────────────────────────
 
+/** Start an independent auto run without inheriting a prior run's failure. */
+export function prepareIsolationForNewRun(
+  s: Pick<AutoSession, "isolationDegraded">,
+): void {
+  s.isolationDegraded = false;
+}
+
 /**
  * Shared implementation of milestone entry. Called by both
  * `WorktreeLifecycle.enterMilestone` and the legacy

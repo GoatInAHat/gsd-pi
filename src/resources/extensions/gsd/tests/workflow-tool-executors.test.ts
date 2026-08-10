@@ -276,6 +276,87 @@ test("executeSummarySave persists artifact and returns computed path", async () 
   }
 });
 
+test("executeSummarySave task summaries use the canonical projection seam", async (t) => {
+  const base = makeTmpBase();
+  t.after(() => {
+    closeDatabase();
+    cleanup(base);
+  });
+  openTestDb(base);
+  insertMilestone({ id: "M001", title: "Foundation", status: "active" });
+  seedSlice("M001", "S01", "in_progress");
+  mkdirSync(join(base, ".gsd", "phases", "01-foundation"), { recursive: true });
+
+  const result = await inProjectDir(base, () => executeSummarySave({
+    milestone_id: "M001",
+    slice_id: "S01",
+    task_id: "T01",
+    artifact_type: "SUMMARY",
+    content: "# T01 Summary\n\nCanonical task output.\n",
+  }, base));
+
+  const artifactPath = "phases/01-foundation/S01-T01-SUMMARY.md";
+  const fileContent = readFileSync(join(base, ".gsd", artifactPath), "utf-8");
+  assert.notEqual(result.isError, true);
+  assert.equal(result.details.path, artifactPath);
+  assert.match(fileContent, /<!-- gsd:state-version=\d+:\d+ -->/);
+  assert.equal(getArtifact(artifactPath)?.full_content, fileContent);
+});
+
+test("executeSummarySave surfaces task summary projection failures", async (t) => {
+  const base = makeTmpBase();
+  t.after(() => {
+    closeDatabase();
+    cleanup(base);
+  });
+  openTestDb(base);
+  insertMilestone({ id: "M001", title: "Foundation", status: "active" });
+  seedSlice("M001", "S01", "in_progress");
+  const artifactPath = "phases/01-foundation/S01-T01-SUMMARY.md";
+  mkdirSync(join(base, ".gsd", artifactPath), { recursive: true });
+
+  const result = await inProjectDir(base, () => executeSummarySave({
+    milestone_id: "M001",
+    slice_id: "S01",
+    task_id: "T01",
+    artifact_type: "SUMMARY",
+    content: "# T01 Summary\n\nMust not report success.\n",
+  }, base));
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0]!.text, /Error saving artifact/);
+  assert.equal(getArtifact(artifactPath), null);
+});
+
+test("executeSummarySave surfaces task summary worktree mirror failures", async (t) => {
+  const base = makeTmpBase();
+  const worktree = join(base, ".gsd", "worktrees", "M001");
+  t.after(() => {
+    closeDatabase();
+    cleanup(base);
+  });
+  mkdirSync(join(worktree, ".gsd"), { recursive: true });
+  writeFileSync(join(worktree, ".git"), "gitdir: ../../../.git/worktrees/M001\n");
+  openTestDb(base);
+  insertMilestone({ id: "M001", title: "Foundation", status: "active" });
+  seedSlice("M001", "S01", "in_progress");
+  mkdirSync(join(base, ".gsd", "phases", "01-foundation"), { recursive: true });
+  const artifactPath = "phases/01-foundation/S01-T01-SUMMARY.md";
+  mkdirSync(join(worktree, ".gsd", artifactPath), { recursive: true });
+
+  const result = await inProjectDir(worktree, () => executeSummarySave({
+    milestone_id: "M001",
+    slice_id: "S01",
+    task_id: "T01",
+    artifact_type: "SUMMARY",
+    content: "# T01 Summary\n\nMirror failure must be visible.\n",
+  }, worktree));
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0]!.text, /Error saving artifact/);
+  assert.ok(getArtifact(artifactPath));
+});
+
 test("executeSummarySave persists UI-SPEC artifacts at the computed flat-phase path", async () => {
   const base = makeTmpBase();
   try {

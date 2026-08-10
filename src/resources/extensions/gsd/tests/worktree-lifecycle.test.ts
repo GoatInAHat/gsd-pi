@@ -88,6 +88,7 @@ function makeDeps(
  */
 function makeGitRepoBase(opts?: {
   isolation?: "worktree" | "branch" | "none";
+  unborn?: boolean;
 }): string {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "gsd-lifecycle-git-")));
   const git = (args: string[]): void => {
@@ -105,8 +106,10 @@ function makeGitRepoBase(opts?: {
       `## Git\n- isolation: ${opts.isolation}\n`,
     );
   }
-  git(["add", "."]);
-  git(["commit", "-m", "init"]);
+  if (!opts?.unborn) {
+    git(["add", "."]);
+    git(["commit", "-m", "init"]);
+  }
   return base;
 }
 
@@ -301,6 +304,27 @@ test("enterMilestone retries branch isolation when session is degraded", (t) => 
   assert.equal(s.isolationDegraded, false);
   assert.equal(s.basePath, base);
   assert.equal(s.milestoneLeaseToken, null);
+});
+
+test("enterMilestone enters branch isolation in a zero-commit repository (#1688)", (t) => {
+  const previousCwd = process.cwd();
+  const base = makeGitRepoBase({ isolation: "branch", unborn: true });
+  t.after(() => cleanupRepoBase(base, previousCwd));
+
+  const s = makeSession({ basePath: base, originalBasePath: base });
+  const lifecycle = new WorktreeLifecycle(s, makeDeps());
+
+  const result = lifecycle.enterMilestone("M001", makeCtx());
+
+  assert.equal(result.ok, true);
+  assert.equal(
+    execFileSync("git", ["branch", "--show-current"], { cwd: base, encoding: "utf8" }).trim(),
+    "milestone/M001",
+  );
+  assert.throws(
+    () => execFileSync("git", ["rev-parse", "--verify", "HEAD"], { cwd: base, stdio: "pipe" }),
+    "branch entry must not fabricate a commit",
+  );
 });
 
 test("enterMilestone remains degraded when branch isolation retry fails", (t) => {

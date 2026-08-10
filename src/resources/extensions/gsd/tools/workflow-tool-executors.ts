@@ -89,7 +89,7 @@ import { flushWorkflowProjections } from "../projection-flush.js";
 import { loadEffectiveGSDPreferences } from "../preferences.js";
 import { parseProject } from "../schemas/parsers.js";
 import { autoSession, getAutoRuntimeSnapshot, isAutoActive } from "../auto-runtime-state.js";
-import { renderPlanFromDb } from "../markdown-renderer.js";
+import { renderPlanFromDb, writeTaskSummaryProjection } from "../markdown-renderer.js";
 import { readUnitHarnessAbort, type UnitHarnessAbortRecord } from "../unit-runtime.js";
 import {
   prepareUatRun,
@@ -436,6 +436,7 @@ async function mirrorArtifactToActiveWorktreeProjection(
   basePath: string,
   relativePath: string,
   content: string,
+  required: boolean = false,
 ): Promise<void> {
   const contract = resolveGsdPathContract(basePath);
   if (!contract.worktreeGsd) return;
@@ -451,6 +452,7 @@ async function mirrorArtifactToActiveWorktreeProjection(
     logWarning("tool", `gsd_summary_save worktree projection mirror failed: ${(err as Error).message}`, {
       path: relativePath,
     });
+    if (required) throw err;
   }
 }
 
@@ -673,18 +675,33 @@ export async function executeSummarySave(
       }
     }
 
-    await saveArtifactToDb(
-      {
-        path: relativePath,
-        artifact_type: params.artifact_type,
-        content: contentToSave,
-        milestone_id: isRootArtifact ? undefined : params.milestone_id,
-        slice_id: isRootArtifact ? undefined : params.slice_id,
-        task_id: isRootArtifact ? undefined : params.task_id,
-      },
-      basePath,
-    );
-    await mirrorArtifactToActiveWorktreeProjection(basePath, relativePath, contentToSave);
+    const isTaskSummary = params.artifact_type === "SUMMARY" && !!params.milestone_id && !!params.slice_id && !!params.task_id;
+    let projectedContent = contentToSave;
+    if (isTaskSummary) {
+      const contract = resolveGsdPathContract(basePath);
+      const projection = await writeTaskSummaryProjection(
+        contract.projectRoot,
+        params.milestone_id!,
+        params.slice_id!,
+        params.task_id!,
+        contentToSave,
+      );
+      relativePath = projection.artifactPath;
+      projectedContent = projection.content;
+    } else {
+      await saveArtifactToDb(
+        {
+          path: relativePath,
+          artifact_type: params.artifact_type,
+          content: contentToSave,
+          milestone_id: isRootArtifact ? undefined : params.milestone_id,
+          slice_id: isRootArtifact ? undefined : params.slice_id,
+          task_id: isRootArtifact ? undefined : params.task_id,
+        },
+        basePath,
+      );
+    }
+    await mirrorArtifactToActiveWorktreeProjection(basePath, relativePath, projectedContent, isTaskSummary);
 
     if (params.artifact_type === "CONTEXT" && !params.task_id) {
       try {

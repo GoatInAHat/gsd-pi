@@ -16,6 +16,8 @@ import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
 import {
+  branchExistsIncludingUnborn,
+  currentBranchIncludingUnborn,
   nativeBranchExists,
   nativeDetectMainBranch,
 } from "../native-git-bridge.ts";
@@ -63,6 +65,42 @@ test("nativeBranchExists: returns false for non-existent branch in unborn repo",
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("native branch lookup recognizes symbolic unborn HEAD across reruns", () => {
+  assert.equal(
+    branchExistsIncludingUnborn(false, "milestone/M001", "milestone/M001"),
+    true,
+  );
+  assert.equal(
+    branchExistsIncludingUnborn(false, "milestone/M001", "milestone/M002"),
+    false,
+  );
+});
+
+test("native branch lookup falls back when unborn HEAD throws", () => {
+  const currentBranch = currentBranchIncludingUnborn(
+    () => {
+      throw new Error("unborn HEAD");
+    },
+    () => "milestone/M001",
+  );
+
+  assert.equal(currentBranch, "milestone/M001");
+  assert.equal(branchExistsIncludingUnborn(false, currentBranch, "milestone/M001"), true);
+});
+
+test("branch mode re-enters a dirty current unborn milestone branch", (t) => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "unborn-branch-test-")));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  git(["init"], dir);
+
+  enterBranchModeForMilestone(dir, "M001");
+  writeFileSync(join(dir, "draft.txt"), "uncommitted work\n");
+  enterBranchModeForMilestone(dir, "M001");
+
+  assert.equal(git(["symbolic-ref", "--short", "HEAD"], dir), "milestone/M001");
+  assert.equal(git(["status", "--short", "draft.txt"], dir), "?? draft.txt");
 });
 
 test("branch isolation enters the milestone branch in an unborn repo", () => {

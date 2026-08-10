@@ -32,6 +32,12 @@ Work happens in the project root on a `milestone/<MID>` branch. No worktree is c
 
 Use this when worktrees cause problems — submodule-heavy repos, repos with hardcoded paths, or environments where worktree symlinks don't behave.
 
+Branch mode also works in a zero-commit repository: GSD creates and enters the
+unborn `milestone/<MID>` branch without requiring a commit target. Re-entering
+that same unborn branch is a no-op, so staged and unstaged first-commit work is
+preserved across auto-mode runs. A new run retries the configured isolation
+mode instead of inheriting an earlier run's degraded-isolation flag.
+
 ## Branching Model (Worktree Mode)
 
 ```

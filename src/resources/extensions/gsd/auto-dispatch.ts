@@ -135,6 +135,7 @@ import {
   formatCloseoutProofBlock,
   proveMilestoneCloseout,
 } from "./milestone-closeout-proof.js";
+import { throwIfTransientProjectionLockError } from "./projection-root-errors.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -1789,6 +1790,10 @@ export const DISPATCH_RULES: DispatchRule[] = [
               `gsd-projection-heal: re-rendered missing slice PLAN for ${unitId} from the DB at ${rendered.planPath}\n`,
             );
           } catch (err) {
+            // A Windows sharing violation is transient contention, not a DB
+            // projection gap. Preserve it as a typed throw so Recovery
+            // Classification routes through the loop's existing retry budget.
+            throwIfTransientProjectionLockError(err);
             // Fail loud below: a DB that genuinely lacks the slice rows is a
             // real error, and the stop diagnosis reports it verbatim.
             planRenderError = err instanceof Error ? err.message : String(err);

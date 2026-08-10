@@ -12,7 +12,9 @@ import { checkoutBranchWithStashGuard } from "./worktree-git-recovery.js";
 import {
   nativeBranchExists,
   nativeBranchForceReset,
+  nativeCheckoutNewBranch,
   nativeDetectMainBranch,
+  nativeHasCommittedHead,
   nativeIsAncestor,
   nativeUpdateRef,
   nativeWorktreeList,
@@ -57,6 +59,18 @@ export function enterBranchModeForMilestone(
   const branchExists = nativeBranchExists(basePath, branch);
 
   if (!branchExists) {
+    if (!nativeHasCommittedHead(basePath)) {
+      nativeCheckoutNewBranch(basePath, branch);
+      debugLog("auto-worktree", {
+        action: "enterBranchMode",
+        milestoneId,
+        branch,
+        repositoryState: "unborn",
+        created: true,
+      });
+      return;
+    }
+
     // Create the milestone branch from the integration branch start-point.
     const integrationBranch =
       readIntegrationBranch(basePath, milestoneId) ?? undefined;

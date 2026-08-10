@@ -140,7 +140,7 @@ Common block reasons and operator actions:
 | `preflight-unmerged-conflicts` | Milestone merge preflight found unresolved Git conflict stages in the working tree (shared with the global workspace git gate). | Resolve conflicts manually (`git status`, fix files, stage resolutions), then run `/gsd auto` to resume. Auto mode **pauses** on pre-dispatch health gate product conflicts; an unrecoverable git probe **stops** the loop. |
 | `preflight-dirty-overlap` | Milestone merge preflight found local dirty files that overlap files changed by the milestone branch. | Commit or stash your local edits manually, or move them out of the way, then rerun `/gsd auto`. |
 
-Recovery classification now treats deterministic policy, tool-schema, stale-worker, and invalid-worktree failures as non-transient stops. Provider failures still use provider-specific transient classification and may retry automatically, while verification drift and unknown runtime failures escalate for inspection because repeating the same dispatch can preserve the drift.
+Recovery classification now treats deterministic policy, tool-schema, stale-worker, and invalid-worktree failures as non-transient stops. A Windows projection-root sharing violation is normalized as transient and consumes the existing transient-execution retry budget; sustained contention still exhausts that budget and stops. Provider failures still use provider-specific transient classification and may retry automatically, while genuine projection gaps, verification drift, and unknown runtime failures escalate for inspection because repeating the same dispatch can preserve the drift.
 
 ### Preference Diagnostics at Preflight
 

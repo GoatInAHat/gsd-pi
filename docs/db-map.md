@@ -55,7 +55,7 @@ After commit: regenerate markdown artifacts → write to disk → invalidate cac
 - Keyed by workspace `identityKey` (realpath of project root)
 - Sibling worktrees share the same `.gsd/gsd.db` via SQLite WAL
 - Only one connection is "active" at a time; others cached for fast re-activation
-- Fresh, active, and cached opens verify startup schema invariants before reuse. Missing non-versioned ADR-047 liveness tables or the open-wedge index force the same guarded startup-maintenance reopen used for other schema repairs; this preserves version stamps and existing rows.
+- Fresh, active, and cached opens verify the registered non-versioned schema invariants described under [ADR-047 liveness ledger](#adr-047-liveness-ledger-non-versioned) before reuse.
 - On process exit: close without checkpointing; coordinated maintenance owns checkpoint and vacuum
 - Before file-backed schema migrations, `db-migration-backup.ts` checkpoints WAL and replaces `.gsd/gsd.db.backup-vN` with a copy of the database being migrated. The copy must report the expected schema version and pass SQLite `quick_check`; checkpoint, copy, or validation failures warn and fail closed before migration DDL.
 
@@ -678,11 +678,13 @@ result_json  TEXT
 
 #### ADR-047 liveness ledger (non-versioned)
 
-`db-liveness-backstop-schema.ts` is the authoritative schema source for the
-liveness tables and open-wedge index. These objects are startup invariants
-rather than a numbered migration: missing objects are recreated through guarded
-startup maintenance without changing `schema_version`, `application_id`, or
-`user_version`; `/gsd doctor` records a detected repair.
+`db-required-schema.ts` is the registration and completeness authority for
+non-versioned schema features required on every database open. It currently
+registers the ADR-047 liveness feature; `db-liveness-backstop-schema.ts` owns
+that feature's table and open-wedge-index DDL. Startup repair and `/gsd doctor`
+query the same registry, so missing required objects trigger guarded startup
+maintenance without changing `schema_version`, `application_id`, or
+`user_version`; doctor records a detected repair.
 
 ---
 
@@ -1999,6 +2001,11 @@ execution evidence remain authoritative.
 | `gsd_save_gate_result` | quality_gates | quality_gates, gate_runs (same transaction) | — |
 | `capture_thought` | memories | memories | KNOWLEDGE.md projection for Patterns/Lessons (both backfilled and newly captured) |
 | `memory_query` | memories, memories_fts, memory_embeddings | memories (hit_count++) | — |
+
+Slice lifecycle writers own the taskless Q8 companion gate. Planning or
+replanning a Slice, and reopening its Task, Slice, or Milestone hierarchy,
+must establish exactly one Q8 row for that Slice and reset it to `pending`;
+duplicate companion rows fail the operation instead of being silently retained.
 
 The six planning mutations above commit legacy hierarchy changes, lifecycle
 adoption or transition, one domain event/outbox destination, Projection Work,

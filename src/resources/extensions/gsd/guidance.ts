@@ -52,6 +52,8 @@ const RECOVERY_REMEDIATION: Record<RecoveryGuidanceKey, string> = {
     "Run `/gsd doctor` to surface the persistent or repair-failed drift kinds, apply its fixes, then run `/gsd auto` to resume.",
   "illegal-transition":
     "A derived Phase edge rejected by the Phase Transition Invariant survived reconciliation; inspect deriveState and the State Reconciliation Module before resuming.",
+  "projection-lock-transient":
+    "Another Windows process temporarily holds the projection root. Retry through the existing transient budget; if contention persists, use `/gsd doctor` to inspect stale workers and orphaned worktrees.",
   "runtime-unknown": "Inspect the runtime error and add a dedicated classification if it is repeatable.",
   "provider-transient": "Retry after the provider/network condition clears.",
   "provider-permanent": "Inspect provider credentials, model entitlement, or request shape.",

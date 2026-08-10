@@ -42,7 +42,7 @@ import type { GsdWorkspace, MilestoneScope } from "../workspace.js";
 import { logError, logWarning } from "../workflow-logger.js";
 import { createDbAdapter, type DbAdapter } from "../db-adapter.js";
 import { createBaseSchemaObjects } from "../db-base-schema.js";
-import { hasLivenessBackstopSchema } from "../db-liveness-backstop-schema.js";
+import { hasRequiredSchemaObjects } from "../db-required-schema.js";
 import { createCoordinationTablesV24 } from "../db-coordination-schema.js";
 import { createDbConnectionCache, type DbConnectionCacheEntry } from "../db-connection-cache.js";
 import { backupDatabaseBeforeMigration, isMigrationBackupError } from "../db-migration-backup.js";
@@ -213,7 +213,7 @@ function assessStartupRepair(db: DbAdapter): StartupRepairAssessment {
     || !hasCanonicalOutboxInvariantsV31(db)
     || !hasVerificationEvidenceDedupIndex(db)
     || !hasRuntimeKvSchemaV25(db)
-    || !hasLivenessBackstopSchema(db)
+    || !hasRequiredSchemaObjects(db)
     || (fts.supported && (!fts.schemaComplete || !fts.rebuildMarked));
   return {
     required,
