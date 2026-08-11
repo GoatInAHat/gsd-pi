@@ -28,16 +28,16 @@ See [CHANGELOG.md](./CHANGELOG.md) for release-by-release fixes and [Legacy Rele
 ## Latest Release Highlights
 
 <!-- release-highlights:start -->
-Latest release: **v1.13.0**
+Latest release: **v1.14.0**
 
-- **gsd:** Cut project state over to DB authority (#1627).
-- **issue:** Fix: forensics redactForGitHub misses OS username, workspace repo IDs, and doctor issue paths (#1633).
-- **migrate:** Slice completion guard + decision field extraction (fixes #1606, #1607) (#1611).
-- **model-router:** Add claude-sonnet-5 catalog entry; classify recon subagents as light (#1609).
-- **gsd:** Make auto mode complete a milestone end to end (#1605).
-- **issue:** Bug: dispatch-guard.js blocks research-slice/parallel-research sentinel — missing DB exemption (#1617).
-- **issue:** Roadmap-divergence reconciliation never converges when a slice is skipped (detector includes skipped slices, renderer omits them) (#1620).
-- **issue:** Auto-mode silent re-dispatch loop: execute-task refreshRecoveryDbForArtifact is a read-only no-op, projection-drift stuck-recovery never advances state (#1624).
+- **gsd:** Add state contract v1 projection (#1665).
+- **pi-ai:** Refresh MiniMax-M3 video input and adaptive thinking (#1573).
+- **gsd:** Hash actual guard inputs in block signatures (#1676).
+- **gsd:** Prevent persistent auto-mode wedges (#1673).
+- **issue:** [Bug]: Symlinked .gsd project store breaks the closeout consistency gate — milestone merge fails with 'fatal: not a git repository' (#1670).
+- **issue:** [Bug]: Auto-mode pause during unit setup leaks the milestone lease — same-process resume deadlocks against its own stale lease (#1669).
+- **issue:** Auto-mode silent re-dispatch loop: refreshRecoveryDbForArtifact catch-all for non-whitelisted unit types is a no-op reported as success (#1663).
+- **issue:** Bug: parent-workspace host verification fans out to all child repos when task targets orchestration root (#1656).
 
 <!-- release-highlights:end -->
 
@@ -194,7 +194,6 @@ Then use slash commands inside the GSD session:
 | --- | --- |
 | `src/` | Core runtime resources and bundled extensions |
 | `packages/` | Workspace packages used by the CLI, agent, TUI, RPC, and native bridge |
-| `apps/` | Standalone native apps, such as the GSD Cloud Monitor menu bar app |
 | `native/` | Native engine packaging and platform binaries |
 | `studio/` | Desktop studio app |
 | `web/` | Web UI and API surface |

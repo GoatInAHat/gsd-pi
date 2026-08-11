@@ -875,6 +875,30 @@ test('── markdown-renderer: renderTaskSummary skips empty ──', async () 
   }
 });
 
+test('── markdown-renderer: task summary artifact failure is observable ──', async (t) => {
+  const tmpDir = makeTmpDir();
+  t.after(() => {
+    closeDatabase();
+    cleanupDir(tmpDir);
+  });
+  openDatabase(path.join(tmpDir, '.gsd', 'gsd.db'));
+  clearAllCaches();
+
+  scaffoldDirs(tmpDir, 'M001', ['S01']);
+  insertMilestone({ id: 'M001', title: 'Test', status: 'active' });
+  insertSlice({ id: 'S01', milestoneId: 'M001', title: 'Slice', status: 'pending' });
+  insertTask({
+    id: 'T01', sliceId: 'S01', milestoneId: 'M001', title: 'Task', status: 'done',
+    fullSummaryMd: makeTaskSummaryContent('T01'),
+  });
+  _getAdapter()!.exec('DROP TABLE artifacts');
+
+  await assert.rejects(
+    () => renderTaskSummary(tmpDir, 'M001', 'S01', 'T01'),
+    /task summary projection.*artifact persistence failed/i,
+  );
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Slice Summary Rendering
 // ═══════════════════════════════════════════════════════════════════════════

@@ -17,7 +17,7 @@ import {
   upsertRequirement,
   getAllMilestones,
 } from "../gsd-db.ts";
-import { registerAutoWorker } from "../db/auto-workers.ts";
+import { getAutoWorker, registerAutoWorker } from "../db/auto-workers.ts";
 import { claimMilestoneLease, getMilestoneLease } from "../db/milestone-leases.ts";
 import { deriveState, invalidateStateCache } from "../state.ts";
 import { autoSession } from "../auto-runtime-state.ts";
@@ -274,6 +274,87 @@ test("executeSummarySave persists artifact and returns computed path", async () 
     closeDatabase();
     cleanup(base);
   }
+});
+
+test("executeSummarySave task summaries use the canonical projection seam", async (t) => {
+  const base = makeTmpBase();
+  t.after(() => {
+    closeDatabase();
+    cleanup(base);
+  });
+  openTestDb(base);
+  insertMilestone({ id: "M001", title: "Foundation", status: "active" });
+  seedSlice("M001", "S01", "in_progress");
+  mkdirSync(join(base, ".gsd", "phases", "01-foundation"), { recursive: true });
+
+  const result = await inProjectDir(base, () => executeSummarySave({
+    milestone_id: "M001",
+    slice_id: "S01",
+    task_id: "T01",
+    artifact_type: "SUMMARY",
+    content: "# T01 Summary\n\nCanonical task output.\n",
+  }, base));
+
+  const artifactPath = "phases/01-foundation/S01-T01-SUMMARY.md";
+  const fileContent = readFileSync(join(base, ".gsd", artifactPath), "utf-8");
+  assert.notEqual(result.isError, true);
+  assert.equal(result.details.path, artifactPath);
+  assert.match(fileContent, /<!-- gsd:state-version=\d+:\d+ -->/);
+  assert.equal(getArtifact(artifactPath)?.full_content, fileContent);
+});
+
+test("executeSummarySave surfaces task summary projection failures", async (t) => {
+  const base = makeTmpBase();
+  t.after(() => {
+    closeDatabase();
+    cleanup(base);
+  });
+  openTestDb(base);
+  insertMilestone({ id: "M001", title: "Foundation", status: "active" });
+  seedSlice("M001", "S01", "in_progress");
+  const artifactPath = "phases/01-foundation/S01-T01-SUMMARY.md";
+  mkdirSync(join(base, ".gsd", artifactPath), { recursive: true });
+
+  const result = await inProjectDir(base, () => executeSummarySave({
+    milestone_id: "M001",
+    slice_id: "S01",
+    task_id: "T01",
+    artifact_type: "SUMMARY",
+    content: "# T01 Summary\n\nMust not report success.\n",
+  }, base));
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0]!.text, /Error saving artifact/);
+  assert.equal(getArtifact(artifactPath), null);
+});
+
+test("executeSummarySave surfaces task summary worktree mirror failures", async (t) => {
+  const base = makeTmpBase();
+  const worktree = join(base, ".gsd", "worktrees", "M001");
+  t.after(() => {
+    closeDatabase();
+    cleanup(base);
+  });
+  mkdirSync(join(worktree, ".gsd"), { recursive: true });
+  writeFileSync(join(worktree, ".git"), "gitdir: ../../../.git/worktrees/M001\n");
+  openTestDb(base);
+  insertMilestone({ id: "M001", title: "Foundation", status: "active" });
+  seedSlice("M001", "S01", "in_progress");
+  mkdirSync(join(base, ".gsd", "phases", "01-foundation"), { recursive: true });
+  const artifactPath = "phases/01-foundation/S01-T01-SUMMARY.md";
+  mkdirSync(join(worktree, ".gsd", artifactPath), { recursive: true });
+
+  const result = await inProjectDir(worktree, () => executeSummarySave({
+    milestone_id: "M001",
+    slice_id: "S01",
+    task_id: "T01",
+    artifact_type: "SUMMARY",
+    content: "# T01 Summary\n\nMirror failure must be visible.\n",
+  }, worktree));
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0]!.text, /Error saving artifact/);
+  assert.ok(getArtifact(artifactPath));
 });
 
 test("executeSummarySave persists UI-SPEC artifacts at the computed flat-phase path", async () => {
@@ -1225,12 +1306,14 @@ test("executePlanMilestone proceeds without re-claiming when in-process auto hol
   }
 });
 
-test("executePlanMilestone refuses a same-process holder when active auto does not own it", async () => {
+test("executePlanMilestone reclaims a same-process holder after active auto resumes in a milestone worktree", async () => {
   const base = makeTmpBase();
   autoSession.reset();
   try {
     openTestDb(base);
     seedMilestone("M080", "Same-process holder");
+    const worktree = join(base, ".gsd-worktrees", "M080");
+    mkdirSync(worktree, { recursive: true });
     const staleWorker = registerAutoWorker({ projectRootRealpath: normalizeRealPath(base) });
     const heldLease = claimMilestoneLease(staleWorker, "M080");
     assert.equal(heldLease.ok, true);
@@ -1239,15 +1322,51 @@ test("executePlanMilestone refuses a same-process holder when active auto does n
     autoSession.active = true;
     autoSession.workerId = registerAutoWorker({ projectRootRealpath: normalizeRealPath(base) });
 
-    const result = await inProjectDir(base, () => executePlanMilestone(validMilestonePlan("M080"), base));
+    const result = await inProjectDir(worktree, () => executePlanMilestone(validMilestonePlan("M080"), worktree));
+
+    assert.equal(result.isError, undefined,
+      `same-process auto resume must not conflict with its prior worker ID: ${result.content?.[0]?.text}`);
+    const surviving = getMilestoneLease("M080");
+    assert.ok(surviving, "reclaimed lease must remain held by active auto");
+    assert.equal(surviving.worker_id, autoSession.workerId);
+    assert.ok(surviving.fencing_token > heldToken,
+      "same-process resume must bump the fencing token when reclaiming the lease");
+    assert.equal(surviving.status, "held");
+    assert.equal(autoSession.milestoneLeaseToken, surviving.fencing_token);
+    assert.equal(getAutoWorker(staleWorker)?.status, "stopping");
+  } finally {
+    autoSession.reset();
+    closeDatabase();
+    cleanup(base);
+  }
+});
+
+test("executePlanMilestone refuses a same-process holder when active auto has no worker row", async () => {
+  const base = makeTmpBase();
+  autoSession.reset();
+  try {
+    openTestDb(base);
+    seedMilestone("M081", "Detached auto worker");
+    const holderWorker = registerAutoWorker({ projectRootRealpath: normalizeRealPath(base) });
+    const heldLease = claimMilestoneLease(holderWorker, "M081");
+    assert.equal(heldLease.ok, true);
+    const heldToken = heldLease.ok ? heldLease.token : -1;
+
+    // A setup-race pause detaches the worker from the session while auto stays
+    // active; there is nothing to reclaim with, so planning must fail closed.
+    autoSession.active = true;
+    autoSession.workerId = null;
+
+    const result = await inProjectDir(base, () => executePlanMilestone(validMilestonePlan("M081"), base));
 
     assert.equal(result.isError, true);
     assert.equal(result.details?.error, "milestone_lease_conflict");
-    const surviving = getMilestoneLease("M080");
-    assert.ok(surviving, "same-process holder lease must remain after conflict");
-    assert.equal(surviving.worker_id, staleWorker);
+    const surviving = getMilestoneLease("M081");
+    assert.ok(surviving, "holder lease must survive the refused plan call");
+    assert.equal(surviving.worker_id, holderWorker);
     assert.equal(surviving.fencing_token, heldToken);
     assert.equal(surviving.status, "held");
+    assert.equal(getAutoWorker(holderWorker)?.status, "active");
   } finally {
     autoSession.reset();
     closeDatabase();

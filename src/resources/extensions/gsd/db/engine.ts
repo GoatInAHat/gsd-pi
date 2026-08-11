@@ -42,6 +42,7 @@ import type { GsdWorkspace, MilestoneScope } from "../workspace.js";
 import { logError, logWarning } from "../workflow-logger.js";
 import { createDbAdapter, type DbAdapter } from "../db-adapter.js";
 import { createBaseSchemaObjects } from "../db-base-schema.js";
+import { hasRequiredSchemaObjects } from "../db-required-schema.js";
 import { createCoordinationTablesV24 } from "../db-coordination-schema.js";
 import { createDbConnectionCache, type DbConnectionCacheEntry } from "../db-connection-cache.js";
 import { backupDatabaseBeforeMigration, isMigrationBackupError } from "../db-migration-backup.js";
@@ -212,6 +213,7 @@ function assessStartupRepair(db: DbAdapter): StartupRepairAssessment {
     || !hasCanonicalOutboxInvariantsV31(db)
     || !hasVerificationEvidenceDedupIndex(db)
     || !hasRuntimeKvSchemaV25(db)
+    || !hasRequiredSchemaObjects(db)
     || (fts.supported && (!fts.schemaComplete || !fts.rebuildMarked));
   return {
     required,
@@ -2045,10 +2047,11 @@ export function closeAllDatabases(): void {
  * Open (or reuse) the database connection scoped to the given workspace.
  *
  * Uses workspace.identityKey as the cache key, so sibling worktrees of the
- * same project resolve to the same connection. On a cache hit the existing
- * adapter is reactivated as the current connection without re-opening the
- * file. On a cache miss, delegates to openDatabase() for the full
- * open + schema-init + migration flow, then caches the result.
+ * same project resolve to the same connection. On a cache hit with complete
+ * startup invariants, the existing adapter is reactivated without re-opening
+ * the file. A cache hit that needs repair is closed and reopened through the
+ * guarded schema-init flow. On a cache miss, delegates to openDatabase() for
+ * the full open + schema-init + migration flow, then caches the result.
  *
  * When switching to a different workspace, the previously active connection
  * is preserved in the cache (not closed), so callers can switch back to it
@@ -2075,13 +2078,19 @@ export function openDatabaseByWorkspace(workspace: GsdWorkspace): boolean {
   }
   const validCached = _dbCache.get(key);
   if (validCached) {
-    // Reactivate the cached connection as the current singleton.
-    currentDb = validCached.db;
-    currentPath = validCached.dbPath;
-    currentPid = process.pid;
-    _dbOpenState.markAttempted();
-    _currentIdentityKey = key;
-    return true;
+    if (_replacementObservationDatabases.has(validCached.db) || !assessStartupRepair(validCached.db).required) {
+      currentDb = validCached.db;
+      currentPath = validCached.dbPath;
+      currentPid = process.pid;
+      _dbOpenState.markAttempted();
+      _currentIdentityKey = key;
+      return true;
+    }
+    if (currentDb === validCached.db) closeDatabase();
+    else {
+      closeCachedConnection(validCached, "workspace");
+      _dbCache.delete(key);
+    }
   }
 
   // Cache miss — need to open a new connection.
@@ -2268,7 +2277,15 @@ function openDatabaseInternal(path: string, allowReplacementWrite: boolean): boo
     } else {
       try {
         assertDatabaseAdapterMatchesPath(currentDb, path);
-        return true;
+        if (
+          path === ":memory:"
+          || _replacementObservationDatabases.has(currentDb)
+          || !assessStartupRepair(currentDb).required
+        ) {
+          return true;
+        }
+        closeDatabase();
+        _dbOpenState.markAttempted();
       } catch {
         closeDatabase();
       }

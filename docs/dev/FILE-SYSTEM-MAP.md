@@ -508,6 +508,8 @@
 | gsd/db/domain-operation.ts | Database, State Machine | Revision-checked Domain Operation transaction and durable replay receipt boundary |
 | gsd/db/lifecycle-shadow-comparison.ts | Database, State Machine | Pure legacy-to-canonical lifecycle normalization and semantic shadow comparison |
 | gsd/db/writers/lifecycle-commands.ts | Database, State Machine | Transaction-bound lifecycle adoption/transition, Attempt, Result, replay-fence, and Kernel checkpoint writers; planning handlers use the lifecycle and fence subset |
+| gsd/db/writers/slice-companion-state.ts | Database, State Machine | Transaction-bound owner of the taskless Q8 companion gate required by Slice planning and reopen lifecycle operations |
+| gsd/db-required-schema.ts | Database, Loader/Bootstrap | Registry and shared completeness checks for non-versioned schema features required on every database open |
 | gsd/planning-domain-operation.ts | Database, GSD Workflow | Shared atomic planning-operation adapter that combines legacy hierarchy writes, canonical lifecycle comparison, events, and Projection Work |
 | gsd/planning-invocation.ts | GSD Workflow, Tool System | Private invocation identity helpers for direct calls and transport-stable Pi-extension planning calls; workflow MCP mirrors the envelope at its package boundary |
 | gsd/projection-cleanup.ts | Database, File System | Removes stale PLAN projections and artifact/compat records only when their current content is still writer-owned |
@@ -541,6 +543,7 @@
 | gsd/namespaced-resolver.ts | GSD Workflow | Namespace and scoped resource resolution |
 | gsd/error-utils.ts | GSD Workflow | Error handling and formatting |
 | gsd/errors.ts | GSD Workflow | Error type definitions |
+| gsd/projection-root-errors.ts | Auto Engine, GSD Workflow | Typed classification boundary for transient native projection-root sharing violations |
 | gsd/diff-context.ts | GSD Workflow | Diff-based context extraction |
 | gsd/memory-extractor.ts | GSD Workflow | Memory and context extraction from state |
 | gsd/structured-data-formatter.ts | GSD Workflow | Structured output formatting |

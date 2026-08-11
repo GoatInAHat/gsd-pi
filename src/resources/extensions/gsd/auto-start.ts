@@ -124,7 +124,10 @@ import {
   resolveDefaultSessionModel,
   resolveDynamicRoutingConfig,
 } from "./preferences-models.js";
-import type { WorktreeLifecycle } from "./worktree-lifecycle.js";
+import {
+  prepareIsolationForNewRun,
+  type WorktreeLifecycle,
+} from "./worktree-lifecycle.js";
 import { getSessionModelOverride } from "./session-model-override.js";
 import { setAutoActiveStatus } from "./auto-dashboard.js";
 
@@ -1040,6 +1043,8 @@ export async function bootstrapAutoSession(
   deps: BootstrapDeps,
   interrupted: InterruptedSessionAssessment,
 ): Promise<boolean> {
+  prepareIsolationForNewRun(s);
+
   const {
     shouldUseWorktreeIsolation,
     registerSigtermHandler,
@@ -1179,7 +1184,11 @@ export async function bootstrapAutoSession(
     closeAllWorkflowDatabases();
     const migration = migrateToExternalState(base);
     if (migration.error) {
-      ctx.ui.notify(`External state migration warning: ${migration.error}`, "warning");
+      const isAuthoritativeStateGuard = migration.error.includes(
+        "External state already exists for this project",
+      );
+      const severity = isAuthoritativeStateGuard ? "info" : "warning";
+      ctx.ui.notify(`External state migration warning: ${migration.error}`, severity);
     }
     // Ensure symlink exists (handles fresh projects and post-migration)
     ensureGsdSymlink(base);

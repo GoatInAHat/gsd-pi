@@ -8,6 +8,29 @@ This changelog starts from the `open-gsd/gsd-pi` ownership baseline. Earlier pro
 
 ## [Unreleased]
 
+### Removed
+- **cloud**: remove the unused legacy Cloud v1 agent, MCP gateway, and macOS monitor; this retired code is unrelated to the current `gsd-cloud` project
+
+## [1.14.0] - 2026-08-10
+
+### Added
+- **gsd**: add state contract v1 projection (#1665)
+- **pi-ai**: refresh MiniMax-M3 video input and adaptive thinking (#1573)
+
+### Fixed
+- **gsd**: hash actual guard inputs in block signatures (#1676)
+- **gsd**: prevent persistent auto-mode wedges (#1673)
+- **issue**: [Bug]: Symlinked .gsd project store breaks the closeout consistency gate — milestone merge fails with 'fatal: not a git repository' (#1670)
+- **issue**: [Bug]: Auto-mode pause during unit setup leaks the milestone lease — same-process resume deadlocks against its own stale lease (#1669)
+- **issue**: Auto-mode silent re-dispatch loop: refreshRecoveryDbForArtifact catch-all for non-whitelisted unit types is a no-op reported as success (#1663)
+- **issue**: bug: parent-workspace host verification fans out to all child repos when task targets orchestration root (#1656)
+- **issue**: Auto-mode permanently stuck: paused_session pins active-but-superseded milestone; resume path has no active-milestone check (auto.js:2059) (#1644)
+- **issue**: evidence-xref blocking mismatch pauses without settling the Attempt, then pre-verification-dispatched routes into the publication boundary — unrecoverable execute-task re-dispatch loop (#1642)
+- **issue**: v1.12.0 regression: auto-mode dispatches replan-task but no Unit manifest is registered (#1639)
+- **issue**: gsd recover aborts: assessments base-snapshot identity (milestone/slice/task/scope) does not match PK (path) (#1638)
+- **issue**: task-recovery-abort loop: predecessor abort check is a pure read with no escalation, and gsd_task_recovery_resume is hard-blocked in every auto unit scope (#1637)
+- **issue**: Safety harness: false-positive "unexpected file change" on auto-generated files in .gsd/ or .gsd-state/ when GSD_STATE_DIR is set (#1636)
+
 ## [1.13.0] - 2026-08-08
 
 ### Added
