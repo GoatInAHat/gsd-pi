@@ -217,6 +217,20 @@ function isRetryableRefreshFailure(response: Response): boolean {
 	return response.status === 429 || response.status >= 500;
 }
 
+function safeRefreshErrorSuffix(json: any): string {
+	switch (json?.error) {
+		case "invalid_client":
+		case "invalid_grant":
+		case "invalid_request":
+		case "invalid_scope":
+		case "unauthorized_client":
+		case "unsupported_grant_type":
+			return `: ${json.error}`;
+		default:
+			return "";
+	}
+}
+
 async function refreshKimiToken(oauthHost: string, refreshTokenValue: string, signal?: AbortSignal): Promise<TokenResult> {
 	let lastError: Error | undefined;
 	for (let attempt = 0; attempt <= REFRESH_MAX_RETRIES; attempt++) {
@@ -251,15 +265,15 @@ async function refreshKimiToken(oauthHost: string, refreshTokenValue: string, si
 		}
 		// Unauthorized: the stored credential is dead; clear it and re-login.
 		if (response.status === 401 || response.status === 403 || json?.error === "invalid_grant") {
-			const description = typeof json?.error_description === "string" ? `: ${json.error_description}` : "";
-			throw new Error(`Kimi Code token refresh unauthorized (status ${response.status})${description}`);
+			throw new Error(
+				`Kimi Code token refresh unauthorized (status ${response.status})${safeRefreshErrorSuffix(json)}`,
+			);
 		}
 		if (isRetryableRefreshFailure(response) && attempt < REFRESH_MAX_RETRIES) {
 			lastError = new Error(`Kimi Code token refresh failed with status ${response.status}`);
 			continue;
 		}
-		const text = JSON.stringify(json);
-		throw new Error(`Kimi Code token refresh failed with status ${response.status}${text ? `: ${text}` : ""}`);
+		throw new Error(`Kimi Code token refresh failed with status ${response.status}${safeRefreshErrorSuffix(json)}`);
 	}
 	throw lastError ?? new Error("Kimi Code token refresh failed");
 }
