@@ -128,7 +128,7 @@ export async function refreshOAuthToken(
  * Get API key for a provider from OAuth credentials.
  * Automatically refreshes expired tokens.
  *
- * @returns API key string and updated credentials, or null if no credentials
+ * @returns API key, its OAuth provenance, and updated credentials, or null if no credentials
  * @throws Error if refresh fails
  */
 export async function getOAuthApiKey(

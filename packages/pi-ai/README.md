@@ -1148,7 +1148,7 @@ const key = getEnvApiKey('openai');  // checks OPENAI_API_KEY
 
 ## OAuth Providers
 
-Several providers require OAuth authentication instead of static API keys:
+Several providers support OAuth authentication for subscription access:
 
 - **Anthropic** (Claude Pro/Max subscription)
 - **OpenAI Codex** (ChatGPT Plus/Pro subscription, access to GPT-5.x Codex models)
@@ -1225,7 +1225,7 @@ import {
 
   // Token management
   refreshOAuthToken,   // (provider, credentials) => new credentials
-  getOAuthApiKey,      // (provider, credentialsMap) => { newCredentials, apiKey } | null
+  getOAuthApiKey,      // => { newCredentials, apiKey, apiKeyProvenance } | null
 
   // Types
   type OAuthProvider,
@@ -1290,7 +1290,7 @@ const response = await complete(model, {
 
 **GitHub Copilot**: If you get "The requested model is not supported" error, enable the model manually in VS Code: open Copilot Chat, click the model selector, select the model (warning icon), and click "Enable".
 
-**Kimi Code**: Requires a Kimi Code subscription and uses a browser-based device authorization flow.
+**Kimi Code**: Requires a Kimi Code subscription and uses a browser-based device authorization flow. Pass the `apiKeyProvenance` returned by `getOAuthApiKey()` with the token so requests use `Authorization: Bearer`. Static `KIMI_API_KEY` credentials continue to use `x-api-key`.
 
 ## Development
 
