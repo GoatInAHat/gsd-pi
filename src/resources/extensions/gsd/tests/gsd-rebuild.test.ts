@@ -173,6 +173,51 @@ test("handleRebuild re-renders missing task summary projections from DB", async 
   }
 });
 
+test("handleRebuild preserves an edited completed summary before restoring the DB projection", async () => {
+  const base = makeBase();
+  try {
+    openDatabase(join(base, ".gsd", "gsd.db"));
+    seedOpenTask();
+    insertTask({
+      id: "T01",
+      sliceId: "S01",
+      milestoneId: "M001",
+      title: "Task",
+      status: "complete",
+      oneLiner: "Task complete",
+      narrative: "Canonical narrative.",
+      verificationResult: "passed",
+      fullSummaryMd: "# T01 Summary\n\nCanonical summary.\n",
+    });
+
+    const summaryPath = join(
+      base,
+      ".gsd",
+      "milestones",
+      "M001",
+      "slices",
+      "S01",
+      "tasks",
+      "T01-SUMMARY.md",
+    );
+    const { ctx } = makeCtx();
+    await handleRebuild(ctx, base, "markdown");
+    writeFileSync(summaryPath, "# T01 Summary\n\nExternally edited evidence.\n", "utf-8");
+
+    await handleRebuild(ctx, base, "markdown");
+
+    const quarantined = listFiles(join(base, ".gsd", "quarantine", "projections"));
+    assert.equal(quarantined.length, 1);
+    assert.equal(
+      readFileSync(quarantined[0]!, "utf-8"),
+      "# T01 Summary\n\nExternally edited evidence.\n",
+    );
+    assert.match(readFileSync(summaryPath, "utf-8"), /Canonical summary/);
+  } finally {
+    cleanup(base);
+  }
+});
+
 test("handleRebuild database target is reserved and does not import markdown", async () => {
   const base = makeBase();
   try {

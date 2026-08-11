@@ -69,6 +69,22 @@ export function hashBackstopInput(payload: string): string {
   return createHash('sha256').update(payload, 'utf8').digest('hex');
 }
 
+/** Stable JSON payload for typed guard evidence recorded by the liveness seam. */
+export function serializeNonAdvancingEvidence(evidence: unknown): string {
+  function canonical(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, child]) => [key, canonical(child)]),
+      );
+    }
+    return value;
+  }
+  return JSON.stringify(canonical(evidence));
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }

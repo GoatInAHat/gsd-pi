@@ -20,7 +20,10 @@ import type { MinimalModelRegistry } from "../context-budget.js";
 type BlockedAdvanceResult = Extract<AutoAdvanceResult, { kind: "blocked" }>;
 
 import { debugCount, debugLog, debugTime } from "../debug-logger.js";
-import { reconcileBeforeDispatch } from "../state-reconciliation.js";
+import {
+  reconcileBeforeDispatch,
+  type ReconciliationBlockerDetail,
+} from "../state-reconciliation.js";
 import { isLegalEdge, IllegalPhaseTransitionError } from "../state-transition-matrix.js";
 import { hasPendingDeepStage, resolveDispatch } from "../auto-dispatch.js";
 import { classifyFailure } from "../recovery-classification.js";
@@ -57,6 +60,7 @@ import { isSkippedForDispatch } from "../status-guards.js";
 import { getErrorMessage } from "../error-utils.js";
 import { logWarning } from "../workflow-logger.js";
 import { normalizeRealPath } from "../paths.js";
+import { preserveProjectionChanges } from "../projection-worker.js";
 import { buildDispatchKey } from "./dispatch-key.js";
 import {
   COMPLETED_NO_ADVANCE_GUARD_ID,
@@ -65,6 +69,7 @@ import {
   getOpenWedge,
   lookupLatestLedgerError,
   recordNonAdvancingOutcome,
+  serializeNonAdvancingEvidence,
   snapshotUnitTargetRows,
 } from "../auto-liveness-backstop.js";
 import { existsSync, readFileSync } from "node:fs";
@@ -595,15 +600,32 @@ export class AutoOrchestrator implements AutoOrchestrationModule {
 
   private async reconcileBeforeDispatch(): Promise<
     { ok: true; reason: string; stateSnapshot?: GSDState }
-    | { ok: false; reason: string; stateSnapshot?: GSDState }
+    | {
+      ok: false;
+      reason: string;
+      stateSnapshot?: GSDState;
+      blockerDetails: readonly ReconciliationBlockerDetail[];
+    }
   > {
     const activeBasePath = this.getLiveDispatchBasePath();
+    try {
+      await preserveProjectionChanges(activeBasePath);
+    } catch (error) {
+      const reason = `Projection observation failed: ${getErrorMessage(error)}`;
+      logWarning("reconcile", reason);
+      return {
+        ok: false,
+        reason,
+        blockerDetails: [{ message: reason }],
+      };
+    }
     const result = await reconcileBeforeDispatch(activeBasePath);
     if (result.blockers.length > 0) {
       return {
         ok: false,
-        reason: result.blockers[0],
+        reason: result.blockers.join("\n"),
         stateSnapshot: result.stateSnapshot,
+        blockerDetails: result.blockerDetails,
       };
     }
     const repairedKinds = result.repaired.map((d) => d.kind);
@@ -1094,7 +1116,16 @@ export class AutoOrchestrator implements AutoOrchestrationModule {
         };
         this.journalTransition({ name: "advance-blocked", reason: blocked.reason });
         this.postAdvanceRecord(blocked);
-        return this.withLivenessInput(blocked, { guardId: "state-reconciliation" });
+        const blockerDetails = "blockerDetails" in reconciliation
+          ? reconciliation.blockerDetails
+          : [{ message: blocked.reason }];
+        const blockerKinds = blockerDetails.map((detail) =>
+          detail.drift?.kind ?? detail.detectorKind ?? "state"
+        ).sort();
+        return this.withLivenessInput(blocked, {
+          guardId: `state-reconciliation:${[...new Set(blockerKinds)].join("+")}`,
+          inputPayload: serializeNonAdvancingEvidence(blockerDetails),
+        });
       }
 
       const reconciledPhase = reconciliation.stateSnapshot.phase;

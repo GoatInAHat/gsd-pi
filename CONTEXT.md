@@ -31,6 +31,7 @@ completed.
 - **Domain Operation**: one validated, atomic change to workflow state and its durable history.
 - **Projection**: a rebuildable human- or tool-readable representation of database state. A Projection never authorizes or reverses workflow progress.
 - **Projection Work**: durable work to bring a Projection to a specific database revision, including retry and visible staleness.
+- **Projection Worker**: the runtime module that observes and preserves external Projection bytes, renders database-backed Projections, and settles durable Projection Work without influencing workflow progression.
 - **Import Preview**: a read-only candidate interpretation and exact diff of legacy material before it may affect Database Authority.
 - **Import Application**: the explicitly authorized, backed-up, atomic application of an unchanged Import Preview.
 - **Failure Observation**: an immutable record of one failed Attempt, its normalized cause and evidence, and the Recovery Action selected under a named policy version.
@@ -104,7 +105,8 @@ completed.
 - **Runtime persistence adapter**: adapter behind the Runtime persistence seam.
 - **Notification adapter**: adapter behind the Notification seam.
 - **DB snapshot persistence module**: the deep module that owns `sql.js` snapshot write semantics, including temp-file naming, fsync, cleanup, and rename ordering.
-- **State Reconciliation module**: module that runs `reconcileBeforeDispatch` before any Dispatch decision or worker spawn. Surfaces terminal `blockers: string[]` and machine-actionable `DriftRecord[]`. Owns the drift catalog (detectors and idempotent repairs). Throws `ReconciliationFailedError` to Recovery Classification on persistent or repair-failed drift. See `docs/dev/ADR-017-state-reconciliation-drift-driven.md`.
+- **State Reconciliation module**: module that runs `reconcileBeforeDispatch` before any Dispatch decision or worker spawn. Surfaces terminal blocker messages with structured `ReconciliationBlockerDetail` evidence and machine-actionable `DriftRecord[]`. Owns workflow-state drift detectors and idempotent repairs; Projection observation is intentionally outside pre-dispatch reconciliation. Throws `ReconciliationFailedError` to Recovery Classification on persistent or repair-failed drift. See `docs/dev/ADR-017-state-reconciliation-drift-driven.md`.
+- **Projection Worker module**: module that owns full Projection rebuilds. It observes writer-owned hashes, quarantines exact external modeled bytes, renders from Database Authority, and advances current durable Projection Work through fenced delivery transitions. Projection errors remain visible and retryable without blocking otherwise valid workflow progression.
 - **Worktree Safety module**: module that validates project root, worktree registration, lease ownership, and git health before a source-writing Unit runs.
 - **Worktree Lifecycle module**: module that owns worktree create/enter/teardown/merge verbs, `s.basePath` mutation, `process.chdir` discipline, and guarded milestone-merge preflight/postflight stash ordering. Sole owner of these mutations across single-loop and parallel callers.
 - **Worktree State Projection module**: module that owns the direction-and-rules of state file flow between project root and auto-worktree. Encodes the bug-hardened invariants (additive milestone copy, ASSESSMENT verdict overwrite, completed-units forward-sync, WAL/SHM cleanup) that `syncProjectRootToWorktree` and `syncStateToProjectRoot` carry today.

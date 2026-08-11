@@ -8,8 +8,6 @@ import {
   diskSliceIdDivergenceHandler,
 } from "./drift/artifact-db.js";
 import { mergeStateHandler } from "./drift/merge-state.js";
-import { externalMarkdownEditHandler } from "./drift/external-markdown-edit.js";
-import { externalPlanningEditHandler } from "./drift/external-planning-edit.js";
 import { unregisteredMilestoneHandler } from "./drift/project-md.js";
 import { roadmapDivergenceHandler, roadmapMissingHandler } from "./drift/roadmap.js";
 import { sketchFlagHandler } from "./drift/sketch-flag.js";
@@ -27,16 +25,11 @@ export interface ReconciliationRepairPhase {
 
 /**
  * Repairs run phase-by-phase; detection uses the flattened registry (all handlers).
- * External modeled edits are an authority boundary: passthrough bookkeeping may
- * complete, but a modeled-edit blocker must stop DB normalization/re-projection
- * before those later phases can overwrite the user's source bytes.
+ * Projection observation and rendering are owned by the Projection Worker.
+ * Pre-dispatch reconciliation contains only workflow-state repair phases, so a
+ * readable projection cannot block otherwise valid database-backed work.
  */
 export const RECONCILIATION_REPAIR_PHASES: ReadonlyArray<ReconciliationRepairPhase> = [
-  {
-    name: "external-edit-boundary",
-    stopOnBlocker: true,
-    handlers: [externalMarkdownEditHandler, externalPlanningEditHandler],
-  },
   {
     name: "normalize-db",
     handlers: [

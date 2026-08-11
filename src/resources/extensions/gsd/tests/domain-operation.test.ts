@@ -43,6 +43,8 @@ import {
   sealLegacyImportPreview,
   type LegacyImportPreviewArtifact,
 } from "../legacy-import-preview.ts";
+import { rebuildMarkdownProjectionsFromDb } from "../commands-maintenance.ts";
+import { settleCurrentProjectionWork } from "../db/writers/projection-work-delivery.ts";
 
 const tempDirs = new Set<string>();
 const POST_V30_TABLES = [
@@ -400,6 +402,38 @@ test("one operation atomically commits provenance, ordered events, outbox, proje
       delivery_state: "pending",
     },
   );
+});
+
+test("projection rebuild delivers current durable Projection Work", async (t) => {
+  const dbPath = openFixture(t);
+  execute();
+
+  const result = await rebuildMarkdownProjectionsFromDb(dirname(dbPath));
+
+  assert.deepEqual(result.errors, []);
+  const projection = row(`
+    SELECT delivery_state, attempt_count, rendered_content_hash
+    FROM workflow_projection_work
+  `);
+  assert.equal(projection["delivery_state"], "rendered");
+  assert.equal(projection["attempt_count"], 1);
+  assert.match(String(projection["rendered_content_hash"]), /^sha256:[0-9a-f]{64}$/);
+});
+
+test("failed projection delivery records diagnostic retry state", (t) => {
+  openFixture(t);
+  execute();
+
+  assert.equal(settleCurrentProjectionWork({ outcome: "failed", error: "disk full" }), 1);
+
+  const projection = row(`
+    SELECT delivery_state, attempt_count, next_attempt_at, last_error
+    FROM workflow_projection_work
+  `);
+  assert.equal(projection["delivery_state"], "pending");
+  assert.equal(projection["attempt_count"], 1);
+  assert.match(String(projection["next_attempt_at"]), /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(projection["last_error"], "disk full");
 });
 
 test("import.apply Domain Operation: generic executor refuses the reserved operation", (t) => {

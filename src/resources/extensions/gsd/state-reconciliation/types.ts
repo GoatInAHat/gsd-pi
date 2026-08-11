@@ -107,6 +107,14 @@ export interface ReconciliationResult {
   stateSnapshot: GSDState;
   repaired: readonly DriftRecord[];
   blockers: readonly string[];
+  blockerDetails: readonly ReconciliationBlockerDetail[];
+}
+
+/** Structured evidence retained for every terminal reconciliation blocker. */
+export interface ReconciliationBlockerDetail {
+  message: string;
+  drift?: DriftRecord;
+  detectorKind?: DriftRecord["kind"];
 }
 
 /**
