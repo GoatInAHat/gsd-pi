@@ -41,7 +41,7 @@ describe("Kimi Code OAuth provider", () => {
 						expires_in: 900,
 					});
 				}
-				return jsonResponse({ access_token: "tok_access", refresh_token: "tok_refresh", expires_in: 3600 });
+				return jsonResponse({ access_token: "access", refresh_token: "refresh", expires_in: 3600 });
 			});
 			vi.stubGlobal("fetch", fetchMock);
 
@@ -57,8 +57,8 @@ describe("Kimi Code OAuth provider", () => {
 
 			expect(deviceInfo?.userCode).toBe("USER-CODE");
 			expect(deviceInfo?.verificationUri).toBe("https://auth.kimi.com/device?user_code=USER-CODE");
-			expect(credentials.access).toBe("tok_access");
-			expect(credentials.refresh).toBe("tok_refresh");
+			expect(credentials.access).toBe("access");
+			expect(credentials.refresh).toBe("refresh");
 			expect(credentials.expires).toBeGreaterThan(Date.now());
 		});
 
@@ -83,13 +83,13 @@ describe("Kimi Code OAuth provider", () => {
 		it("returns refreshed credentials", async () => {
 			const fetchMock = vi.fn(
 				async (): Promise<Response> =>
-					jsonResponse({ access_token: "tok_new_access", refresh_token: "tok_new_refresh", expires_in: 3600 }),
+					jsonResponse({ access_token: "new-a", refresh_token: "new-r", expires_in: 3600 }),
 			);
 			vi.stubGlobal("fetch", fetchMock);
 
 			const credentials = await refreshKimiCodingToken("tok_old_refresh");
-			expect(credentials.access).toBe("tok_new_access");
-			expect(credentials.refresh).toBe("tok_new_refresh");
+			expect(credentials.access).toBe("new-a");
+			expect(credentials.refresh).toBe("new-r");
 		});
 
 		it("surfaces unauthorized refresh responses", async () => {
