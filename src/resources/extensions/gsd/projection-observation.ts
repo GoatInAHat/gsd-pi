@@ -6,6 +6,7 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
 import { gsdProjectionRoot } from "./paths.js";
 import { readCompatMarker, writeCompatMarker } from "./compat/compat-marker.js";
+import { detectProjectionDrift } from "./markdown-renderer.js";
 import { observeExternalMarkdownEdits } from "./state-reconciliation/drift/external-markdown-edit.js";
 import { observeExternalPlanningEdits } from "./state-reconciliation/drift/external-planning-edit.js";
 import type { DriftRecord } from "./state-reconciliation/types.js";
@@ -97,7 +98,11 @@ export async function preserveProjectionEvidence(
     observedByPath.set(join(basePath, root, observation.projectionPath), observation);
   }
 
-  const paths = new Set([...additionalPaths, ...observedByPath.keys()]);
+  const paths = new Set([
+    ...additionalPaths,
+    ...detectProjectionDrift(basePath).map((entry) => entry.path),
+    ...observedByPath.keys(),
+  ]);
   const preserved: PreservedProjectionEvidence[] = [];
   for (const absPath of paths) {
     if (dryRun) {

@@ -44,7 +44,10 @@ import {
   type LegacyImportPreviewArtifact,
 } from "../legacy-import-preview.ts";
 import { rebuildMarkdownProjectionsFromDb } from "../commands-maintenance.ts";
-import { settleCurrentProjectionWork } from "../db/writers/projection-work-delivery.ts";
+import {
+  captureCurrentProjectionWork,
+  settleProjectionWork,
+} from "../db/writers/projection-work-delivery.ts";
 
 const tempDirs = new Set<string>();
 const POST_V30_TABLES = [
@@ -424,7 +427,8 @@ test("failed projection delivery records diagnostic retry state", (t) => {
   openFixture(t);
   execute();
 
-  assert.equal(settleCurrentProjectionWork({ outcome: "failed", error: "disk full" }), 1);
+  const batch = captureCurrentProjectionWork();
+  assert.equal(settleProjectionWork(batch, { outcome: "failed", error: "disk full" }), 1);
 
   const projection = row(`
     SELECT delivery_state, attempt_count, next_attempt_at, last_error
@@ -434,6 +438,39 @@ test("failed projection delivery records diagnostic retry state", (t) => {
   assert.equal(projection["attempt_count"], 1);
   assert.match(String(projection["next_attempt_at"]), /^\d{4}-\d{2}-\d{2}T/);
   assert.equal(projection["last_error"], "disk full");
+});
+
+test("projection delivery leaves work enqueued during rendering pending", (t) => {
+  openFixture(t);
+  const first = execute();
+  const renderedBatch = captureCurrentProjectionWork();
+  const second = execute(
+    request({ idempotencyKey: "transport/request-2", expectedRevision: 1 }),
+  );
+
+  assert.equal(settleProjectionWork(renderedBatch, {
+    outcome: "rendered",
+    contentHash: `sha256:${"a".repeat(64)}`,
+  }), 0);
+  assert.deepEqual(
+    rows(`
+      SELECT projection_work_id, delivery_state, rendered_content_hash
+      FROM workflow_projection_work
+      ORDER BY source_project_revision
+    `),
+    [
+      {
+        projection_work_id: first.projectionWorkIds[0],
+        delivery_state: "pending",
+        rendered_content_hash: null,
+      },
+      {
+        projection_work_id: second.projectionWorkIds[0],
+        delivery_state: "pending",
+        rendered_content_hash: null,
+      },
+    ],
+  );
 });
 
 test("import.apply Domain Operation: generic executor refuses the reserved operation", (t) => {

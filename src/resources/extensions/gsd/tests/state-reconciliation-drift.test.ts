@@ -9,7 +9,7 @@
 import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -31,7 +31,7 @@ import {
 } from "../gsd-db.ts";
 import { clearParseCache } from "../files.ts";
 import { clearPathCache } from "../paths.ts";
-import { detectStaleRenders, getCurrentProjectStateVersion } from "../markdown-renderer.ts";
+import { detectStaleRenders, getCurrentProjectStateVersion, renderRoadmapFromDb } from "../markdown-renderer.ts";
 import { invalidateStateCache } from "../state.ts";
 import {
   reconcileBeforeDispatch,
@@ -44,6 +44,7 @@ import {
 import { classifyFailure } from "../recovery-classification.ts";
 import { handlerPhaseIndex, RECONCILIATION_REPAIR_PHASES } from "../state-reconciliation/registry.ts";
 import { staleRenderHandler } from "../state-reconciliation/drift/stale-render.ts";
+import { roadmapMissingHandler } from "../state-reconciliation/drift/roadmap.ts";
 import type { GSDState } from "../types.ts";
 
 function makeState(overrides: Partial<GSDState> = {}): GSDState {
@@ -2466,6 +2467,49 @@ test("ADR-017 (#5707): reconcileBeforeSpawn reports repaired drift in ok=true re
   if (result.ok) {
     assert.match(result.reason ?? "", /stale-sketch-flag/);
   }
+});
+
+test("reconcileBeforeSpawn preserves an unbaselined roadmap before re-projecting", async (t) => {
+  const base = makeFixtureBase();
+  t.after(() => cleanup(base));
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  insertMilestone({
+    id: "M001",
+    title: "Test",
+    status: "active",
+    planning: { vision: "Canonical vision" },
+  });
+  insertSlice({
+    id: "S01",
+    milestoneId: "M001",
+    title: "Canonical slice",
+    status: "pending",
+    risk: "low",
+    depends: [],
+  });
+  const rendered = await renderRoadmapFromDb(base, "M001");
+  assert.equal("roadmapPath" in rendered, true);
+  const roadmapPath = join(base, ".gsd", "phases", "01-test", "01-ROADMAP.md");
+  writeFileSync(roadmapPath, "# Externally edited roadmap\n", "utf-8");
+  rmSync(join(base, ".gsd", ".compat.json"), { force: true });
+
+  const result = await reconcileBeforeSpawn(base, {
+    invalidateStateCache: () => {},
+    deriveState: async () => makeState(),
+    registry: [roadmapMissingHandler],
+  });
+
+  assert.equal(result.ok, true, result.ok ? "" : result.reason);
+  assert.match(readFileSync(roadmapPath, "utf-8"), /Canonical slice/);
+  const quarantineRoot = join(base, ".gsd", "quarantine", "projections");
+  const quarantinedRoadmap = readdirSync(quarantineRoot, { recursive: true })
+    .map(String)
+    .find((path) => path.endsWith("01-ROADMAP.md"));
+  assert.ok(quarantinedRoadmap);
+  assert.equal(
+    readFileSync(join(quarantineRoot, quarantinedRoadmap), "utf-8"),
+    "# Externally edited roadmap\n",
+  );
 });
 
 test("ADR-017 (#6238): reconcileBeforeSpawn does not pass reconcile-only deps object", async () => {

@@ -7,7 +7,10 @@ import { isAbsolute, join, relative, sep } from "node:path";
 
 import { readCompatMarker } from "./compat/compat-marker.js";
 import { refreshWorkflowDatabaseFromDisk } from "./db-workspace.js";
-import { settleCurrentProjectionWork } from "./db/writers/projection-work-delivery.js";
+import {
+  captureCurrentProjectionWork,
+  settleProjectionWork,
+} from "./db/writers/projection-work-delivery.js";
 import { deleteArtifactByPath } from "./gsd-db.js";
 import { renderAllFromDb } from "./markdown-renderer.js";
 import { gsdProjectionRoot, gsdRoot } from "./paths.js";
@@ -89,10 +92,11 @@ export async function rebuildMarkdownProjectionsFromDb(
     }
   }
 
+  const deliveryBatch = captureCurrentProjectionWork();
   const rendered = await renderAllFromDb(basePath);
   const delivered = rendered.errors.length === 0
-    ? settleCurrentProjectionWork({ outcome: "rendered", contentHash: projectionTreeHash(basePath) })
-    : settleCurrentProjectionWork({ outcome: "failed", error: rendered.errors.join("\n") });
+    ? settleProjectionWork(deliveryBatch, { outcome: "rendered", contentHash: projectionTreeHash(basePath) })
+    : settleProjectionWork(deliveryBatch, { outcome: "failed", error: rendered.errors.join("\n") });
   invalidateStateCache();
 
   return {
