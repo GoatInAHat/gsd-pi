@@ -1122,10 +1122,38 @@ export async function bootstrapAutoSession(
     if (match) {
       validatedPreferredModel = { provider: match.provider, id: match.id };
     } else {
-      ctx.ui.notify(
-        `Preferred model ${preferredModel.provider}/${preferredModel.id} from PREFERENCES.md is not configured; falling back to session default.`,
-        "warning",
-      );
+      const providerLower = preferredModel.provider.toLowerCase();
+      const isCopilotProvider = providerLower === "github-copilot" || providerLower === "copilot";
+      const preferredIdLower = preferredModel.id.toLowerCase();
+
+      if (isCopilotProvider && preferredIdLower === "claude-sonnet-5") {
+        const copilotSonnetFallback = available.find((candidate) => {
+          const candidateProvider = candidate.provider.toLowerCase();
+          if (candidateProvider !== "github-copilot" && candidateProvider !== "copilot") return false;
+          return ["claude-sonnet-4.6", "claude-sonnet-4.5", "claude-sonnet-4"].includes(candidate.id.toLowerCase());
+        });
+
+        if (copilotSonnetFallback) {
+          validatedPreferredModel = {
+            provider: copilotSonnetFallback.provider,
+            id: copilotSonnetFallback.id,
+          };
+          ctx.ui.notify(
+            `Preferred model ${preferredModel.provider}/${preferredModel.id} is not currently exposed by Copilot; using ${copilotSonnetFallback.provider}/${copilotSonnetFallback.id} for this session.`,
+            "info",
+          );
+        } else {
+          ctx.ui.notify(
+            `Preferred model ${preferredModel.provider}/${preferredModel.id} from PREFERENCES.md is not configured; falling back to session default.`,
+            "warning",
+          );
+        }
+      } else {
+        ctx.ui.notify(
+          `Preferred model ${preferredModel.provider}/${preferredModel.id} from PREFERENCES.md is not configured; falling back to session default.`,
+          "warning",
+        );
+      }
     }
   }
   const sessionModelReady =
