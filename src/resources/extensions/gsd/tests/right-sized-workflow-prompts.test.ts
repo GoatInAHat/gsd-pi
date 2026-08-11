@@ -144,6 +144,7 @@ test("plan-milestone resolves Project artifacts from a canonical milestone workt
   const base = makeRepo({
     "package.json": "{\"scripts\":{\"test\":\"node --test\"}}\n",
     ".gsd/PROJECT.md": "# Project\n\nCanonical project context.\n",
+    ".gsd/REQUIREMENTS.md": "# Requirements\n\nCanonical requirements.\n",
     ".gsd/DECISIONS.md": "# Decisions\n\nCanonical decisions.\n",
   });
   const worktree = join(base, ".gsd-worktrees", "M001");
@@ -151,15 +152,20 @@ test("plan-milestone resolves Project artifacts from a canonical milestone workt
   rmSync(join(worktree, ".gsd"), { recursive: true, force: true });
 
   try {
-    const prompt = await buildPlanMilestonePrompt("M001", "Update app", worktree, scopeMilestone(createWorkspace(worktree), "M001"), "standard");
     const projectRoadmap = "../../.gsd/milestones/M001/M001-ROADMAP.md";
 
-    assert.match(prompt, /Project state root: `\.\.\/\.\.\/\.gsd`/);
-    assert.match(prompt, /`\.\.\/\.\.\/\.gsd\/PROJECT\.md`/);
-    assert.match(prompt, /`\.\.\/\.\.\/\.gsd\/DECISIONS\.md`/);
-    assert.match(prompt, /Source: `\.\.\/\.\.\/\.gsd\/milestones\/M001\/M001-CONTEXT\.md`/);
-    assert.ok(prompt.includes(projectRoadmap), "roadmap output should target Project state through a worktree-relative path");
-    assert.ok(!prompt.includes(join(worktree, ".gsd")), "prompt must not reference a worktree-local .gsd directory");
+    for (const level of ["standard", "full"] as const) {
+      const prompt = await buildPlanMilestonePrompt("M001", "Update app", worktree, scopeMilestone(createWorkspace(worktree), "M001"), level);
+
+      assert.match(prompt, /Project state root: `\.\.\/\.\.\/\.gsd`/);
+      assert.match(prompt, /`\.\.\/\.\.\/\.gsd\/PROJECT\.md`/);
+      assert.match(prompt, /`\.\.\/\.\.\/\.gsd\/REQUIREMENTS\.md`/);
+      assert.match(prompt, /`\.\.\/\.\.\/\.gsd\/DECISIONS\.md`/);
+      assert.match(prompt, /Source: `\.\.\/\.\.\/\.gsd\/milestones\/M001\/M001-CONTEXT\.md`/);
+      assert.ok(prompt.includes(projectRoadmap), "roadmap output should target Project state through a worktree-relative path");
+      assert.doesNotMatch(prompt, /`\.gsd\/(?:PROJECT|REQUIREMENTS|DECISIONS)\.md`/);
+      assert.ok(!prompt.includes(join(worktree, ".gsd")), "prompt must not reference a worktree-local .gsd directory");
+    }
   } finally {
     git(base, ["worktree", "remove", "--force", worktree]);
     cleanupRepo(base);

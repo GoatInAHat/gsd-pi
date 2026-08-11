@@ -594,54 +594,59 @@ export function buildRepoRegistryBlock(base: string): string {
  * @param mid  - Milestone ID (e.g. `"M001"`).
  * @param sid  - Optional slice ID (e.g. `"S01"`). When provided, the slice
  *   RESEARCH file is preferred over the milestone-level one.
+ * @param displayBase - Optional execution root that emitted paths are relative to.
  * @returns Markdown string of file path bullets, or a fallback instruction.
  */
 export function buildSourceFilePaths(
   base: string,
   mid: string,
   sid?: string,
+  displayBase?: string,
 ): string {
   const paths: string[] = [];
+  const displayPath = (absolutePath: string, defaultPath: string): string => displayBase
+    ? relative(normalizeRealPath(displayBase), absolutePath).split(sep).join("/") || "."
+    : defaultPath;
 
   const projectPath = resolveGsdRootFile(base, "PROJECT");
   if (existsSync(projectPath)) {
-    paths.push(`- **Project**: \`${relGsdRootFile("PROJECT")}\``);
+    paths.push(`- **Project**: \`${displayPath(projectPath, relGsdRootFile("PROJECT"))}\``);
   }
 
   const requirementsPath = resolveGsdRootFile(base, "REQUIREMENTS");
   if (existsSync(requirementsPath)) {
-    paths.push(`- **Requirements**: \`${relGsdRootFile("REQUIREMENTS")}\``);
+    paths.push(`- **Requirements**: \`${displayPath(requirementsPath, relGsdRootFile("REQUIREMENTS"))}\``);
   }
 
   const decisionsPath = resolveGsdRootFile(base, "DECISIONS");
   if (existsSync(decisionsPath)) {
-    paths.push(`- **Decisions**: \`${relGsdRootFile("DECISIONS")}\``);
+    paths.push(`- **Decisions**: \`${displayPath(decisionsPath, relGsdRootFile("DECISIONS"))}\``);
   }
 
   const queuePath = resolveGsdRootFile(base, "QUEUE");
   if (existsSync(queuePath)) {
-    paths.push(`- **Queue**: \`${relGsdRootFile("QUEUE")}\``);
+    paths.push(`- **Queue**: \`${displayPath(queuePath, relGsdRootFile("QUEUE"))}\``);
   }
 
   const contextPath = resolveMilestoneFile(base, mid, "CONTEXT");
   if (contextPath) {
-    paths.push(`- **Milestone Context**: \`${relMilestoneFile(base, mid, "CONTEXT")}\``);
+    paths.push(`- **Milestone Context**: \`${displayPath(contextPath, relMilestoneFile(base, mid, "CONTEXT"))}\``);
   }
 
   const roadmapPath = resolveMilestoneFile(base, mid, "ROADMAP");
   if (roadmapPath) {
-    paths.push(`- **Roadmap**: \`${relMilestoneFile(base, mid, "ROADMAP")}\``);
+    paths.push(`- **Roadmap**: \`${displayPath(roadmapPath, relMilestoneFile(base, mid, "ROADMAP"))}\``);
   }
 
   if (sid) {
     const researchPath = resolveSliceFile(base, mid, sid, "RESEARCH");
     if (researchPath) {
-      paths.push(`- **Slice Research**: \`${relSliceFile(base, mid, sid, "RESEARCH")}\``);
+      paths.push(`- **Slice Research**: \`${displayPath(researchPath, relSliceFile(base, mid, sid, "RESEARCH"))}\``);
     }
   } else {
     const researchPath = resolveMilestoneFile(base, mid, "RESEARCH");
     if (researchPath) {
-      paths.push(`- **Milestone Research**: \`${relMilestoneFile(base, mid, "RESEARCH")}\``);
+      paths.push(`- **Milestone Research**: \`${displayPath(researchPath, relMilestoneFile(base, mid, "RESEARCH"))}\``);
     }
   }
 
@@ -2135,6 +2140,13 @@ export async function buildPlanMilestonePrompt(
   const projectBase = milestoneScope.workspace.projectRoot;
   const promptBase = normalizeRealPath(base);
   const displayProjectPath = (path: string): string => relative(promptBase, path).split(sep).join("/") || ".";
+  const rebaseInlineSource = (
+    body: string | null,
+    key: "PROJECT" | "REQUIREMENTS" | "DECISIONS",
+  ): string | null => body?.replace(
+    `Source: \`${relGsdRootFile(key)}\``,
+    `Source: \`${displayProjectPath(resolveGsdRootFile(projectBase, key))}\``,
+  ) ?? null;
   const inlineLevel = level ?? resolveInlineLevel();
   const contextPath = milestoneScope.contextFile();
   const contextRel = displayProjectPath(contextPath);
@@ -2174,19 +2186,25 @@ export async function buildPlanMilestonePrompt(
     trackPromptContext(contextTelemetry, "prior-milestone-summary", "skipped", null, "missing");
   }
   if (inlineLevel === "full") {
-    const projectInline = await inlineProjectFromDb(projectBase);
+    const projectInline = rebaseInlineSource(await inlineProjectFromDb(projectBase), "PROJECT");
     if (projectInline) {
       pushTracked("project", projectInline, inlineLevel);
     } else {
       trackPromptContext(contextTelemetry, "project", "skipped", null, "missing");
     }
-    const requirementsInline = await inlineRequirementsFromDb(projectBase, mid, undefined, inlineLevel);
+    const requirementsInline = rebaseInlineSource(
+      await inlineRequirementsFromDb(projectBase, mid, undefined, inlineLevel),
+      "REQUIREMENTS",
+    );
     if (requirementsInline) {
       pushTracked("requirements", requirementsInline, inlineLevel);
     } else {
       trackPromptContext(contextTelemetry, "requirements", "skipped", null, "missing");
     }
-    const decisionsInline = await inlineDecisionsFromDb(projectBase, mid, undefined, inlineLevel);
+    const decisionsInline = rebaseInlineSource(
+      await inlineDecisionsFromDb(projectBase, mid, undefined, inlineLevel),
+      "DECISIONS",
+    );
     if (decisionsInline) {
       pushTracked("decisions", decisionsInline, inlineLevel);
     } else {
@@ -2194,7 +2212,10 @@ export async function buildPlanMilestonePrompt(
     }
   } else if (inlineLevel === "standard") {
     trackPromptContext(contextTelemetry, "project", "skipped", null, "handled as on-demand path");
-    const requirementsInline = await inlineRequirementsFromDb(projectBase, mid, undefined, inlineLevel);
+    const requirementsInline = rebaseInlineSource(
+      await inlineRequirementsFromDb(projectBase, mid, undefined, inlineLevel),
+      "REQUIREMENTS",
+    );
     if (requirementsInline) {
       pushTracked("requirements", requirementsInline, inlineLevel);
     } else {
@@ -2284,7 +2305,7 @@ export async function buildPlanMilestonePrompt(
     outputPath: displayProjectPath(roadmapPath),
     secretsOutputPath: displayProjectPath(secretsOutputPath),
     inlinedContext,
-    sourceFilePaths: buildSourceFilePaths(base, mid),
+    sourceFilePaths: buildSourceFilePaths(projectBase, mid, undefined, promptBase),
     skillActivation: buildSkillActivationBlock({
       base: projectBase,
       milestoneId: mid,
