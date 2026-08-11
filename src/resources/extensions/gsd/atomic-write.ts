@@ -272,11 +272,11 @@ const DEFAULT_SYNC_OPS: AtomicWriteSyncOps = {
  */
 export function atomicWriteSync(filePath: string, content: string, encoding: BufferEncoding = "utf-8"): void {
   withProjectionMutationSync(filePath, () => {
+    managedMutationBoundaryForTest?.("before-write", filePath);
     preserveManagedProjectionBeforeMutation(filePath, Buffer.from(content, encoding));
     const mutation = beginManagedProjectionMutation(filePath, "write", content, encoding);
     let managedApplyStarted = false;
     try {
-      managedMutationBoundaryForTest?.("before-write", filePath);
       managedApplyStarted = mutation !== null;
       if (!applyManagedProjectionMutation(mutation)) {
         atomicWriteSyncWithOps(filePath, content, encoding, DEFAULT_SYNC_OPS);
@@ -301,11 +301,11 @@ export function atomicWriteBufferSync(filePath: string, content: Buffer): void {
  */
 export async function atomicWriteAsync(filePath: string, content: string, encoding: BufferEncoding = "utf-8"): Promise<void> {
   return withProjectionMutation(filePath, async () => {
+    managedMutationBoundaryForTest?.("before-write", filePath);
     preserveManagedProjectionBeforeMutation(filePath, Buffer.from(content, encoding));
     const mutation = beginManagedProjectionMutation(filePath, "write", content, encoding);
     let managedApplyStarted = false;
     try {
-      managedMutationBoundaryForTest?.("before-write", filePath);
       managedApplyStarted = mutation !== null;
       if (!applyManagedProjectionMutation(mutation)) {
         await atomicWriteAsyncWithOps(filePath, content, encoding, DEFAULT_ASYNC_OPS);
@@ -322,12 +322,12 @@ export async function atomicWriteAsync(filePath: string, content: string, encodi
 
 export function removeProjectionFileSync(filePath: string): void {
   withProjectionMutationSync(filePath, () => {
-    if (preserveManagedProjectionBeforeMutation(filePath, null)) return;
+    preserveManagedProjectionBeforeMutation(filePath, null);
     const mutation = beginManagedProjectionMutation(filePath, "remove", null, null);
     let managedApplyStarted = false;
     try {
       managedApplyStarted = mutation !== null;
-      if (!applyManagedProjectionMutation(mutation)) unlinkSync(filePath);
+      if (!applyManagedProjectionMutation(mutation) && existsSync(filePath)) unlinkSync(filePath);
       managedMutationBoundaryForTest?.("after-remove", filePath);
     } catch (error) {
       if (managedApplyStarted) retainManagedProjectionMutation(mutation);

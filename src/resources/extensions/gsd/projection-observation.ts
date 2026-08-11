@@ -5,13 +5,14 @@ import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
 import { atomicWriteBufferSync } from "./atomic-write.js";
-import { gsdProjectionRoot } from "./paths.js";
+import { gsdProjectionRoot, normalizeRealPath } from "./paths.js";
 import {
   computeProjectionSha,
   readCompatMarker,
   writeCompatMarker,
 } from "./compat/compat-marker.js";
 import { withProjectionMutation, withProjectionMutationSync } from "./database-maintenance-fence.js";
+import { detectProjectionDrift } from "./markdown-renderer.js";
 import { observeExternalMarkdownEdits } from "./state-reconciliation/drift/external-markdown-edit.js";
 import { observeExternalPlanningEdits } from "./state-reconciliation/drift/external-planning-edit.js";
 import type { DriftRecord } from "./state-reconciliation/types.js";
@@ -40,9 +41,10 @@ function uniquePath(path: string): string {
 }
 
 function quarantineRelativePath(basePath: string, absPath: string): string {
+  const normalizedPath = normalizeRealPath(absPath);
   for (const rootName of [".gsd", ".planning"] as const) {
-    const root = join(basePath, rootName);
-    const rel = relative(root, absPath);
+    const root = normalizeRealPath(join(basePath, rootName));
+    const rel = relative(root, normalizedPath);
     if (rel && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)) {
       return join(rootName.slice(1), rel);
     }
@@ -118,13 +120,28 @@ export async function preserveProjectionEvidence(
       ...observeExternalMarkdownEdits(basePath, dryRun),
       ...planningObservations.filter((record) => !record.passthrough),
     ];
+    const marker = readCompatMarker(basePath);
+    const markdownRoot = normalizeRealPath(join(basePath, ".gsd"));
+    const unbaselinedPaths = detectProjectionDrift(basePath)
+      .map((entry) => entry.path)
+      .filter((path) => {
+        const rel = relative(markdownRoot, normalizeRealPath(path)).replace(/\\/g, "/");
+        return rel !== ".."
+          && !rel.startsWith("../")
+          && !isAbsolute(rel)
+          && marker.projections[rel] === undefined;
+      });
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const observedByPath = new Map<string, ExternalProjectionEdit>();
     for (const observation of observations) {
       const root = observation.kind === "external-markdown-edit" ? ".gsd" : ".planning";
       observedByPath.set(join(basePath, root, observation.projectionPath), observation);
     }
-    const paths = new Set([...additionalPaths, ...observedByPath.keys()]);
+    const paths = new Set([
+      ...additionalPaths,
+      ...unbaselinedPaths,
+      ...observedByPath.keys(),
+    ]);
     const preserved: PreservedProjectionEvidence[] = [];
     for (const absPath of paths) {
       if (dryRun) {
