@@ -45,6 +45,11 @@ type LockResult<T> = {
 	next?: string;
 };
 
+type ResolvedApiKey = {
+	apiKey: string;
+	isOAuth: boolean;
+};
+
 function isUsableApiKeyCredential(credential: AuthCredential): credential is ApiKeyCredential {
 	return credential.type === "api_key" && credential.key.trim().length > 0;
 }
@@ -511,11 +516,14 @@ export class AuthStorage {
 	 * 4. Environment variable
 	 * 5. Fallback resolver (models.json custom providers)
 	 */
-	async getApiKey(providerId: string, options?: { includeFallback?: boolean }): Promise<string | undefined> {
+	async getApiKeyWithOAuthState(
+		providerId: string,
+		options?: { includeFallback?: boolean },
+	): Promise<ResolvedApiKey | undefined> {
 		// Runtime override takes highest priority
 		const runtimeKey = this.runtimeOverrides.get(providerId);
 		if (runtimeKey) {
-			return runtimeKey;
+			return { apiKey: runtimeKey, isOAuth: false };
 		}
 
 		const creds = this.getCredentialsForProvider(providerId);
@@ -530,7 +538,8 @@ export class AuthStorage {
 				: (apiKeyCredential ?? oauthCredential);
 
 		if (cred?.type === "api_key") {
-			return resolveConfigValue(cred.key);
+			const apiKey = resolveConfigValue(cred.key);
+			return apiKey ? { apiKey, isOAuth: false } : undefined;
 		}
 
 		if (cred?.type === "oauth") {
@@ -551,7 +560,7 @@ export class AuthStorage {
 				try {
 					const result = await this.refreshOAuthTokenWithLock(providerId);
 					if (result) {
-						return result.apiKey;
+						return { apiKey: result.apiKey, isOAuth: true };
 					}
 				} catch (error) {
 					this.recordError(error);
@@ -564,29 +573,34 @@ export class AuthStorage {
 				);
 
 				if (updatedCred?.type === "oauth" && Date.now() < updatedCred.expires) {
-					return provider.getApiKey(updatedCred);
+					return { apiKey: provider.getApiKey(updatedCred), isOAuth: true };
 				}
 
 				const storedApiKey = resolveStoredApiKey();
 				if (storedApiKey) {
-					return storedApiKey;
+					return { apiKey: storedApiKey, isOAuth: false };
 				}
 			} else {
 				// Token not expired, use current access token
-				return provider.getApiKey(cred);
+				return { apiKey: provider.getApiKey(cred), isOAuth: true };
 			}
 		}
 
 		// Fall back to environment variable
 		const envKey = getEnvApiKey(providerId);
-		if (envKey) return envKey;
+		if (envKey) return { apiKey: envKey, isOAuth: false };
 
 		// Fall back to custom resolver (e.g., models.json custom providers)
 		if (options?.includeFallback !== false) {
-			return this.fallbackResolver?.(providerId) ?? undefined;
+			const apiKey = this.fallbackResolver?.(providerId);
+			return apiKey ? { apiKey, isOAuth: false } : undefined;
 		}
 
 		return undefined;
+	}
+
+	async getApiKey(providerId: string, options?: { includeFallback?: boolean }): Promise<string | undefined> {
+		return (await this.getApiKeyWithOAuthState(providerId, options))?.apiKey;
 	}
 
 	/**

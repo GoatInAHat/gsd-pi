@@ -25,6 +25,7 @@ describe("ModelRegistry", () => {
 			rmSync(tempDir, { recursive: true });
 		}
 		clearApiKeyCache();
+		vi.unstubAllGlobals();
 	});
 
 	/** Create minimal provider config  */
@@ -1208,6 +1209,55 @@ describe("ModelRegistry", () => {
 	});
 
 	describe("API key resolution", () => {
+		test("adds bearer headers only for Kimi OAuth credentials", async () => {
+			const oauthValue = "oa";
+			authStorage.set("kimi-coding", {
+				type: "oauth",
+				access: oauthValue,
+				refresh: "rf",
+				expires: Date.now() + 60_000,
+			});
+			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+			const model = registry.find("kimi-coding", "kimi-for-coding");
+			expect(model).toBeDefined();
+
+			expect(await registry.getApiKeyAndHeaders(model!)).toMatchObject({
+				ok: true,
+				apiKey: oauthValue,
+				headers: { Authorization: `Bearer ${oauthValue}` },
+			});
+
+			authStorage.set("kimi-coding", { type: "api_key", key: "key" });
+			expect(await registry.getApiKeyAndHeaders(model!)).toEqual({
+				ok: true,
+				apiKey: "key",
+				headers: { "User-Agent": "KimiCLI/1.5" },
+			});
+
+			const refreshedValue = "nb";
+			authStorage.set("kimi-coding", {
+				type: "oauth",
+				access: "ex",
+				refresh: "rf",
+				expires: Date.now() - 1,
+			});
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () =>
+					new Response(
+						JSON.stringify({ access_token: refreshedValue, refresh_token: "nr", expires_in: 3600 }),
+						{ status: 200, headers: { "Content-Type": "application/json" } },
+					),
+				),
+			);
+
+			expect(await registry.getApiKeyAndHeaders(model!)).toMatchObject({
+				ok: true,
+				apiKey: refreshedValue,
+				headers: { Authorization: `Bearer ${refreshedValue}` },
+			});
+		});
+
 		/** Create provider config with custom apiKey */
 		function providerWithApiKey(apiKey: string) {
 			return {
