@@ -1,11 +1,19 @@
 // Project/App: gsd-pi
 // File Purpose: Observe and preserve externally changed projection bytes before canonical rendering.
 
-import { existsSync, mkdirSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
+import { atomicWriteBufferSync } from "./atomic-write.js";
 import { gsdProjectionRoot } from "./paths.js";
-import { readCompatMarker, writeCompatMarker } from "./compat/compat-marker.js";
+import {
+  computeProjectionSha,
+  readCompatMarker,
+  writeCompatMarker,
+  type CompatMarker,
+} from "./compat/compat-marker.js";
+import { withProjectionMutationSync } from "./database-maintenance-fence.js";
+import { readDecisionsProjectionIntent } from "./db-writer.js";
 import { detectProjectionDrift } from "./markdown-renderer.js";
 import { observeExternalMarkdownEdits } from "./state-reconciliation/drift/external-markdown-edit.js";
 import { observeExternalPlanningEdits } from "./state-reconciliation/drift/external-planning-edit.js";
@@ -55,12 +63,39 @@ function quarantinePath(basePath: string, absPath: string, stamp: string): strin
   ));
 }
 
-function preserveOne(basePath: string, absPath: string, stamp: string): PreservedProjectionEvidence | null {
-  if (!existsSync(absPath)) return null;
-  const target = quarantinePath(basePath, absPath, stamp);
-  mkdirSync(dirname(target), { recursive: true });
-  renameSync(absPath, target);
-  return { sourcePath: absPath, quarantinePath: target };
+function hasTrustedBaseline(basePath: string, absPath: string, marker: CompatMarker): boolean {
+  const rel = relative(gsdProjectionRoot(basePath), absPath);
+  if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false;
+  return marker.projections[rel.replace(/\\/g, "/")] !== undefined;
+}
+
+function readProjectionBytes(path: string): Buffer | null {
+  try {
+    return readFileSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function preserveOne(
+  basePath: string,
+  absPath: string,
+  stamp: string,
+  observedBytes: Buffer,
+): PreservedProjectionEvidence {
+  const claimPath = join(gsdProjectionRoot(basePath), "gsd.db");
+  return withProjectionMutationSync(claimPath, () => {
+    const target = quarantinePath(basePath, absPath, stamp);
+    mkdirSync(dirname(target), { recursive: true });
+    const currentBytes = readProjectionBytes(absPath);
+    if (currentBytes?.equals(observedBytes)) {
+      renameSync(absPath, target);
+    } else {
+      atomicWriteBufferSync(target, observedBytes);
+    }
+    return { sourcePath: absPath, quarantinePath: target };
+  });
 }
 
 /**
@@ -98,9 +133,30 @@ export async function preserveProjectionEvidence(
     observedByPath.set(join(basePath, root, observation.projectionPath), observation);
   }
 
+  const marker = readCompatMarker(basePath, {
+    healInvalidKeys: !dryRun,
+    quarantineInvalid: !dryRun,
+  });
+  const unbaselinedDriftPaths = detectProjectionDrift(basePath)
+    .map((entry) => entry.path)
+    .filter((path) => !hasTrustedBaseline(basePath, path, marker));
+  const decisionsIntent = await readDecisionsProjectionIntent(basePath);
+  if (
+    decisionsIntent
+    && !hasTrustedBaseline(basePath, decisionsIntent.path, marker)
+  ) {
+    const decisionsBytes = readProjectionBytes(decisionsIntent.path);
+    if (
+      decisionsBytes
+      && computeProjectionSha(decisionsBytes.toString("utf-8"))
+        !== computeProjectionSha(decisionsIntent.content)
+    ) {
+      unbaselinedDriftPaths.push(decisionsIntent.path);
+    }
+  }
   const paths = new Set([
     ...additionalPaths,
-    ...detectProjectionDrift(basePath).map((entry) => entry.path),
+    ...unbaselinedDriftPaths,
     ...observedByPath.keys(),
   ]);
   const preserved: PreservedProjectionEvidence[] = [];
@@ -114,8 +170,9 @@ export async function preserveProjectionEvidence(
       });
       continue;
     }
-    const result = preserveOne(basePath, absPath, stamp);
-    if (!result) continue;
+    const observedBytes = readProjectionBytes(absPath);
+    if (!observedBytes) continue;
+    const result = preserveOne(basePath, absPath, stamp, observedBytes);
     preserved.push({ ...result, observation: observedByPath.get(absPath) });
   }
   return {

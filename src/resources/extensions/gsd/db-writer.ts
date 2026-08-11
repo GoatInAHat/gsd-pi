@@ -454,6 +454,35 @@ export function _resetDecisionSaveLock(): void {
   _decisionSaveLock = Promise.resolve();
 }
 
+export interface DecisionsProjectionIntent {
+  path: string;
+  content: string;
+}
+
+export async function readDecisionsProjectionIntent(
+  basePath: string,
+): Promise<DecisionsProjectionIntent | null> {
+  const { getAllDecisionsFromMemories } = await import('./context-store.js');
+  const allDecisions: Decision[] = getAllDecisionsFromMemories();
+  const path = resolveGsdRootFile(basePath, 'DECISIONS');
+  const existingContent = existsSync(path) ? readFileSync(path, 'utf-8') : null;
+  if (allDecisions.length === 0 && existingContent === null) return null;
+
+  if (existingContent && !isDecisionsTableFormat(existingContent)) {
+    const marker = '---\n\n## Decisions Table';
+    const markerIdx = existingContent.indexOf(marker);
+    const freeformPart = markerIdx >= 0
+      ? existingContent.substring(0, markerIdx).trimEnd()
+      : existingContent.trimEnd();
+    return {
+      path,
+      content: freeformPart + '\n' + generateDecisionsAppendBlock(allDecisions),
+    };
+  }
+
+  return { path, content: generateDecisionsMd(allDecisions) };
+}
+
 /**
  * Re-project root DECISIONS.md from the authoritative decision records, with no
  * new decision being added. Mirrors the projection saveDecisionToDb performs
@@ -464,32 +493,9 @@ export function _resetDecisionSaveLock(): void {
  * decisions). DB stays the single source of truth; this only writes markdown.
  */
 export async function regenerateDecisionsMarkdown(basePath: string): Promise<void> {
-  const { getAllDecisionsFromMemories } = await import('./context-store.js');
-  const allDecisions: Decision[] = getAllDecisionsFromMemories();
-
-  const filePath = resolveGsdRootFile(basePath, 'DECISIONS');
-  let existingContent: string | null = null;
-  if (existsSync(filePath)) {
-    existingContent = readFileSync(filePath, 'utf-8');
-  }
-
-  // Nothing to project: no decisions in the DB and no file to normalize.
-  if (allDecisions.length === 0 && existingContent === null) return;
-
-  let md: string;
-  if (existingContent && !isDecisionsTableFormat(existingContent)) {
-    // Preserve freeform content; refresh only the appended decisions table.
-    const marker = '---\n\n## Decisions Table';
-    const markerIdx = existingContent.indexOf(marker);
-    const freeformPart = markerIdx >= 0
-      ? existingContent.substring(0, markerIdx).trimEnd()
-      : existingContent.trimEnd();
-    md = freeformPart + '\n' + generateDecisionsAppendBlock(allDecisions);
-  } else {
-    md = generateDecisionsMd(allDecisions);
-  }
-
-  await saveFile(filePath, md);
+  const intent = await readDecisionsProjectionIntent(basePath);
+  if (!intent) return;
+  await saveFile(intent.path, intent.content);
 }
 
 // ─── Save Decision to DB + Regenerate Markdown ────────────────────────────

@@ -14,13 +14,18 @@ import { tmpdir } from "node:os";
 
 import { handleRebuild } from "../commands-maintenance.ts";
 import { getCurrentProjectStateVersion } from "../markdown-renderer.ts";
+import { preserveProjectionChanges } from "../projection-worker.ts";
+import { saveDecisionToDb } from "../db-writer.ts";
+import { _setProjectionMutationBeforeClaimForTest } from "../database-maintenance-fence.ts";
 import {
   closeDatabase,
   getTask,
+  insertArtifact,
   insertMilestone,
   insertSlice,
   insertTask,
   openDatabase,
+  setSliceSummaryMd,
 } from "../gsd-db.ts";
 import { invalidateStateCache } from "../state.ts";
 
@@ -213,6 +218,131 @@ test("handleRebuild preserves an edited completed summary before restoring the D
     "# T01 Summary\n\nExternally edited evidence.\n",
   );
   assert.match(readFileSync(summaryPath, "utf-8"), /Canonical summary/);
+});
+
+test("handleRebuild preserves every unbaselined renderer-owned edit", async (t) => {
+  const base = makeBase();
+  t.after(() => cleanup(base));
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  insertMilestone({ id: "M001", title: "Milestone", status: "active" });
+  insertSlice({
+    id: "S01",
+    milestoneId: "M001",
+    title: "Slice",
+    status: "complete",
+    risk: "low",
+    depends: [],
+  });
+  setSliceSummaryMd(
+    "M001",
+    "S01",
+    "# Canonical slice summary\n",
+    "# Canonical slice UAT\n",
+  );
+  insertTask({
+    id: "T01",
+    sliceId: "S01",
+    milestoneId: "M001",
+    title: "Task",
+    status: "complete",
+    fullSummaryMd: "# Canonical task summary\n",
+  });
+  insertArtifact({
+    path: "milestones/M001/M001-CONTEXT.md",
+    artifact_type: "CONTEXT",
+    milestone_id: "M001",
+    slice_id: null,
+    task_id: null,
+    full_content: "# Canonical stored context\n",
+  });
+  await saveDecisionToDb({
+    scope: "architecture",
+    decision: "Use canonical projection intent",
+    choice: "Database authority",
+    rationale: "Preserve durable state",
+  }, base);
+
+  const { ctx } = makeCtx();
+  await handleRebuild(ctx, base, "markdown");
+  const editedFiles = new Map<string, string>([
+    [
+      join(base, ".gsd", "milestones", "M001", "slices", "S01", "tasks", "T01-SUMMARY.md"),
+      "# External task summary\n",
+    ],
+    [
+      join(base, ".gsd", "milestones", "M001", "slices", "S01", "S01-UAT.md"),
+      "# External slice UAT\n",
+    ],
+    [
+      join(base, ".gsd", "milestones", "M001", "M001-CONTEXT.md"),
+      "# External stored context\n",
+    ],
+    [join(base, ".gsd", "DECISIONS.md"), "# External decisions\n"],
+  ]);
+  for (const [path, content] of editedFiles) writeFileSync(path, content, "utf-8");
+  rmSync(join(base, ".gsd", ".compat.json"), { force: true });
+
+  await handleRebuild(ctx, base, "markdown");
+
+  const quarantined = listFiles(join(base, ".gsd", "quarantine", "projections"))
+    .map((path) => readFileSync(path, "utf-8"));
+  assert.deepEqual(new Set(quarantined), new Set(editedFiles.values()));
+  for (const [path, edited] of editedFiles) {
+    assert.notEqual(readFileSync(path, "utf-8"), edited);
+  }
+});
+
+test("trusted marker baselines do not misclassify pending DB renders", async (t) => {
+  const base = makeBase();
+  t.after(() => cleanup(base));
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  seedOpenTask();
+  const { ctx } = makeCtx();
+  await handleRebuild(ctx, base, "markdown");
+  const roadmapPath = join(base, ".gsd", "milestones", "M001", "M001-ROADMAP.md");
+  const renderedBytes = readFileSync(roadmapPath);
+  insertSlice({
+    id: "S01",
+    milestoneId: "M001",
+    title: "Updated canonical slice",
+    status: "in_progress",
+    risk: "low",
+    depends: [],
+  });
+
+  const observation = await preserveProjectionChanges(base);
+
+  assert.equal(observation.preserved.length, 0);
+  assert.deepEqual(readFileSync(roadmapPath), renderedBytes);
+  assert.equal(existsSync(join(base, ".gsd", "quarantine", "projections")), false);
+});
+
+test("projection preservation retains observed bytes across a renderer race", async (t) => {
+  const base = makeBase();
+  t.after(() => {
+    _setProjectionMutationBeforeClaimForTest(null);
+    cleanup(base);
+  });
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  seedOpenTask();
+  const { ctx } = makeCtx();
+  await handleRebuild(ctx, base, "markdown");
+  const roadmapPath = join(base, ".gsd", "milestones", "M001", "M001-ROADMAP.md");
+  const canonicalBytes = readFileSync(roadmapPath);
+  const editedBytes = Buffer.from("# External roadmap evidence\n");
+  writeFileSync(roadmapPath, editedBytes);
+  _setProjectionMutationBeforeClaimForTest(() => {
+    writeFileSync(roadmapPath, canonicalBytes);
+  });
+
+  const observation = await preserveProjectionChanges(base);
+
+  assert.equal(observation.preserved.length, 1);
+  assert.deepEqual(readFileSync(roadmapPath), canonicalBytes);
+  assert.deepEqual(
+    readFileSync(observation.preserved[0]!.quarantinePath),
+    editedBytes,
+  );
 });
 
 test("handleRebuild database target is reserved and does not import markdown", async () => {
