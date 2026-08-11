@@ -68,34 +68,46 @@ import {
 // entities) here; invalidateCaches() drains it and refreshes .gsd/.compat.json
 // so the next reconcile pass sees gsd-pi's own writes as expected. This is the
 // feedback-loop-prevention mechanism for cross-tool compatibility.
-const _pendingProjectionWrites: Array<{ basePath: string; projectionPath: string; entities: string[] }> = [];
+const _pendingProjectionWrites: Array<{
+  basePath: string;
+  projectionPath: string;
+  entities: string[];
+  sha: string;
+}> = [];
 
-function recordProjectionWrite(basePath: string, projectionPath: string, entities: string[]): void {
-  _pendingProjectionWrites.push({ basePath, projectionPath, entities });
+function recordProjectionWrite(
+  basePath: string,
+  projectionPath: string,
+  entities: string[],
+  content: string,
+): void {
+  _pendingProjectionWrites.push({
+    basePath,
+    projectionPath,
+    entities,
+    sha: computeProjectionSha(content),
+  });
 }
 
 function flushProjectionWritesToMarker(): void {
   if (_pendingProjectionWrites.length === 0) return;
   // Group by basePath (defensive — multiple projects are unusual but possible).
-  const byBase = new Map<string, Map<string, string[]>>();
+  const byBase = new Map<string, Map<string, { entities: string[]; sha: string }>>();
   for (const w of _pendingProjectionWrites) {
     let bucket = byBase.get(w.basePath);
     if (!bucket) { bucket = new Map(); byBase.set(w.basePath, bucket); }
-    bucket.set(w.projectionPath, w.entities);
+    bucket.set(w.projectionPath, { entities: w.entities, sha: w.sha });
   }
   _pendingProjectionWrites.length = 0;
 
   for (const [basePath, writes] of byBase) {
     try {
       const marker = readCompatMarker(basePath);
-      for (const [projectionPath, entities] of writes) {
-        const abs = join(basePath, ".gsd", projectionPath);
-        if (existsSync(abs)) {
-          marker.projections[projectionPath] = {
-            sha: computeProjectionSha(readFileSync(abs, "utf-8")),
-            entities,
-          };
-        }
+      for (const [projectionPath, write] of writes) {
+        marker.projections[projectionPath] = {
+          sha: write.sha,
+          entities: write.entities,
+        };
       }
       marker.lastWriter = "gsd-pi";
       marker.lastProjectedAt = new Date().toISOString();
@@ -308,7 +320,7 @@ async function writeAndStore(
     if (opts.milestone_id) entities.push(opts.milestone_id);
     if (opts.milestone_id && opts.slice_id) entities.push(`${opts.milestone_id}/${opts.slice_id}`);
     if (opts.milestone_id && opts.slice_id && opts.task_id) entities.push(`${opts.milestone_id}/${opts.slice_id}/${opts.task_id}`);
-    recordProjectionWrite(basePath, artifactPath, entities);
+    recordProjectionWrite(basePath, artifactPath, entities, stamped);
   }
 
   invalidateCaches();

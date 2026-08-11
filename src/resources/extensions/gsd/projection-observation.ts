@@ -10,11 +10,8 @@ import {
   computeProjectionSha,
   readCompatMarker,
   writeCompatMarker,
-  type CompatMarker,
 } from "./compat/compat-marker.js";
-import { withProjectionMutationSync } from "./database-maintenance-fence.js";
-import { readDecisionsProjectionIntent } from "./db-writer.js";
-import { detectProjectionDrift } from "./markdown-renderer.js";
+import { withProjectionMutation, withProjectionMutationSync } from "./database-maintenance-fence.js";
 import { observeExternalMarkdownEdits } from "./state-reconciliation/drift/external-markdown-edit.js";
 import { observeExternalPlanningEdits } from "./state-reconciliation/drift/external-planning-edit.js";
 import type { DriftRecord } from "./state-reconciliation/types.js";
@@ -63,12 +60,6 @@ function quarantinePath(basePath: string, absPath: string, stamp: string): strin
   ));
 }
 
-function hasTrustedBaseline(basePath: string, absPath: string, marker: CompatMarker): boolean {
-  const rel = relative(gsdProjectionRoot(basePath), absPath);
-  if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false;
-  return marker.projections[rel.replace(/\\/g, "/")] !== undefined;
-}
-
 function readProjectionBytes(path: string): Buffer | null {
   try {
     return readFileSync(path);
@@ -109,74 +100,61 @@ export async function preserveProjectionEvidence(
   additionalPaths: readonly string[] = [],
   dryRun = false,
 ): Promise<ProjectionObservationResult> {
-  const planningObservations = await observeExternalPlanningEdits(basePath, dryRun);
-  const passthrough = planningObservations.filter((record) => record.passthrough);
-  if (!dryRun && passthrough.length > 0) {
-    const marker = readCompatMarker(basePath);
-    for (const record of passthrough) {
-      marker.planning!.passthrough[record.projectionPath] = {
-        sha: record.actualSha,
-        entities: record.entities,
-      };
+  const observeAndPreserve = async (): Promise<ProjectionObservationResult> => {
+    const planningObservations = await observeExternalPlanningEdits(basePath, dryRun);
+    const passthrough = planningObservations.filter((record) => record.passthrough);
+    if (!dryRun && passthrough.length > 0) {
+      const marker = readCompatMarker(basePath);
+      for (const record of passthrough) {
+        marker.planning!.passthrough[record.projectionPath] = {
+          sha: record.actualSha,
+          entities: record.entities,
+        };
+      }
+      marker.lastProjectedAt = new Date().toISOString();
+      writeCompatMarker(basePath, marker);
     }
-    marker.lastProjectedAt = new Date().toISOString();
-    writeCompatMarker(basePath, marker);
-  }
-  const observations = [
-    ...observeExternalMarkdownEdits(basePath, dryRun),
-    ...planningObservations.filter((record) => !record.passthrough),
-  ];
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const observedByPath = new Map<string, ExternalProjectionEdit>();
-  for (const observation of observations) {
-    const root = observation.kind === "external-markdown-edit" ? ".gsd" : ".planning";
-    observedByPath.set(join(basePath, root, observation.projectionPath), observation);
-  }
-
-  const marker = readCompatMarker(basePath, {
-    healInvalidKeys: !dryRun,
-    quarantineInvalid: !dryRun,
-  });
-  const unbaselinedDriftPaths = detectProjectionDrift(basePath)
-    .map((entry) => entry.path)
-    .filter((path) => !hasTrustedBaseline(basePath, path, marker));
-  const decisionsIntent = await readDecisionsProjectionIntent(basePath);
-  if (
-    decisionsIntent
-    && !hasTrustedBaseline(basePath, decisionsIntent.path, marker)
-  ) {
-    const decisionsBytes = readProjectionBytes(decisionsIntent.path);
-    if (
-      decisionsBytes
-      && computeProjectionSha(decisionsBytes.toString("utf-8"))
-        !== computeProjectionSha(decisionsIntent.content)
-    ) {
-      unbaselinedDriftPaths.push(decisionsIntent.path);
+    const observations = [
+      ...observeExternalMarkdownEdits(basePath, dryRun),
+      ...planningObservations.filter((record) => !record.passthrough),
+    ];
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const observedByPath = new Map<string, ExternalProjectionEdit>();
+    for (const observation of observations) {
+      const root = observation.kind === "external-markdown-edit" ? ".gsd" : ".planning";
+      observedByPath.set(join(basePath, root, observation.projectionPath), observation);
     }
-  }
-  const paths = new Set([
-    ...additionalPaths,
-    ...unbaselinedDriftPaths,
-    ...observedByPath.keys(),
-  ]);
-  const preserved: PreservedProjectionEvidence[] = [];
-  for (const absPath of paths) {
-    if (dryRun) {
-      if (!existsSync(absPath)) continue;
-      preserved.push({
-        sourcePath: absPath,
-        quarantinePath: quarantinePath(basePath, absPath, stamp),
-        observation: observedByPath.get(absPath),
-      });
-      continue;
+    const paths = new Set([...additionalPaths, ...observedByPath.keys()]);
+    const preserved: PreservedProjectionEvidence[] = [];
+    for (const absPath of paths) {
+      if (dryRun) {
+        if (!existsSync(absPath)) continue;
+        preserved.push({
+          sourcePath: absPath,
+          quarantinePath: quarantinePath(basePath, absPath, stamp),
+          observation: observedByPath.get(absPath),
+        });
+        continue;
+      }
+      const observedBytes = readProjectionBytes(absPath);
+      if (!observedBytes) continue;
+      const observation = observedByPath.get(absPath);
+      if (
+        observation
+        && computeProjectionSha(observedBytes.toString("utf-8")) !== observation.actualSha
+      ) {
+        continue;
+      }
+      const result = preserveOne(basePath, absPath, stamp, observedBytes);
+      preserved.push({ ...result, observation });
     }
-    const observedBytes = readProjectionBytes(absPath);
-    if (!observedBytes) continue;
-    const result = preserveOne(basePath, absPath, stamp, observedBytes);
-    preserved.push({ ...result, observation: observedByPath.get(absPath) });
-  }
-  return {
-    preserved,
-    refreshedPassthrough: passthrough.map((record) => record.projectionPath),
+    return {
+      preserved,
+      refreshedPassthrough: passthrough.map((record) => record.projectionPath),
+    };
   };
+
+  if (dryRun) return observeAndPreserve();
+  const claimPath = join(gsdProjectionRoot(basePath), "gsd.db");
+  return withProjectionMutation(claimPath, observeAndPreserve);
 }

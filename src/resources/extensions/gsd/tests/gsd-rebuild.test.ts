@@ -13,10 +13,14 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { handleRebuild } from "../commands-maintenance.ts";
-import { getCurrentProjectStateVersion } from "../markdown-renderer.ts";
+import {
+  getCurrentProjectStateVersion,
+  renderRoadmapFromDb,
+  renderTaskPlanFromDb,
+} from "../markdown-renderer.ts";
 import { preserveProjectionChanges } from "../projection-worker.ts";
-import { saveDecisionToDb } from "../db-writer.ts";
-import { _setProjectionMutationBeforeClaimForTest } from "../database-maintenance-fence.ts";
+import { saveDecisionToDb, saveRequirementToDb } from "../db-writer.ts";
+import { computeProjectionSha, readCompatMarker } from "../compat/compat-marker.ts";
 import {
   closeDatabase,
   getTask,
@@ -317,32 +321,115 @@ test("trusted marker baselines do not misclassify pending DB renders", async (t)
   assert.equal(existsSync(join(base, ".gsd", "quarantine", "projections")), false);
 });
 
-test("projection preservation retains observed bytes across a renderer race", async (t) => {
+test("projection writer preserves edited bytes at the mutation boundary", async (t) => {
   const base = makeBase();
-  t.after(() => {
-    _setProjectionMutationBeforeClaimForTest(null);
-    cleanup(base);
-  });
+  t.after(() => cleanup(base));
   openDatabase(join(base, ".gsd", "gsd.db"));
   seedOpenTask();
   const { ctx } = makeCtx();
   await handleRebuild(ctx, base, "markdown");
   const roadmapPath = join(base, ".gsd", "milestones", "M001", "M001-ROADMAP.md");
-  const canonicalBytes = readFileSync(roadmapPath);
   const editedBytes = Buffer.from("# External roadmap evidence\n");
   writeFileSync(roadmapPath, editedBytes);
-  _setProjectionMutationBeforeClaimForTest(() => {
-    writeFileSync(roadmapPath, canonicalBytes);
-  });
 
-  const observation = await preserveProjectionChanges(base);
+  await renderRoadmapFromDb(base, "M001");
 
-  assert.equal(observation.preserved.length, 1);
-  assert.deepEqual(readFileSync(roadmapPath), canonicalBytes);
-  assert.deepEqual(
-    readFileSync(observation.preserved[0]!.quarantinePath),
-    editedBytes,
+  const quarantined = listFiles(join(base, ".gsd", "quarantine", "projections"));
+  assert.equal(quarantined.length, 1);
+  assert.deepEqual(readFileSync(quarantined[0]!), editedBytes);
+  assert.notDeepEqual(readFileSync(roadmapPath), editedBytes);
+});
+
+test("projection baselines retain the exact rendered intent", async (t) => {
+  const base = makeBase();
+  t.after(() => cleanup(base));
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  seedOpenTask();
+  const { ctx } = makeCtx();
+  await handleRebuild(ctx, base, "markdown");
+  const roadmapPath = join(base, ".gsd", "milestones", "M001", "M001-ROADMAP.md");
+  const rendered = await renderRoadmapFromDb(base, "M001");
+  assert.ok("content" in rendered);
+  const edited = "# Edit after the atomic render\n";
+  writeFileSync(roadmapPath, edited);
+
+  const projectionPath = "milestones/M001/M001-ROADMAP.md";
+  const baseline = readCompatMarker(base).projections[projectionPath]?.sha;
+
+  assert.equal(baseline, computeProjectionSha(rendered.content));
+  assert.notEqual(baseline, computeProjectionSha(edited));
+});
+
+test("unbaselined roadmap removal preserves existing bytes", async (t) => {
+  const base = makeBase();
+  t.after(() => cleanup(base));
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  insertMilestone({ id: "M001", title: "", status: "queued" });
+  const roadmapPath = join(base, ".gsd", "milestones", "M001", "M001-ROADMAP.md");
+  const editedBytes = Buffer.from("# External unplanned roadmap\n");
+  writeFileSync(roadmapPath, editedBytes);
+
+  const result = await renderRoadmapFromDb(base, "M001");
+
+  assert.deepEqual(result, { skipped: "unplanned-milestone" });
+  assert.equal(existsSync(roadmapPath), false);
+  const quarantined = listFiles(join(base, ".gsd", "quarantine", "projections"));
+  assert.equal(quarantined.length, 1);
+  assert.deepEqual(readFileSync(quarantined[0]!), editedBytes);
+});
+
+test("unbaselined legacy task plan writes preserve existing bytes", async (t) => {
+  const base = makeBase();
+  t.after(() => cleanup(base));
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  seedOpenTask();
+  const planPath = join(
+    base,
+    ".gsd",
+    "milestones",
+    "M001",
+    "slices",
+    "S01",
+    "tasks",
+    "T01-PLAN.md",
   );
+  const editedBytes = Buffer.from("# External legacy task plan\n");
+  writeFileSync(planPath, editedBytes);
+
+  await renderTaskPlanFromDb(base, "M001", "S01", "T01");
+
+  assert.notDeepEqual(readFileSync(planPath), editedBytes);
+  const quarantined = listFiles(join(base, ".gsd", "quarantine", "projections"));
+  assert.equal(quarantined.length, 1);
+  assert.deepEqual(readFileSync(quarantined[0]!), editedBytes);
+});
+
+test("unbaselined root requirement writes preserve existing bytes", async (t) => {
+  const base = makeBase();
+  t.after(() => cleanup(base));
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  await saveRequirementToDb({
+    class: "core-capability",
+    description: "Canonical requirement",
+    why: "Required behavior",
+    source: "review",
+  }, base);
+  const requirementsPath = join(base, ".gsd", "REQUIREMENTS.md");
+  const editedBytes = Buffer.from("# External requirements evidence\n");
+  writeFileSync(requirementsPath, editedBytes);
+  rmSync(join(base, ".gsd", ".compat.json"), { force: true });
+
+  await saveRequirementToDb({
+    class: "core-capability",
+    description: "Second canonical requirement",
+    why: "Changes render intent",
+    source: "review",
+  }, base);
+
+  assert.notDeepEqual(readFileSync(requirementsPath), editedBytes);
+  const quarantined = listFiles(join(base, ".gsd", "quarantine", "projections"));
+  assert.equal(quarantined.length, 1);
+  assert.deepEqual(readFileSync(quarantined[0]!), editedBytes);
 });
 
 test("handleRebuild database target is reserved and does not import markdown", async () => {

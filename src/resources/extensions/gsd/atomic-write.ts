@@ -14,6 +14,7 @@ import {
   retainManagedProjectionMutation,
 } from "./managed-projection-history.js";
 import { classifyGsdLogicalPath } from "./projection-path-policy.js";
+import { preserveManagedProjectionBeforeMutation } from "./projection-mutation-guard.js";
 export { removeLegacyProjectionTreeSync };
 
 const TRANSIENT_LOCK_ERROR_CODES = new Set(["EBUSY", "EPERM", "EACCES"]);
@@ -271,6 +272,7 @@ const DEFAULT_SYNC_OPS: AtomicWriteSyncOps = {
  */
 export function atomicWriteSync(filePath: string, content: string, encoding: BufferEncoding = "utf-8"): void {
   withProjectionMutationSync(filePath, () => {
+    preserveManagedProjectionBeforeMutation(filePath, Buffer.from(content, encoding));
     const mutation = beginManagedProjectionMutation(filePath, "write", content, encoding);
     let managedApplyStarted = false;
     try {
@@ -299,6 +301,7 @@ export function atomicWriteBufferSync(filePath: string, content: Buffer): void {
  */
 export async function atomicWriteAsync(filePath: string, content: string, encoding: BufferEncoding = "utf-8"): Promise<void> {
   return withProjectionMutation(filePath, async () => {
+    preserveManagedProjectionBeforeMutation(filePath, Buffer.from(content, encoding));
     const mutation = beginManagedProjectionMutation(filePath, "write", content, encoding);
     let managedApplyStarted = false;
     try {
@@ -319,6 +322,7 @@ export async function atomicWriteAsync(filePath: string, content: string, encodi
 
 export function removeProjectionFileSync(filePath: string): void {
   withProjectionMutationSync(filePath, () => {
+    if (preserveManagedProjectionBeforeMutation(filePath, null)) return;
     const mutation = beginManagedProjectionMutation(filePath, "remove", null, null);
     let managedApplyStarted = false;
     try {
