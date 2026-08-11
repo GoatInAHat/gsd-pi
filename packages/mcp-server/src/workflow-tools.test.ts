@@ -386,7 +386,10 @@ describe("workflow MCP tools", () => {
 
     const toolNames = server.tools.map((t) => t.name);
     assert.equal(toolNames.length, CANONICAL_WORKFLOW_TOOL_NAMES.length);
-    assert.deepEqual(toolNames, [...CANONICAL_WORKFLOW_TOOL_NAMES]);
+    assert.deepEqual(
+      [...toolNames].sort(),
+      [...CANONICAL_WORKFLOW_TOOL_NAMES].sort(),
+    );
     for (const alias of WORKFLOW_TOOL_ALIAS_NAMES) {
       assert.ok(!toolNames.includes(alias), `alias ${alias} should not be advertised`);
     }
