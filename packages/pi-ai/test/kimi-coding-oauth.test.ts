@@ -1,9 +1,4 @@
-import { createServer, type IncomingHttpHeaders } from "node:http";
-import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getModel } from "../src/models.ts";
-import { streamAnthropic } from "../src/providers/anthropic.ts";
-import type { Context } from "../src/types.ts";
 import { getOAuthProvider } from "../src/utils/oauth/index.ts";
 import { kimiCodingOAuthProvider, loginKimiCoding, refreshKimiCodingToken } from "../src/utils/oauth/kimi-coding.ts";
 
@@ -14,42 +9,6 @@ function jsonResponse(body: unknown, status: number = 200): Response {
 			"Content-Type": "application/json",
 		},
 	});
-}
-
-async function captureKimiRequestHeaders(
-	apiKey: string,
-	headers?: Record<string, string>,
-): Promise<IncomingHttpHeaders> {
-	let capturedHeaders: IncomingHttpHeaders | undefined;
-	const server = createServer((request, response) => {
-		capturedHeaders = request.headers;
-		request.resume();
-		response.writeHead(200, { "Content-Type": "text/event-stream" });
-		response.end();
-	});
-
-	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-	const address = server.address() as AddressInfo;
-	const model = {
-		...getModel("kimi-coding", "kimi-for-coding"),
-		baseUrl: `http://127.0.0.1:${address.port}`,
-	};
-	const context: Context = {
-		messages: [{ role: "user", content: "Hello", timestamp: Date.now() }],
-	};
-
-	try {
-		await streamAnthropic(model, context, { apiKey, headers }).result();
-	} finally {
-		await new Promise<void>((resolve, reject) => {
-			server.close((error) => (error ? reject(error) : resolve()));
-		});
-	}
-
-	if (!capturedHeaders) {
-		throw new Error("Kimi request was not captured");
-	}
-	return capturedHeaders;
 }
 
 describe("Kimi Code OAuth provider", () => {
@@ -101,13 +60,6 @@ describe("Kimi Code OAuth provider", () => {
 			expect(credentials.access).toBe("access");
 			expect(credentials.refresh).toBe("refresh");
 			expect(credentials.expires).toBeGreaterThan(Date.now());
-
-			vi.unstubAllGlobals();
-			const headers = await captureKimiRequestHeaders(credentials.access, {
-				Authorization: `Bearer ${credentials.access}`,
-			});
-			expect(headers.authorization).toBe("Bearer access");
-			expect(headers["x-api-key"]).toBeUndefined();
 		});
 
 		it("surfaces device authorization failure responses", async () => {
@@ -138,72 +90,6 @@ describe("Kimi Code OAuth provider", () => {
 			const credentials = await refreshKimiCodingToken("tok_old_refresh");
 			expect(credentials.access).toBe("new-a");
 			expect(credentials.refresh).toBe("new-r");
-
-			vi.unstubAllGlobals();
-			const headers = await captureKimiRequestHeaders(credentials.access, {
-				Authorization: `Bearer ${credentials.access}`,
-			});
-			expect(headers.authorization).toBe("Bearer new-a");
-			expect(headers["x-api-key"]).toBeUndefined();
-		});
-
-		it("preserves API key authentication for static credentials", async () => {
-			const headers = await captureKimiRequestHeaders("key");
-			expect(headers.authorization).toBeUndefined();
-			expect(headers["x-api-key"]).toBe("key");
-		});
-
-		it("does not expose token values from malformed successful responses", async () => {
-			const responseAccess = "aa";
-			const responseRefresh = "rr";
-			const fetchMock = vi.fn(
-				async (): Promise<Response> =>
-					jsonResponse({ access_token: responseAccess, refresh_token: responseRefresh }),
-			);
-			vi.stubGlobal("fetch", fetchMock);
-
-			const error = await refreshKimiCodingToken("synthetic-old-refresh").then(
-				() => undefined,
-				(reason: unknown) => reason,
-			);
-			expect(error).toBeInstanceOf(Error);
-			if (!(error instanceof Error)) {
-				throw new Error("Expected token refresh to fail");
-			}
-			expect(error.message).toBe("Kimi Code token refresh response has invalid fields: expires_in");
-			expect(error.message).not.toContain(responseAccess);
-			expect(error.message).not.toContain(responseRefresh);
-		});
-
-		it("does not expose token values from malformed error responses", async () => {
-			const responseAccess = "aa";
-			const responseRefresh = "rr";
-			vi.stubGlobal(
-				"fetch",
-				vi.fn(async () =>
-					jsonResponse(
-						{
-							error: "unexpected_response",
-							error_description: "contains aa and rr",
-							access_token: responseAccess,
-							refresh_token: responseRefresh,
-						},
-						400,
-					),
-				),
-			);
-
-			const error = await refreshKimiCodingToken("old").then(
-				() => undefined,
-				(reason: unknown) => reason,
-			);
-			expect(error).toBeInstanceOf(Error);
-			if (!(error instanceof Error)) {
-				throw new Error("Expected token refresh to fail");
-			}
-			expect(error.message).toBe("Kimi Code token refresh failed with status 400");
-			expect(error.message).not.toContain(responseAccess);
-			expect(error.message).not.toContain(responseRefresh);
 		});
 
 		it("surfaces unauthorized refresh responses", async () => {

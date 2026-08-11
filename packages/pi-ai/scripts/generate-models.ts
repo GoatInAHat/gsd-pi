@@ -1126,6 +1126,65 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 			}
 		}
 
+		// models.dev does not list every Kimi For Coding subscription model.
+		// Add the remaining subscription models statically so they are always available.
+		if (data["kimi-for-coding"]?.models) {
+			const kimiThinkingLevelMap = {
+				off: null,
+				minimal: null,
+				low: "low",
+				medium: null,
+				high: "high",
+				xhigh: null,
+				max: "max",
+			} as const;
+			const kimiStaticModels = [
+				{
+					id: "k3",
+					name: "Kimi K3",
+					reasoning: true,
+					input: ["text", "image"] as ("text" | "image")[],
+					cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+					contextWindow: 1048576,
+					maxTokens: 131072,
+					thinkingLevelMap: kimiThinkingLevelMap,
+					compat: { forceAdaptiveThinking: true },
+				},
+				{
+					id: "k3-256k",
+					name: "Kimi K3-256K",
+					reasoning: true,
+					input: ["text", "image"] as ("text" | "image")[],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 262144,
+					maxTokens: 131072,
+					thinkingLevelMap: kimiThinkingLevelMap,
+					compat: { forceAdaptiveThinking: true },
+				},
+				{
+					id: "kimi-for-coding-highspeed",
+					name: "Kimi For Coding HighSpeed",
+					reasoning: true,
+					input: ["text", "image"] as ("text" | "image")[],
+					cost: { input: 1.9, output: 8, cacheRead: 0.38, cacheWrite: 0 },
+					contextWindow: 262144,
+					maxTokens: 32768,
+					compat: { forceAdaptiveThinking: true },
+				},
+			];
+			for (const staticModel of kimiStaticModels) {
+				if (models.some((entry) => entry.provider === "kimi-coding" && entry.id === staticModel.id)) continue;
+				models.push({
+					api: "anthropic-messages",
+					provider: "kimi-coding",
+					// Kimi For Coding's Anthropic-compatible API - SDK appends /v1/messages
+					baseUrl: "https://api.kimi.com/coding",
+					headers: { ...KIMI_STATIC_HEADERS },
+					...staticModel,
+				});
+			}
+		}
+
 		// Process Moonshot AI models
 		const moonshotVariants = [
 			{ key: "moonshotai", provider: "moonshotai", baseUrl: "https://api.moonshot.ai/v1" },
