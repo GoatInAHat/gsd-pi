@@ -1179,7 +1179,11 @@ export async function bootstrapAutoSession(
     closeAllWorkflowDatabases();
     const migration = migrateToExternalState(base);
     if (migration.error) {
-      ctx.ui.notify(`External state migration warning: ${migration.error}`, "warning");
+      const isAuthoritativeStateGuard = migration.error.includes(
+        "External state already exists for this project",
+      );
+      const severity = isAuthoritativeStateGuard ? "info" : "warning";
+      ctx.ui.notify(`External state migration warning: ${migration.error}`, severity);
     }
     // Ensure symlink exists (handles fresh projects and post-migration)
     ensureGsdSymlink(base);
