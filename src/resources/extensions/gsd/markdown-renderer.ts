@@ -1206,6 +1206,27 @@ interface ProjectionRenderIntent {
   reason: string;
 }
 
+function planRenderIntentDrift(
+  basePath: string,
+  milestoneId: string,
+  slice: SliceRow,
+  tasks: TaskRow[],
+): StaleEntry | null {
+  const planPath = resolveSliceFile(basePath, milestoneId, slice.id, "PLAN");
+  if (!planPath || !existsSync(planPath)) return null;
+  const intent = renderSlicePlanMarkdown(
+    slice,
+    tasks,
+    getGateResults(milestoneId, slice.id, "slice"),
+  );
+  const actual = readFileSync(planPath, "utf-8");
+  if (stripProjectionStamp(actual) === stripProjectionStamp(intent)) return null;
+  return {
+    path: planPath,
+    reason: `plan for ${milestoneId}/${slice.id} differs from DB render intent (content drift in plan)`,
+  };
+}
+
 function projectionRenderIntents(basePath: string): ProjectionRenderIntent[] {
   const intents = new Map<string, ProjectionRenderIntent>();
   const record = (path: string, content: string, reason: string): void => {
