@@ -50,6 +50,11 @@ type ResolvedApiKey = {
 	isOAuth: boolean;
 };
 
+type RefreshedOAuthApiKey = {
+	apiKey: string;
+	newCredentials: OAuthCredentials;
+};
+
 function isUsableApiKeyCredential(credential: AuthCredential): credential is ApiKeyCredential {
 	return credential.type === "api_key" && credential.key.trim().length > 0;
 }
@@ -455,13 +460,13 @@ export class AuthStorage {
 	 */
 	private async refreshOAuthTokenWithLock(
 		providerId: OAuthProviderId,
-	): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
+	): Promise<RefreshedOAuthApiKey | null> {
 		const provider = getOAuthProvider(providerId);
 		if (!provider) {
 			return null;
 		}
 
-		const result = await this.storage.withLockAsync(async (current) => {
+		const result = await this.storage.withLockAsync<RefreshedOAuthApiKey | null>(async (current) => {
 			const currentData = this.parseStorageData(current);
 			this.data = currentData;
 			this.loadError = null;
