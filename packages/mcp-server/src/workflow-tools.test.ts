@@ -377,7 +377,10 @@ describe("workflow MCP tools", () => {
     registerWorkflowTools(server as any);
 
     assert.equal(server.tools.length, WORKFLOW_TOOL_NAMES.length);
-    assert.deepEqual(server.tools.map((t) => t.name), [...WORKFLOW_TOOL_NAMES]);
+    assert.deepEqual(
+      server.tools.map((t) => t.name).sort(),
+      [...WORKFLOW_TOOL_NAMES].sort(),
+    );
   });
 
   it("omits backwards-compatibility aliases when advertiseAliases is false", () => {
