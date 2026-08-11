@@ -1,10 +1,7 @@
 /**
  * OAuth credential management for AI providers.
  *
- * This module handles login, token refresh, and credential storage
- * for OAuth-based providers:
- * - Anthropic (Claude Pro/Max)
- * - GitHub Copilot
+ * This module handles login and token refresh for OAuth-based providers.
  */
 
 // Anthropic
