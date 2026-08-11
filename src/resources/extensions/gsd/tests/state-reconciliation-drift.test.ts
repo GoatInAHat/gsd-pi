@@ -9,7 +9,7 @@
 import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -31,7 +31,7 @@ import {
 } from "../gsd-db.ts";
 import { clearParseCache } from "../files.ts";
 import { clearPathCache } from "../paths.ts";
-import { detectStaleRenders, getCurrentProjectStateVersion } from "../markdown-renderer.ts";
+import { detectStaleRenders, getCurrentProjectStateVersion, renderRoadmapFromDb } from "../markdown-renderer.ts";
 import { invalidateStateCache } from "../state.ts";
 import {
   reconcileBeforeDispatch,
@@ -44,6 +44,7 @@ import {
 import { classifyFailure } from "../recovery-classification.ts";
 import { handlerPhaseIndex, RECONCILIATION_REPAIR_PHASES } from "../state-reconciliation/registry.ts";
 import { staleRenderHandler } from "../state-reconciliation/drift/stale-render.ts";
+import { roadmapMissingHandler } from "../state-reconciliation/drift/roadmap.ts";
 import type { GSDState } from "../types.ts";
 
 function makeState(overrides: Partial<GSDState> = {}): GSDState {
@@ -2468,12 +2469,61 @@ test("ADR-017 (#5707): reconcileBeforeSpawn reports repaired drift in ok=true re
   }
 });
 
+test("reconcileBeforeSpawn preserves an unbaselined roadmap before re-projecting", async (t) => {
+  const base = makeFixtureBase();
+  t.after(() => cleanup(base));
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  insertMilestone({
+    id: "M001",
+    title: "Test",
+    status: "active",
+    planning: { vision: "Canonical vision" },
+  });
+  insertSlice({
+    id: "S01",
+    milestoneId: "M001",
+    title: "Canonical slice",
+    status: "pending",
+    risk: "low",
+    depends: [],
+  });
+  const rendered = await renderRoadmapFromDb(base, "M001");
+  assert.equal("roadmapPath" in rendered, true);
+  const roadmapPath = join(base, ".gsd", "phases", "01-test", "01-ROADMAP.md");
+  writeFileSync(roadmapPath, "# Externally edited roadmap\n", "utf-8");
+  rmSync(join(base, ".gsd", ".compat.json"), { force: true });
+
+  const result = await reconcileBeforeSpawn(base, {
+    invalidateStateCache: () => {},
+    deriveState: async () => makeState(),
+    registry: [roadmapMissingHandler],
+  });
+
+  assert.equal(result.ok, true, result.ok ? "" : result.reason);
+  assert.match(readFileSync(roadmapPath, "utf-8"), /Canonical slice/);
+  const quarantineRoot = join(base, ".gsd", "quarantine", "projections");
+  const quarantinedRoadmap = readdirSync(quarantineRoot, { recursive: true })
+    .map(String)
+    .find((path) => path.endsWith("01-ROADMAP.md"));
+  assert.ok(quarantinedRoadmap);
+  assert.equal(
+    readFileSync(join(quarantineRoot, quarantinedRoadmap), "utf-8"),
+    "# Externally edited roadmap\n",
+  );
+});
+
 test("ADR-017 (#6238): reconcileBeforeSpawn does not pass reconcile-only deps object", async () => {
   let receivedDeps: Partial<ReconciliationDeps> | undefined;
   const result = await reconcileBeforeSpawn("/project", {
     reconcile: async (_basePath, deps) => {
       receivedDeps = deps;
-      return { ok: true, stateSnapshot: makeState(), repaired: [], blockers: [] };
+      return {
+        ok: true,
+        stateSnapshot: makeState(),
+        repaired: [],
+        blockers: [],
+        blockerDetails: [],
+      };
     },
   });
 
@@ -2553,16 +2603,14 @@ test("deriveState is pure: stale sketch healed only via reconcileBeforeDispatch"
   assert.notEqual(afterReconcile.phase, "refining", "derive after reconcile advances past sketch gate");
 });
 
-test("reconciliation repair phases: external authority boundary precedes re-project handlers", () => {
-  assert.equal(RECONCILIATION_REPAIR_PHASES.length, 3);
-  assert.equal(RECONCILIATION_REPAIR_PHASES[0]?.name, "external-edit-boundary");
-  assert.equal(RECONCILIATION_REPAIR_PHASES[0]?.stopOnBlocker, true);
-  assert.ok(handlerPhaseIndex("external-markdown-edit") < handlerPhaseIndex("stale-render"));
-  assert.ok(handlerPhaseIndex("external-planning-edit") < handlerPhaseIndex("roadmap-divergence"));
+test("pre-dispatch reconciliation excludes projection observations", () => {
+  assert.equal(RECONCILIATION_REPAIR_PHASES.length, 2);
+  assert.equal(handlerPhaseIndex("external-markdown-edit"), -1);
+  assert.equal(handlerPhaseIndex("external-planning-edit"), -1);
   assert.ok(handlerPhaseIndex("stale-sketch-flag") < handlerPhaseIndex("stale-render"));
 });
 
-test("external authority blocker stops later re-projection in the same pass", async () => {
+test("custom reconciliation blockers retain their structured drift evidence", async () => {
   const externalDrift: DriftRecord = {
     kind: "external-markdown-edit",
     projectionPath: "phases/01-test/01-ROADMAP.md",
@@ -2570,12 +2618,6 @@ test("external authority blocker stops later re-projection in the same pass", as
     actualSha: "after",
     entities: ["M001"],
   };
-  const renderDrift: DriftRecord = {
-    kind: "stale-render",
-    renderPath: "phases/01-test/01-ROADMAP.md",
-    reason: "DB projection is stale",
-  };
-  let rendered = false;
   const externalHandler: DriftHandler = {
     kind: "external-markdown-edit",
     detect: () => [externalDrift],
@@ -2584,21 +2626,16 @@ test("external authority blocker stops later re-projection in the same pass", as
       throw new Error("blocked external repair must not run");
     },
   };
-  const renderHandler: DriftHandler = {
-    kind: "stale-render",
-    detect: () => [renderDrift],
-    repair: () => {
-      rendered = true;
-    },
-  };
-
   const result = await reconcileBeforeDispatch("/project", {
     invalidateStateCache: () => {},
     deriveState: async () => makeState(),
-    registry: [externalHandler, renderHandler],
+    registry: [externalHandler],
   });
 
-  assert.equal(rendered, false);
   assert.equal(result.repaired.length, 0);
   assert.deepEqual(result.blockers, ["review the external modeled edit"]);
+  assert.deepEqual(result.blockerDetails, [{
+    message: "review the external modeled edit",
+    drift: externalDrift,
+  }]);
 });

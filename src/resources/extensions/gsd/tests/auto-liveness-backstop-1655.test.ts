@@ -25,6 +25,7 @@ import {
   getOpenWedge,
   hashBackstopInput,
   recordNonAdvancingOutcome,
+  serializeNonAdvancingEvidence,
   snapshotUnitTargetRows,
   wedgeResumeCommand,
 } from '../auto-liveness-backstop.ts';
@@ -70,6 +71,28 @@ function readTargetSnapshot(unitType: string, unitId: string): string | null {
   assert.equal(result.ok, true, 'target-row snapshot should succeed');
   return result.ok ? result.hash : null;
 }
+
+test('ADR-047: typed blocker evidence serializes stably without dropping hashes', () => {
+  const first = serializeNonAdvancingEvidence({
+    message: 'projection drift',
+    drift: { actualSha: 'after', expectedSha: 'before' },
+  });
+  const reordered = serializeNonAdvancingEvidence({
+    drift: { expectedSha: 'before', actualSha: 'after' },
+    message: 'projection drift',
+  });
+
+  assert.equal(first, reordered);
+  assert.match(first, /actualSha/);
+  assert.match(first, /expectedSha/);
+  assert.notEqual(
+    hashBackstopInput(first),
+    hashBackstopInput(serializeNonAdvancingEvidence({
+      message: 'projection drift',
+      drift: { actualSha: 'changed-again', expectedSha: 'before' },
+    })),
+  );
+});
 
 test('ADR-047: trips at 2 occurrences with identical input hash', (t) => {
   const base = makeBase();
