@@ -1,9 +1,9 @@
 // Project/App: gsd-pi
-// File Purpose: ADR-017 drift handler for external (gsd-core) markdown edits.
+// File Purpose: Observe external .gsd edits and retain the opt-in legacy drift handler.
 //
 // gsd-pi's DB is canonical, while .gsd/*.md is a readable projection. External
-// modeled edits are detected and surfaced as actionable blockers; runtime
-// reconciliation never imports them into canonical authority.
+// modeled edits are reported to the Projection Worker for preservation. Runtime
+// reconciliation does not register the legacy blocker handler below.
 
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";

@@ -1,9 +1,9 @@
 // Project/App: gsd-pi
-// File Purpose: ADR-017 drift handler for external (gsd-core) edits to .planning/.
-// Parallel to external-markdown-edit.ts. Detects sha drift between the compat
-// marker's planning.projections/passthrough and current .planning/ files.
+// File Purpose: Observe external .planning edits and retain the opt-in legacy drift handler.
+// Detects sha drift between the compat marker's planning projections/passthrough
+// entries and current .planning/ files.
 //
-// Modeled files are terminal authority conflicts. Passthrough files have no DB
+// The Projection Worker preserves modeled bytes; passthrough files have no DB
 // model, so their checksum may be refreshed without changing source content.
 
 import { existsSync, readFileSync } from "node:fs";

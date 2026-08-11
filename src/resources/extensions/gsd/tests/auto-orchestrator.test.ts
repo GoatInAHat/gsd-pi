@@ -14,7 +14,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -55,6 +55,7 @@ import {
   COMPLETED_NO_ADVANCE_GUARD_ID,
   getOpenWedge,
 } from "../auto-liveness-backstop.js";
+import { renderRoadmapFromDb } from "../markdown-renderer.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Fixture builder
@@ -357,6 +358,29 @@ test("advance() dispatches the resolved unit and journals advance", async (t) =>
   const names = f.journalNames();
   assert.ok(names.includes("advance"));
   assert.ok(!names.includes("advance-blocked"));
+});
+
+test("advance() preserves an external projection edit without blocking valid work", async (t) => {
+  const f = makeFixture();
+  t.after(() => f.cleanup());
+  const rendered = await renderRoadmapFromDb(f.base, "M001");
+  assert.ok("roadmapPath" in rendered);
+  const externalEdit = Buffer.from("# External roadmap evidence\n");
+  writeFileSync(rendered.roadmapPath, externalEdit);
+
+  const result = await f.orchestrator.advance();
+
+  assert.equal(result.kind, "advanced");
+  if (result.kind !== "advanced") return;
+  assert.deepEqual(result.unit, { unitType: "execute-task", unitId: "M001/S01/T01" });
+  assert.match(readFileSync(rendered.roadmapPath, "utf-8"), /S01: Slice/);
+  const quarantineRoot = join(f.base, ".gsd", "quarantine", "projections");
+  const preservedPath = readdirSync(quarantineRoot, { recursive: true })
+    .map(String)
+    .find((path) => path.endsWith("ROADMAP.md")
+      && readFileSync(join(quarantineRoot, path)).equals(externalEdit));
+  assert.ok(preservedPath);
+  assert.ok(!f.journalNames().includes("advance-blocked"));
 });
 
 test("#1677: advance() blocks an unproven open-task SUMMARY instead of filtering its text", async (t) => {

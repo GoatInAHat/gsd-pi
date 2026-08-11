@@ -1,9 +1,9 @@
 // Project/App: gsd-pi
 // File Purpose: gsd-core ↔ gsd-pi compatibility marker (`.gsd/.compat.json`).
 //
-// Records per-projection content hashes so the ADR-017 reconcile pipeline can
-// distinguish gsd-pi's own writes (expected) from external edits made by gsd-core
-// (drift to import). gsd-core is oblivious to this file and ignores it.
+// Records per-projection content hashes so the Projection Worker can distinguish
+// gsd-pi's own writes from external edits whose exact bytes must be preserved.
+// gsd-core is oblivious to this file and ignores it.
 
 import { existsSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, isAbsolute, relative, resolve } from "node:path";
@@ -24,9 +24,9 @@ export type PlanningLayout = "flat-phases" | "multi-milestone" | "legacy-milesto
 
 /**
  * `.planning/` projection tracking. `projections` are modeled files (roadmap,
- * plans, summaries, state) that get re-imported on drift; `passthrough` are
- * un-modeled docs (DISCUSSION-LOG, PATTERNS, REVIEWS, codebase/) that get sha-
- * refreshed only — content never re-rendered.
+ * plans, summaries, state) whose external bytes are preserved before a DB-backed
+ * rebuild; `passthrough` are un-modeled docs (DISCUSSION-LOG, PATTERNS, REVIEWS,
+ * codebase/) that get sha-refreshed only — content is never re-rendered.
  */
 export interface PlanningMarker {
   active: boolean;
@@ -37,10 +37,8 @@ export interface PlanningMarker {
 
 /**
  * Per-file projection entry. `sha` is a normalized-content SHA-256; `entities`
- * is the list of DB entity ids (milestone/slice/task) that the file projects.
- * External-edit repair derives milestone ids from this list so markdown status
- * authority is limited to the drifted projection's milestone scope while the
- * importer still walks the whole tree.
+ * is the list of DB entity ids (milestone/slice/task) that the file projects,
+ * retained as typed scope evidence when an external edit is observed.
  */
 export interface ProjectionEntry {
   sha: string;
@@ -115,11 +113,11 @@ export function deriveCompatProjectionKey(absPath: string, roots: readonly strin
 }
 
 /**
- * Read & validate the marker. A missing marker → EMPTY_MARKER (treat every
- * projection as external on next reconcile). A malformed marker is quarantined
+ * Read and validate the marker. A missing marker returns EMPTY_MARKER so future
+ * projection writes can establish baselines. A malformed marker is quarantined
  * to `.compat.json.bad-<ts>` (never overwrite without backup) then returns
- * EMPTY_MARKER. A schema-mismatch returns EMPTY_MARKER (forward-compat: refuse
- * to act on a future format we don't understand).
+ * EMPTY_MARKER. A schema mismatch returns EMPTY_MARKER (forward compatibility:
+ * refuse to act on a future format we don't understand).
  */
 export function readCompatMarker(
   basePath: string,

@@ -713,10 +713,10 @@ function parseRebuildTarget(args: string): RebuildTarget {
 }
 
 /**
- * `/gsd sync` — inspect external projection edits and re-project when safe.
+ * `/gsd sync` — preserve external projection edits and re-project from the DB.
  *
- * Runs the ADR-017 reconcile pipeline, stops for modeled authority conflicts,
- * then re-projects from the DB and refreshes the compat marker when unblocked.
+ * Projection observation preserves modeled external bytes without importing
+ * them. Workflow-state reconciliation can still block the rebuild.
  *
  * Accepts `--dry-run` to report what would change without writing.
  */
@@ -822,8 +822,8 @@ export async function handleSync(
  * `gsd rebuild markdown` — Re-render markdown projections from the authoritative DB.
  *
  * This is the DB-first realignment command. It does not import markdown into the
- * DB. Completion SUMMARY files that contradict open DB rows are preserved
- * under `.gsd/quarantine/projections/` before DB projections are rendered.
+ * DB. Externally changed modeled projection bytes are preserved under
+ * `.gsd/quarantine/projections/` before DB projections are rendered.
  */
 export async function handleRebuild(ctx: ExtensionCommandContext, basePath: string, args = ""): Promise<void> {
   const { isDbAvailable: dbAvailable } = await import("./gsd-db.js");
