@@ -272,11 +272,11 @@ const DEFAULT_SYNC_OPS: AtomicWriteSyncOps = {
  */
 export function atomicWriteSync(filePath: string, content: string, encoding: BufferEncoding = "utf-8"): void {
   withProjectionMutationSync(filePath, () => {
-    managedMutationBoundaryForTest?.("before-write", filePath);
     preserveManagedProjectionBeforeMutation(filePath, Buffer.from(content, encoding));
     const mutation = beginManagedProjectionMutation(filePath, "write", content, encoding);
     let managedApplyStarted = false;
     try {
+      managedMutationBoundaryForTest?.("before-write", filePath);
       managedApplyStarted = mutation !== null;
       if (!applyManagedProjectionMutation(mutation)) {
         atomicWriteSyncWithOps(filePath, content, encoding, DEFAULT_SYNC_OPS);
@@ -301,11 +301,11 @@ export function atomicWriteBufferSync(filePath: string, content: Buffer): void {
  */
 export async function atomicWriteAsync(filePath: string, content: string, encoding: BufferEncoding = "utf-8"): Promise<void> {
   return withProjectionMutation(filePath, async () => {
-    managedMutationBoundaryForTest?.("before-write", filePath);
     preserveManagedProjectionBeforeMutation(filePath, Buffer.from(content, encoding));
     const mutation = beginManagedProjectionMutation(filePath, "write", content, encoding);
     let managedApplyStarted = false;
     try {
+      managedMutationBoundaryForTest?.("before-write", filePath);
       managedApplyStarted = mutation !== null;
       if (!applyManagedProjectionMutation(mutation)) {
         await atomicWriteAsyncWithOps(filePath, content, encoding, DEFAULT_ASYNC_OPS);

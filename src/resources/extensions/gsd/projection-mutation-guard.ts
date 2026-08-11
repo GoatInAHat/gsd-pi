@@ -1,7 +1,7 @@
 // Project/App: gsd-pi
 // File Purpose: Preserve externally changed managed projections before mutation.
 
-import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 
 import { classifyGsdLogicalPath } from "./projection-path-policy.js";
@@ -67,6 +67,15 @@ function uniqueQuarantinePath(basePath: string, rootName: ProjectionRoot, relPat
   return `${path}.${suffix}`;
 }
 
+/**
+ * Copy the observed bytes of an externally edited managed projection into
+ * quarantine before its caller mutates it, returning whether evidence was kept.
+ *
+ * The source file stays in place: the caller's own managed mutation (atomic
+ * write or journalled removal) owns the on-disk transition, so a mutation that
+ * fails after this point leaves the projection readable instead of leaving the
+ * quarantine copy as its only surviving form.
+ */
 export function preserveManagedProjectionBeforeMutation(
   filePath: string,
   nextContent: Buffer | null,
@@ -87,6 +96,6 @@ export function preserveManagedProjectionBeforeMutation(
 
   const target = uniqueQuarantinePath(location.basePath, location.rootName, location.relPath);
   mkdirSync(dirname(target), { recursive: true });
-  renameSync(filePath, target);
+  writeFileSync(target, current);
   return true;
 }
