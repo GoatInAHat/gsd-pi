@@ -136,6 +136,7 @@ import {
   proveMilestoneCloseout,
 } from "./milestone-closeout-proof.js";
 import { throwIfTransientProjectionLockError } from "./projection-root-errors.js";
+import { createWorkspace, scopeMilestone } from "./workspace.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -1276,13 +1277,18 @@ export const DISPATCH_RULES: DispatchRule[] = [
   },
   {
     name: "pre-planning (has research) → plan-milestone",
-    match: async ({ state, mid, midTitle, basePath }) => {
+    match: async ({ state, mid, midTitle, basePath, session }) => {
       if (state.phase !== "pre-planning") return null;
       return {
         action: "dispatch",
         unitType: "plan-milestone",
         unitId: mid,
-        prompt: await buildPlanMilestonePrompt(mid, midTitle, basePath),
+        prompt: await buildPlanMilestonePrompt(
+          mid,
+          midTitle,
+          basePath,
+          session?.scope ?? scopeMilestone(createWorkspace(basePath), mid),
+        ),
       };
     },
   },

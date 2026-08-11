@@ -8,6 +8,8 @@ Your working directory is `{{workingDirectory}}`. All file reads, writes, and sh
 
 If any inlined plan, summary, verification command, or prior artifact names an absolute path outside `{{workingDirectory}}`, treat that path as stale context. Convert it to the equivalent relative path under `{{workingDirectory}}` before reading, writing, or executing. If no equivalent path exists under `{{workingDirectory}}`, record a verification failure and stop; do not edit or run commands in another checkout.
 
+Project state root: `{{projectGsdPath}}`. Read only the explicit on-demand Project paths below; do not probe a worktree-local `.gsd/STATE.md` or preference file. Persist planning through the scoped GSD lifecycle tools, not direct Project-state writes.
+
 All relevant context is preloaded below. Start immediately without re-reading these files.
 
 {{inlinedContext}}

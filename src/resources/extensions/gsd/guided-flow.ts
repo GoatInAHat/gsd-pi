@@ -104,7 +104,7 @@ import {
 } from "./preparation.js";
 import { verifyExpectedArtifact } from "./auto-recovery.js";
 import { countPlanMilestoneRoadmapSlices } from "./artifact-verification.js";
-import type { MilestoneScope } from "./workspace.js";
+import { createWorkspace, scopeMilestone, type MilestoneScope } from "./workspace.js";
 import { clearPendingGate, extractDepthVerificationMilestoneId, getPendingGate } from "./bootstrap/write-gate.js";
 import {
   _getPendingAutoStart,
@@ -2519,7 +2519,12 @@ export async function showSmartEntry(
         setPendingAutoStart(basePath, { ctx, pi, basePath, milestoneId, step: stepMode });
         await dispatchWorkflow(
           pi,
-          await buildPlanMilestonePrompt(milestoneId, milestoneTitle, basePath),
+          await buildPlanMilestonePrompt(
+            milestoneId,
+            milestoneTitle,
+            basePath,
+            scopeMilestone(createWorkspace(basePath), milestoneId),
+          ),
           "gsd-run",
           ctx,
           "plan-milestone",
