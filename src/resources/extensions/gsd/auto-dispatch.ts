@@ -1279,6 +1279,9 @@ export const DISPATCH_RULES: DispatchRule[] = [
     name: "pre-planning (has research) → plan-milestone",
     match: async ({ state, mid, midTitle, basePath, session }) => {
       if (state.phase !== "pre-planning") return null;
+      const milestoneScope = session?.scope?.milestoneId === mid
+        ? session.scope
+        : scopeMilestone(createWorkspace(basePath), mid);
       return {
         action: "dispatch",
         unitType: "plan-milestone",
@@ -1287,7 +1290,7 @@ export const DISPATCH_RULES: DispatchRule[] = [
           mid,
           midTitle,
           basePath,
-          session?.scope ?? scopeMilestone(createWorkspace(basePath), mid),
+          milestoneScope,
         ),
       };
     },
