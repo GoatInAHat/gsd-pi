@@ -11,6 +11,7 @@ import { calculateCost } from "../models.js";
 import type {
 	AnthropicMessagesCompat,
 	Api,
+	ApiKeyProvenance,
 	AssistantMessage,
 	CacheRetention,
 	Context,
@@ -32,7 +33,6 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
-import { hasOAuthApiKeyProvenance } from "../utils/oauth/api-key-provenance.js";
 import { sanitizeToolSchema } from "../utils/sanitize-tool-schema.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 
@@ -503,6 +503,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 				const created = createClient(
 					model,
 					apiKey,
+					options?.apiKeyProvenance,
 					options?.interleavedThinking ?? true,
 					shouldUseFineGrainedToolStreamingBeta(model, context),
 					options?.headers,
@@ -824,6 +825,7 @@ function isOAuthToken(apiKey: string): boolean {
 function createClient(
 	model: Model<"anthropic-messages">,
 	apiKey: string,
+	apiKeyProvenance: ApiKeyProvenance | undefined,
 	interleavedThinking: boolean,
 	useFineGrainedToolStreamingBeta: boolean,
 	optionsHeaders?: Record<string, string>,
@@ -909,8 +911,11 @@ function createClient(
 	}
 
 	// API key auth
+	const hasKimiOAuthProvenance =
+		apiKeyProvenance?.type === "oauth" && apiKeyProvenance.provider === model.provider;
 	const usesKimiBearerAuth =
-		model.provider === "kimi-coding" && hasOAuthApiKeyProvenance(model.provider, apiKey);
+		model.provider === "kimi-coding" &&
+		(hasKimiOAuthProvenance || optionsHeaders?.Authorization === `Bearer ${apiKey}`);
 	const sessionAffinityHeaders: Record<string, string | null> =
 		sessionId && getAnthropicCompat(model).sendSessionAffinityHeaders ? { "x-session-affinity": sessionId } : {};
 	const client = new Anthropic({

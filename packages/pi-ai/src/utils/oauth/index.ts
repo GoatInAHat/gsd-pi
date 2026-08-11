@@ -28,13 +28,13 @@ export * from "./types.js";
 // Provider Registry
 // ============================================================================
 
+import type { ApiKeyProvenance } from "../../types.js";
 import { anthropicOAuthProvider } from "./anthropic.js";
-import { registerOAuthApiKey } from "./api-key-provenance.js";
 import { githubCopilotOAuthProvider } from "./github-copilot.js";
+import { kimiCodingOAuthProvider } from "./kimi-coding.js";
 import { openaiCodexOAuthProvider } from "./openai-codex.js";
 import type { OAuthCredentials, OAuthProviderId, OAuthProviderInfo, OAuthProviderInterface } from "./types.js";
 import { xaiOAuthProvider } from "./xai.js";
-import { kimiCodingOAuthProvider } from "./kimi-coding.js";
 
 const BUILT_IN_OAUTH_PROVIDERS: OAuthProviderInterface[] = [
 	anthropicOAuthProvider,
@@ -134,7 +134,11 @@ export async function refreshOAuthToken(
 export async function getOAuthApiKey(
 	providerId: OAuthProviderId,
 	credentials: Record<string, OAuthCredentials>,
-): Promise<{ newCredentials: OAuthCredentials; apiKey: string } | null> {
+): Promise<{
+	newCredentials: OAuthCredentials;
+	apiKey: string;
+	apiKeyProvenance: ApiKeyProvenance;
+} | null> {
 	const provider = getOAuthProvider(providerId);
 	if (!provider) {
 		throw new Error(`Unknown OAuth provider: ${providerId}`);
@@ -154,6 +158,6 @@ export async function getOAuthApiKey(
 		}
 	}
 
-	const apiKey = registerOAuthApiKey(providerId, provider.getApiKey(creds));
-	return { newCredentials: creds, apiKey };
+	const apiKey = provider.getApiKey(creds);
+	return { newCredentials: creds, apiKey, apiKeyProvenance: { type: "oauth", provider: providerId } };
 }

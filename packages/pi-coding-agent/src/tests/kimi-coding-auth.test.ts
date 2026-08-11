@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
-import { AuthStorage } from "../src/core/auth-storage.ts";
-import { ModelRegistry } from "../src/core/model-registry.ts";
+import { AuthStorage } from "../core/auth-storage.js";
+import { ModelRegistry } from "../core/model-registry.js";
 
 function stubFetch(t: TestContext, implementation: typeof fetch): void {
 	const originalFetch = globalThis.fetch;

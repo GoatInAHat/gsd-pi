@@ -1279,7 +1279,7 @@ writeFileSync('auth.json', JSON.stringify(auth, null, 2));
 const model = getModel('github-copilot', 'gpt-4o');
 const response = await complete(model, {
   messages: [{ role: 'user', content: 'Hello!' }]
-}, { apiKey: result.apiKey });
+}, { apiKey: result.apiKey, apiKeyProvenance: result.apiKeyProvenance });
 ```
 
 ### Provider Notes

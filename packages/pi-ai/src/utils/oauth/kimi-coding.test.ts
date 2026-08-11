@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, test, type TestContext } from "node:test";
-import { getModel } from "../src/models.ts";
-import { streamAnthropic } from "../src/providers/anthropic.ts";
-import type { Context } from "../src/types.ts";
-import { getOAuthApiKey, getOAuthProvider } from "../src/utils/oauth/index.ts";
-import { kimiCodingOAuthProvider, loginKimiCoding, refreshKimiCodingToken } from "../src/utils/oauth/kimi-coding.ts";
+import { getModel } from "../../models.js";
+import { streamAnthropic } from "../../providers/anthropic.js";
+import type { Context, StreamOptions } from "../../types.js";
+import { getOAuthApiKey, getOAuthProvider } from "./index.js";
+import { kimiCodingOAuthProvider, loginKimiCoding, refreshKimiCodingToken } from "./kimi-coding.js";
 
 function jsonResponse(body: unknown, status: number = 200): Response {
 	return new Response(JSON.stringify(body), {
@@ -29,7 +29,10 @@ function stubFetch(t: TestContext, implementation: typeof fetch): () => void {
 	return restore;
 }
 
-async function captureKimiRequestHeaders(t: TestContext, apiKey: string): Promise<IncomingHttpHeaders> {
+async function captureKimiRequestHeaders(
+	t: TestContext,
+	auth: Pick<StreamOptions, "apiKey" | "apiKeyProvenance">,
+): Promise<IncomingHttpHeaders> {
 	let capturedHeaders: IncomingHttpHeaders | undefined;
 	const server = createServer((request, response) => {
 		capturedHeaders = request.headers;
@@ -55,7 +58,7 @@ async function captureKimiRequestHeaders(t: TestContext, apiKey: string): Promis
 		messages: [{ role: "user", content: "Hello", timestamp: Date.now() }],
 	};
 
-	await streamAnthropic(model, context, { apiKey }).result();
+	await streamAnthropic(model, context, auth).result();
 	assert.ok(capturedHeaders, "Kimi request was not captured");
 	return capturedHeaders;
 }
@@ -108,9 +111,20 @@ describe("Kimi Code OAuth provider", () => {
 			const result = await getOAuthApiKey("kimi-coding", { "kimi-coding": credentials });
 			assert.ok(result);
 			restoreFetch();
-			const headers = await captureKimiRequestHeaders(t, result.apiKey);
+			const headers = await captureKimiRequestHeaders(t, result);
 			assert.equal(headers.authorization, "Bearer access");
 			assert.equal(headers["x-api-key"], undefined);
+
+			const staticHeaders = await captureKimiRequestHeaders(t, { apiKey: result.apiKey });
+			assert.equal(staticHeaders.authorization, undefined);
+			assert.equal(staticHeaders["x-api-key"], "access");
+
+			const otherOAuthHeaders = await captureKimiRequestHeaders(t, {
+				apiKey: result.apiKey,
+				apiKeyProvenance: { type: "oauth", provider: "github-copilot" },
+			});
+			assert.equal(otherOAuthHeaders.authorization, undefined);
+			assert.equal(otherOAuthHeaders["x-api-key"], "access");
 		});
 
 		test("surfaces device authorization failure responses", async (t) => {
@@ -142,13 +156,13 @@ describe("Kimi Code OAuth provider", () => {
 			assert.equal(result.newCredentials.refresh, "new-r");
 
 			restoreFetch();
-			const headers = await captureKimiRequestHeaders(t, result.apiKey);
+			const headers = await captureKimiRequestHeaders(t, result);
 			assert.equal(headers.authorization, "Bearer new-a");
 			assert.equal(headers["x-api-key"], undefined);
 		});
 
 		test("preserves API key authentication for static credentials", async (t) => {
-			const headers = await captureKimiRequestHeaders(t, "static-key");
+			const headers = await captureKimiRequestHeaders(t, { apiKey: "static-key" });
 			assert.equal(headers.authorization, undefined);
 			assert.equal(headers["x-api-key"], "static-key");
 		});
