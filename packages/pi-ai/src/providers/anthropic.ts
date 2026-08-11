@@ -32,6 +32,7 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
+import { hasOAuthApiKeyProvenance } from "../utils/oauth/api-key-provenance.js";
 import { sanitizeToolSchema } from "../utils/sanitize-tool-schema.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 
@@ -909,7 +910,7 @@ function createClient(
 
 	// API key auth
 	const usesKimiBearerAuth =
-		model.provider === "kimi-coding" && optionsHeaders?.Authorization === `Bearer ${apiKey}`;
+		model.provider === "kimi-coding" && hasOAuthApiKeyProvenance(model.provider, apiKey);
 	const sessionAffinityHeaders: Record<string, string | null> =
 		sessionId && getAnthropicCompat(model).sendSessionAffinityHeaders ? { "x-session-affinity": sessionId } : {};
 	const client = new Anthropic({

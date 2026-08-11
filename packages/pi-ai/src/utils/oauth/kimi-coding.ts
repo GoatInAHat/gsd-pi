@@ -6,6 +6,7 @@
  * https://api.kimi.com/coding as an `Authorization: Bearer` header.
  */
 
+import { registerOAuthApiKey } from "./api-key-provenance.js";
 import type { OAuthCredentials, OAuthLoginCallbacks, OAuthProviderInterface } from "./types.js";
 
 const CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098";
@@ -291,6 +292,7 @@ export async function loginKimiCoding(callbacks: OAuthLoginCallbacks): Promise<O
 		expiresInSeconds: device.expiresInSeconds,
 	});
 	const token = await pollForToken(oauthHost, device, callbacks.signal);
+	registerOAuthApiKey("kimi-coding", token.access);
 	return { ...token };
 }
 
@@ -299,6 +301,7 @@ export async function loginKimiCoding(callbacks: OAuthLoginCallbacks): Promise<O
  */
 export async function refreshKimiCodingToken(refreshTokenValue: string): Promise<OAuthCredentials> {
 	const token = await refreshKimiToken(getOauthHost(), refreshTokenValue);
+	registerOAuthApiKey("kimi-coding", token.access);
 	return { ...token };
 }
 
@@ -312,6 +315,6 @@ export const kimiCodingOAuthProvider: OAuthProviderInterface = {
 		return refreshKimiCodingToken(credentials.refresh);
 	},
 	getApiKey(credentials) {
-		return credentials.access;
+		return registerOAuthApiKey("kimi-coding", credentials.access);
 	},
 };

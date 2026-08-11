@@ -29,6 +29,7 @@ export * from "./types.js";
 // ============================================================================
 
 import { anthropicOAuthProvider } from "./anthropic.js";
+import { registerOAuthApiKey } from "./api-key-provenance.js";
 import { githubCopilotOAuthProvider } from "./github-copilot.js";
 import { openaiCodexOAuthProvider } from "./openai-codex.js";
 import type { OAuthCredentials, OAuthProviderId, OAuthProviderInfo, OAuthProviderInterface } from "./types.js";
@@ -153,6 +154,6 @@ export async function getOAuthApiKey(
 		}
 	}
 
-	const apiKey = provider.getApiKey(creds);
+	const apiKey = registerOAuthApiKey(providerId, provider.getApiKey(creds));
 	return { newCredentials: creds, apiKey };
 }

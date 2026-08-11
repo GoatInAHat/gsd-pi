@@ -1,25 +1,35 @@
+import assert from "node:assert/strict";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, test, type TestContext } from "node:test";
 import { getModel } from "../src/models.ts";
 import { streamAnthropic } from "../src/providers/anthropic.ts";
 import type { Context } from "../src/types.ts";
-import { getOAuthProvider } from "../src/utils/oauth/index.ts";
+import { getOAuthApiKey, getOAuthProvider } from "../src/utils/oauth/index.ts";
 import { kimiCodingOAuthProvider, loginKimiCoding, refreshKimiCodingToken } from "../src/utils/oauth/kimi-coding.ts";
 
 function jsonResponse(body: unknown, status: number = 200): Response {
 	return new Response(JSON.stringify(body), {
 		status,
-		headers: {
-			"Content-Type": "application/json",
-		},
+		headers: { "Content-Type": "application/json" },
 	});
 }
 
-async function captureKimiRequestHeaders(
-	apiKey: string,
-	headers?: Record<string, string>,
-): Promise<IncomingHttpHeaders> {
+function stubFetch(t: TestContext, implementation: typeof fetch): () => void {
+	const originalFetch = globalThis.fetch;
+	let restored = false;
+	const restore = () => {
+		if (!restored) {
+			globalThis.fetch = originalFetch;
+			restored = true;
+		}
+	};
+	globalThis.fetch = implementation;
+	t.after(restore);
+	return restore;
+}
+
+async function captureKimiRequestHeaders(t: TestContext, apiKey: string): Promise<IncomingHttpHeaders> {
 	let capturedHeaders: IncomingHttpHeaders | undefined;
 	const server = createServer((request, response) => {
 		capturedHeaders = request.headers;
@@ -29,6 +39,13 @@ async function captureKimiRequestHeaders(
 	});
 
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	t.after(
+		() =>
+			new Promise<void>((resolve, reject) => {
+				server.close((error) => (error ? reject(error) : resolve()));
+			}),
+	);
+
 	const address = server.address() as AddressInfo;
 	const model = {
 		...getModel("kimi-coding", "kimi-for-coding"),
@@ -38,39 +55,26 @@ async function captureKimiRequestHeaders(
 		messages: [{ role: "user", content: "Hello", timestamp: Date.now() }],
 	};
 
-	try {
-		await streamAnthropic(model, context, { apiKey, headers }).result();
-	} finally {
-		await new Promise<void>((resolve, reject) => {
-			server.close((error) => (error ? reject(error) : resolve()));
-		});
-	}
-
-	if (!capturedHeaders) {
-		throw new Error("Kimi request was not captured");
-	}
+	await streamAnthropic(model, context, { apiKey }).result();
+	assert.ok(capturedHeaders, "Kimi request was not captured");
 	return capturedHeaders;
 }
 
 describe("Kimi Code OAuth provider", () => {
-	afterEach(() => {
-		vi.unstubAllGlobals();
-	});
-
-	it("is registered as a built-in OAuth provider under the model provider id", () => {
+	test("is registered as a built-in OAuth provider under the model provider id", () => {
 		const provider = getOAuthProvider("kimi-coding");
-		expect(provider).toBeDefined();
-		expect(provider?.id).toBe("kimi-coding");
+		assert.ok(provider);
+		assert.equal(provider.id, "kimi-coding");
 	});
 
-	it("returns the access token as the API key", () => {
+	test("returns the access token as the API key", () => {
 		const key = kimiCodingOAuthProvider.getApiKey({ access: "tok_access", refresh: "tok_refresh", expires: 0 });
-		expect(key).toBe("tok_access");
+		assert.equal(key, "tok_access");
 	});
 
 	describe("device authorization login", () => {
-		it("completes the device flow and returns credentials", async () => {
-			const fetchMock = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+		test("completes the public OAuth flow with bearer authentication", async (t) => {
+			const restoreFetch = stubFetch(t, async (input) => {
 				const url = String(input);
 				if (url.endsWith("/api/oauth/device_authorization")) {
 					return jsonResponse({
@@ -84,7 +88,6 @@ describe("Kimi Code OAuth provider", () => {
 				}
 				return jsonResponse({ access_token: "access", refresh_token: "refresh", expires_in: 3600 });
 			});
-			vi.stubGlobal("fetch", fetchMock);
 
 			let deviceInfo: { userCode: string; verificationUri: string } | undefined;
 			const credentials = await loginKimiCoding({
@@ -96,121 +99,107 @@ describe("Kimi Code OAuth provider", () => {
 				onSelect: async () => undefined,
 			});
 
-			expect(deviceInfo?.userCode).toBe("USER-CODE");
-			expect(deviceInfo?.verificationUri).toBe("https://auth.kimi.com/device?user_code=USER-CODE");
-			expect(credentials.access).toBe("access");
-			expect(credentials.refresh).toBe("refresh");
-			expect(credentials.expires).toBeGreaterThan(Date.now());
+			assert.equal(deviceInfo?.userCode, "USER-CODE");
+			assert.equal(deviceInfo?.verificationUri, "https://auth.kimi.com/device?user_code=USER-CODE");
+			assert.equal(credentials.access, "access");
+			assert.equal(credentials.refresh, "refresh");
+			assert.ok(credentials.expires > Date.now());
 
-			vi.unstubAllGlobals();
-			const headers = await captureKimiRequestHeaders(credentials.access, {
-				Authorization: `Bearer ${credentials.access}`,
-			});
-			expect(headers.authorization).toBe("Bearer access");
-			expect(headers["x-api-key"]).toBeUndefined();
+			const result = await getOAuthApiKey("kimi-coding", { "kimi-coding": credentials });
+			assert.ok(result);
+			restoreFetch();
+			const headers = await captureKimiRequestHeaders(t, result.apiKey);
+			assert.equal(headers.authorization, "Bearer access");
+			assert.equal(headers["x-api-key"], undefined);
 		});
 
-		it("surfaces device authorization failure responses", async () => {
-			const fetchMock = vi.fn(
-				async (): Promise<Response> => new Response("boom", { status: 500, statusText: "Server Error" }),
-			);
-			vi.stubGlobal("fetch", fetchMock);
+		test("surfaces device authorization failure responses", async (t) => {
+			stubFetch(t, async () => new Response("boom", { status: 500, statusText: "Server Error" }));
 
-			await expect(
+			await assert.rejects(
 				loginKimiCoding({
 					onAuth: () => {},
 					onDeviceCode: () => {},
 					onPrompt: async () => "",
 					onSelect: async () => undefined,
 				}),
-			).rejects.toThrow("Kimi Code device authorization failed with status 500");
+				/Kimi Code device authorization failed with status 500/,
+			);
 		});
 	});
 
 	describe("token refresh", () => {
-		it("returns refreshed credentials", async () => {
-			const fetchMock = vi.fn(
-				async (): Promise<Response> =>
-					jsonResponse({ access_token: "new-a", refresh_token: "new-r", expires_in: 3600 }),
+		test("uses bearer authentication for refreshed public OAuth credentials", async (t) => {
+			const restoreFetch = stubFetch(t, async () =>
+				jsonResponse({ access_token: "new-a", refresh_token: "new-r", expires_in: 3600 }),
 			);
-			vi.stubGlobal("fetch", fetchMock);
 
-			const credentials = await refreshKimiCodingToken("tok_old_refresh");
-			expect(credentials.access).toBe("new-a");
-			expect(credentials.refresh).toBe("new-r");
-
-			vi.unstubAllGlobals();
-			const headers = await captureKimiRequestHeaders(credentials.access, {
-				Authorization: `Bearer ${credentials.access}`,
+			const result = await getOAuthApiKey("kimi-coding", {
+				"kimi-coding": { access: "old-a", refresh: "old-r", expires: 0 },
 			});
-			expect(headers.authorization).toBe("Bearer new-a");
-			expect(headers["x-api-key"]).toBeUndefined();
+			assert.ok(result);
+			assert.equal(result.newCredentials.access, "new-a");
+			assert.equal(result.newCredentials.refresh, "new-r");
+
+			restoreFetch();
+			const headers = await captureKimiRequestHeaders(t, result.apiKey);
+			assert.equal(headers.authorization, "Bearer new-a");
+			assert.equal(headers["x-api-key"], undefined);
 		});
 
-		it("preserves API key authentication for static credentials", async () => {
-			const headers = await captureKimiRequestHeaders("key");
-			expect(headers.authorization).toBeUndefined();
-			expect(headers["x-api-key"]).toBe("key");
+		test("preserves API key authentication for static credentials", async (t) => {
+			const headers = await captureKimiRequestHeaders(t, "static-key");
+			assert.equal(headers.authorization, undefined);
+			assert.equal(headers["x-api-key"], "static-key");
 		});
 
-		it("does not expose token values from malformed successful responses", async () => {
+		test("does not expose token values from malformed successful responses", async (t) => {
 			const responseAccess = "aa";
 			const responseRefresh = "rr";
-			const fetchMock = vi.fn(
-				async (): Promise<Response> =>
-					jsonResponse({ access_token: responseAccess, refresh_token: responseRefresh }),
-			);
-			vi.stubGlobal("fetch", fetchMock);
+			stubFetch(t, async () => jsonResponse({ access_token: responseAccess, refresh_token: responseRefresh }));
 
-			const error = await refreshKimiCodingToken("synthetic-old-refresh").then(
-				() => undefined,
-				(reason: unknown) => reason,
+			await assert.rejects(
+				refreshKimiCodingToken("old-r"),
+				(error: unknown) => {
+					assert.ok(error instanceof Error);
+					assert.equal(error.message, "Kimi Code token refresh response has invalid fields: expires_in");
+					assert.equal(error.message.includes(responseAccess), false);
+					assert.equal(error.message.includes(responseRefresh), false);
+					return true;
+				},
 			);
-			expect(error).toBeInstanceOf(Error);
-			if (!(error instanceof Error)) {
-				throw new Error("Expected token refresh to fail");
-			}
-			expect(error.message).toBe("Kimi Code token refresh response has invalid fields: expires_in");
-			expect(error.message).not.toContain(responseAccess);
-			expect(error.message).not.toContain(responseRefresh);
 		});
 
-		it("does not expose token values from malformed error responses", async () => {
+		test("does not expose token values from malformed error responses", async (t) => {
 			const responseAccess = "aa";
 			const responseRefresh = "rr";
-			vi.stubGlobal(
-				"fetch",
-				vi.fn(async () =>
-					jsonResponse(
-						{
-							error: "unexpected_response",
-							error_description: "contains aa and rr",
-							access_token: responseAccess,
-							refresh_token: responseRefresh,
-						},
-						400,
-					),
+			stubFetch(t, async () =>
+				jsonResponse(
+					{
+						error: "unexpected_response",
+						error_description: "contains aa and rr",
+						access_token: responseAccess,
+						refresh_token: responseRefresh,
+					},
+					400,
 				),
 			);
 
-			const error = await refreshKimiCodingToken("old").then(
-				() => undefined,
-				(reason: unknown) => reason,
+			await assert.rejects(
+				refreshKimiCodingToken("old"),
+				(error: unknown) => {
+					assert.ok(error instanceof Error);
+					assert.equal(error.message, "Kimi Code token refresh failed with status 400");
+					assert.equal(error.message.includes(responseAccess), false);
+					assert.equal(error.message.includes(responseRefresh), false);
+					return true;
+				},
 			);
-			expect(error).toBeInstanceOf(Error);
-			if (!(error instanceof Error)) {
-				throw new Error("Expected token refresh to fail");
-			}
-			expect(error.message).toBe("Kimi Code token refresh failed with status 400");
-			expect(error.message).not.toContain(responseAccess);
-			expect(error.message).not.toContain(responseRefresh);
 		});
 
-		it("surfaces unauthorized refresh responses", async () => {
-			const fetchMock = vi.fn(async (): Promise<Response> => jsonResponse({ error: "invalid_grant" }, 401));
-			vi.stubGlobal("fetch", fetchMock);
-
-			await expect(refreshKimiCodingToken("tok_dead")).rejects.toThrow("Kimi Code token refresh unauthorized");
+		test("surfaces unauthorized refresh responses", async (t) => {
+			stubFetch(t, async () => jsonResponse({ error: "invalid_grant" }, 401));
+			await assert.rejects(refreshKimiCodingToken("dead-r"), /Kimi Code token refresh unauthorized/);
 		});
 	});
 });
