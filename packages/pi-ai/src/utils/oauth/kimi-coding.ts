@@ -121,16 +121,18 @@ function parseTokenResponse(json: any, operation: string): TokenResult {
 	const accessToken = json?.access_token;
 	const refreshToken = json?.refresh_token;
 	const expiresIn = json?.expires_in;
-	if (
-		typeof accessToken !== "string" ||
-		!accessToken ||
-		typeof refreshToken !== "string" ||
-		!refreshToken ||
-		typeof expiresIn !== "number" ||
-		!Number.isFinite(expiresIn) ||
-		expiresIn <= 0
-	) {
-		throw new Error(`Kimi Code token ${operation} response missing fields: ${JSON.stringify(json)}`);
+	const invalidFields: string[] = [];
+	if (typeof accessToken !== "string" || !accessToken) {
+		invalidFields.push("access_token");
+	}
+	if (typeof refreshToken !== "string" || !refreshToken) {
+		invalidFields.push("refresh_token");
+	}
+	if (typeof expiresIn !== "number" || !Number.isFinite(expiresIn) || expiresIn <= 0) {
+		invalidFields.push("expires_in");
+	}
+	if (invalidFields.length > 0) {
+		throw new Error(`Kimi Code token ${operation} response has invalid fields: ${invalidFields.join(", ")}`);
 	}
 	return {
 		access: accessToken,

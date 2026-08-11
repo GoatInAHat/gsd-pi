@@ -908,11 +908,12 @@ function createClient(
 	}
 
 	// API key auth
+	const usesKimiBearerAuth = model.provider === "kimi-coding";
 	const sessionAffinityHeaders: Record<string, string | null> =
 		sessionId && getAnthropicCompat(model).sendSessionAffinityHeaders ? { "x-session-affinity": sessionId } : {};
 	const client = new Anthropic({
-		apiKey,
-		authToken: null,
+		apiKey: usesKimiBearerAuth ? null : apiKey,
+		authToken: usesKimiBearerAuth ? apiKey : null,
 		baseURL: model.baseUrl,
 		dangerouslyAllowBrowser: true,
 		defaultHeaders: mergeHeaders(
