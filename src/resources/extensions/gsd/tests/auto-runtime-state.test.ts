@@ -48,6 +48,18 @@ test("getAutoRuntimeSnapshot includes orchestration phase when available", () =>
   autoSession.reset();
 });
 
+test("getAutoRuntimeSnapshot includes session isolation fallback state", (t) => {
+  autoSession.reset();
+  t.after(() => autoSession.reset());
+  autoSession.isolationDegraded = true;
+  autoSession.strandedRecoveryIsolationMode = "branch";
+
+  const snap = getAutoRuntimeSnapshot();
+
+  assert.equal(snap.isolationDegraded, true);
+  assert.equal(snap.strandedRecoveryIsolationMode, "branch");
+});
+
 test("getAutoRuntimeSnapshot includes the active typed tool-surface snapshot", () => {
   autoSession.reset();
   clearAutoToolSurfaceSnapshot();
