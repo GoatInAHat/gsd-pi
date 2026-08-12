@@ -2,6 +2,10 @@
 // File Purpose: Verifies model routing decisions and legacy provider-default telemetry.
 import test, { describe } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 import {
   resolveModelForComplexity,
@@ -1374,4 +1378,80 @@ test("claude-sonnet-5 as ceiling: light task IS downgraded to haiku - routing no
   );
   assert.equal(result.modelId, "claude-haiku-4-5", "light task with sonnet-5 ceiling must downgrade to haiku");
   assert.equal(result.wasDowngraded, true);
+});
+
+// ─── Duplicate registry keys (#1707 regression) ──────────────────────────────
+// The Sonnet 5 rollout appended a second "claude-sonnet-5" entry to three
+// registries (MODEL_CAPABILITY_TIER, MODEL_COST_PER_1K_INPUT,
+// MODEL_CAPABILITY_PROFILES) instead of editing the existing rows. Duplicate
+// object-literal keys are a hard TypeScript error (TS1117), so `pnpm build`
+// failed with three diagnostics. Runtime behavior cannot observe a duplicate
+// key (the last assignment silently wins), so the regression test walks the
+// module's real object literals through the TypeScript AST.
+
+describe("model-router registry keys", () => {
+  test("no object literal declares the same key twice (TS1117)", () => {
+    const routerPath = join(dirname(fileURLToPath(import.meta.url)), "..", "model-router.ts");
+    // allow-source-grep: AST structural linter for duplicate object-literal
+    // keys; it walks real PropertyAssignment nodes, not source text.
+    const source = ts.createSourceFile(
+      routerPath,
+      readFileSync(routerPath, "utf8"),
+      ts.ScriptTarget.Latest,
+      true,
+    );
+
+    const duplicates: string[] = [];
+
+    function keyOf(prop: ts.ObjectLiteralElementLike): string | undefined {
+      if (!ts.isPropertyAssignment(prop)) return undefined;
+      const name = prop.name;
+      if (ts.isStringLiteral(name) || ts.isNumericLiteral(name)) return name.text;
+      if (ts.isIdentifier(name)) return name.text;
+      return undefined;
+    }
+
+    function visit(node: ts.Node): void {
+      if (ts.isObjectLiteralExpression(node)) {
+        const seen = new Set<string>();
+        for (const prop of node.properties) {
+          const key = keyOf(prop);
+          if (!key) continue;
+          if (seen.has(key)) {
+            const { line } = source.getLineAndCharacterOfPosition(prop.getStart(source));
+            duplicates.push(`${key} (line ${line + 1})`);
+          }
+          seen.add(key);
+        }
+      }
+      ts.forEachChild(node, visit);
+    }
+
+    visit(source);
+
+    assert.deepEqual(
+      duplicates,
+      [],
+      `model-router.ts declares duplicate object-literal keys, which fails the build with TS1117: ${duplicates.join(", ")}`,
+    );
+  });
+
+  test("claude-sonnet-5 keeps one consistent entry across tier, cost, and capability registries", () => {
+    assert.equal(MODEL_CAPABILITY_TIER["claude-sonnet-5"], "standard");
+    assert.deepEqual(MODEL_CAPABILITY_PROFILES["claude-sonnet-5"], {
+      coding: 90,
+      debugging: 85,
+      research: 80,
+      reasoning: 87,
+      speed: 55,
+      longContext: 80,
+      instruction: 88,
+    });
+    // The cost table is module-private; observe its sonnet-5 row through the
+    // cheapest-first ordering of standard-tier eligibility (0.003 vs 0.00125).
+    assert.deepEqual(
+      getEligibleModels("standard", ["claude-sonnet-5", "gemini-2.5-pro"], defaultRoutingConfig()),
+      ["gemini-2.5-pro", "claude-sonnet-5"],
+    );
+  });
 });
