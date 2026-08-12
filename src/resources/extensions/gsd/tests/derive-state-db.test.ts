@@ -1376,12 +1376,14 @@ describe('derive-state-db', async () => {
       const dbState = await deriveStateFromDb(base);
 
       // A content-less queued shell (no CONTEXT, no CONTEXT-DRAFT, no slices)
-      // is a phantom and must NOT be promoted to active (#1524).
+      // is a phantom and must NOT be promoted to active (#1524). Readiness
+      // comes from the artifacts table, so derive must not probe the milestone
+      // directory on disk.
       assert.equal(dbState.activeMilestone, null, 'single-resolve: content-less queued shell is not promoted');
       assert.equal(
         phaseDirExistsChecks,
-        3,
-        'single-resolve: one directory resolve plus two artifact probes re-check the milestone directory via resolveFile',
+        0,
+        'single-resolve: live derive does not probe the milestone directory for CONTEXT files',
       );
 
       closeDatabase();
@@ -1502,6 +1504,10 @@ describe('derive-state-db', async () => {
       openDatabase(':memory:');
       insertMilestone({ id: 'M001', title: 'First', status: 'complete' });
       insertMilestone({ id: 'M002', title: 'Second', status: 'queued' });
+      insertArtifactRow('milestones/M002/M002-CONTEXT.md', '# M002 Context\n\nPlanned milestone.', {
+        artifact_type: 'CONTEXT',
+        milestone_id: 'M002',
+      });
 
       // isGhostMilestone should NOT treat M002 as ghost when DB row + content files exist
       assert.ok(!isGhostMilestone(base, 'M002'), 'ghost-dbrow: M002 with DB row and content is NOT a ghost');

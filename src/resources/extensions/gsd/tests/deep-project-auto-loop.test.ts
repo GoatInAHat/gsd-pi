@@ -27,6 +27,7 @@ import {
 } from "../guided-flow.ts";
 import {
   closeDatabase,
+  insertArtifact,
   insertMilestone,
   openDatabase,
 } from "../gsd-db.ts";
@@ -375,6 +376,14 @@ test("deep project setup: bootstrap continues queued M002 without milestone cont
     openDatabase(join(base, ".gsd", "gsd.db"));
     insertMilestone({ id: "M001", title: "First milestone", status: "complete" });
     insertMilestone({ id: "M002", title: "Second milestone", status: "queued" });
+    insertArtifact({
+      path: "PROJECT.md",
+      artifact_type: "PROJECT",
+      milestone_id: null,
+      slice_id: null,
+      task_id: null,
+      full_content: readFileSync(join(base, ".gsd", "PROJECT.md"), "utf-8"),
+    });
     closeDatabase();
 
     const messages: unknown[] = [];
