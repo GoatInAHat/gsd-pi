@@ -1380,6 +1380,51 @@ test("claude-sonnet-5 as ceiling: light task IS downgraded to haiku - routing no
   assert.equal(result.wasDowngraded, true);
 });
 
+// --- claude-opus-5 catalog coverage (upstream #1588) ---
+// claude-opus-5 must be present in the capability registries so isKnownModel()
+// returns true and routing decisions are not bypassed via the #2192 path.
+
+test("claude-opus-5 is classified as heavy tier in MODEL_CAPABILITY_TIER", () => {
+  assert.equal(
+    MODEL_CAPABILITY_TIER["claude-opus-5"],
+    "heavy",
+    "claude-opus-5 must be in the tier map so isKnownModel() returns true",
+  );
+});
+
+test("claude-opus-5 as ceiling: heavy task is NOT bypassed - routing applies normally", () => {
+  const config = {
+    ...defaultRoutingConfig(),
+    enabled: true,
+    tier_models: { light: "claude-haiku-4-5", standard: "claude-sonnet-5", heavy: "claude-opus-5" },
+  };
+  const result = resolveModelForComplexity(
+    { tier: "heavy", reason: "test", downgraded: false },
+    { primary: "claude-opus-5", fallbacks: [] },
+    config,
+    ["claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5"],
+  );
+  assert.equal(result.modelId, "claude-opus-5", "heavy task with opus-5 ceiling should use opus-5");
+  assert.equal(result.wasDowngraded, false, "should not be downgraded when task tier matches ceiling");
+  assert.ok(!result.reason?.includes("not in the known tier map"), "must not hit #2192 bypass reason");
+});
+
+test("claude-opus-5 as ceiling: light task IS downgraded to haiku - routing not bypassed", () => {
+  const config = {
+    ...defaultRoutingConfig(),
+    enabled: true,
+    tier_models: { light: "claude-haiku-4-5", standard: "claude-sonnet-5", heavy: "claude-opus-5" },
+  };
+  const result = resolveModelForComplexity(
+    { tier: "light", reason: "test", downgraded: false },
+    { primary: "claude-opus-5", fallbacks: [] },
+    config,
+    ["claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5"],
+  );
+  assert.equal(result.modelId, "claude-haiku-4-5", "light task with opus-5 ceiling must downgrade to haiku");
+  assert.equal(result.wasDowngraded, true);
+});
+
 // ─── Duplicate registry keys (#1707 regression) ──────────────────────────────
 // The Sonnet 5 rollout appended a second "claude-sonnet-5" entry to three
 // registries (MODEL_CAPABILITY_TIER, MODEL_COST_PER_1K_INPUT,
