@@ -4949,6 +4949,70 @@ test("#1721: idle active-unit skip releases the stale claim and re-advances imme
   );
 });
 
+test("#1672: an unclearable active-unit marker still makes following skips ledger-visible", async (t) => {
+  _resetPendingResolve();
+
+  // Abandonment is key-matched inside the orchestrator, so a marker the loop
+  // cannot clear (mismatched key, or one planted by another writer) survives
+  // the abnormal exit. The stale-skip guard is the defence-in-depth behind the
+  // abandon call: it must still terminate the loop through the blocked path
+  // instead of re-polling an in-flight unit that is not running (#1672).
+  const ctx = makeMockCtx();
+  ctx.ui.setStatus = () => {};
+  ctx.ui.notify = () => {};
+  const pi = makeMockPi();
+  let advanceCalls = 0;
+  const s = makeLoopSession({
+    currentMilestoneId: "M001",
+    orchestration: {
+      start: async () => ({ kind: "stopped" as const, reason: "unused" }),
+      advance: async () => {
+        advanceCalls++;
+        if (advanceCalls === 1) {
+          return {
+            kind: "advanced" as const,
+            unit: { unitType: "plan-slice", unitId: "M001/S01" },
+            stateSnapshot: await makeMockDeps().deriveState(s.basePath),
+          };
+        }
+        return { kind: "skipped" as const, reason: "idempotent advance: unit already active" };
+      },
+      completeActiveUnit: async () => {},
+      retryActiveUnit: async () => {},
+      abandonActiveUnit: async () => {},
+      resume: async () => ({ kind: "stopped" as const, reason: "unused" }),
+      stop: async (reason: string) => ({ kind: "stopped" as const, reason }),
+      getStatus: () => ({ phase: "running" as const, transitionCount: 1 }),
+    } satisfies AutoOrchestrationModule,
+  });
+  openLoopDatabase(t, s);
+  const deps = makeMockDeps({
+    adjudicateNonAdvancingOutcome: undefined,
+    taskExecutionBoundary: async () => {
+      s.setCurrentUnit({ type: "plan-slice", id: "M001/S01", startedAt: Date.now() });
+      throw new Error("unit execution crashed");
+    },
+    stopAuto: async (_ctx, _pi, reason) => {
+      deps.callLog.push(`stopAuto:${reason ?? ""}`);
+      s.active = false;
+    },
+  });
+
+  await autoLoop(ctx, pi, s, deps);
+
+  assert.equal(advanceCalls, 3, "the second stale skip must trip the backstop, not spin");
+  const stopEntry = deps.callLog.find(entry => entry.startsWith("stopAuto:"));
+  assert.match(stopEntry ?? "", /^stopAuto:Blocked: /, "a tripped stale skip stops through the blocked path");
+  const wedgeResult = getOpenWedge(realpathSync(s.basePath));
+  assert.equal(wedgeResult.ok, true);
+  const wedge = wedgeResult.ok ? wedgeResult.wedge : null;
+  assert.ok(wedge, "the stale active-unit skip must persist a wedge");
+  assert.equal(wedge!.guardId, "orchestration-stale-active-unit");
+  assert.match(wedge!.sanctionedExit, /`\/gsd auto`/);
+  assert.match(wedge!.sanctionedExit, /gsd_task_recovery_resume/);
+  assert.doesNotMatch(wedge!.sanctionedExit, /Resolve the reported condition/);
+});
+
 test("finalize exceptions abandon the active orchestration marker before the next advance", async (t) => {
   _resetPendingResolve();
 
