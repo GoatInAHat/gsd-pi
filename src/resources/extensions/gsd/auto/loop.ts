@@ -958,6 +958,10 @@ export async function autoLoop(
           if (customDispatchId !== null && !customDispatchSettled) {
             throw new Error(`Could not terminalize custom-engine dispatch ${customDispatchId} before unit retry`);
           }
+          await s.orchestration?.releaseActiveUnit?.({
+            unitType: iterData.unitType,
+            unitId: iterData.unitId,
+          });
           finishIncompleteIteration({
             status: "retry",
             reason: unitPhaseResult.reason,
@@ -1239,7 +1243,7 @@ export async function autoLoop(
         const orchestration = s.orchestration;
         if (orchestration) {
           const existingPendingDispatch = s.pendingOrchestrationDispatch;
-          const orchestrationResult = existingPendingDispatch
+          let orchestrationResult = existingPendingDispatch
             ? {
                 kind: "advanced" as const,
                 unit: {
@@ -1249,6 +1253,18 @@ export async function autoLoop(
                 stateSnapshot: existingPendingDispatch.state,
               }
             : await orchestration.advance();
+
+          if (
+            orchestrationResult.kind === "skipped" &&
+            orchestrationResult.reason === "idempotent advance: unit already active" &&
+            !s.unitExecutionInFlight
+          ) {
+            const staleActiveUnit = orchestration.getStatus().activeUnit;
+            if (staleActiveUnit && orchestration.releaseActiveUnit) {
+              await orchestration.releaseActiveUnit(staleActiveUnit);
+              orchestrationResult = await orchestration.advance();
+            }
+          }
 
           if (orchestrationResult.kind === "blocked") {
             s.pendingOrchestrationDispatch = null;
@@ -1740,6 +1756,10 @@ export async function autoLoop(
             markFailed: markDispatchFailed,
             logWriteFailure: logDispatchLedgerWriteFailure,
           }));
+        await s.orchestration?.releaseActiveUnit?.({
+          unitType: iterData.unitType,
+          unitId: iterData.unitId,
+        });
         finishIncompleteIteration({
           status: "retry",
           reason: unitPhaseResult.reason,

@@ -324,6 +324,9 @@ function createLoopTestOrchestration(
       status.transitionCount += 1;
       return { kind: "advanced", unit, stateSnapshot: data.state };
     },
+    async releaseActiveUnit() {
+      clearActiveUnit();
+    },
     async completeActiveUnit() {
       clearActiveUnit();
     },
@@ -2255,6 +2258,10 @@ test("custom-engine recovery break and retry terminalize their dispatch", async 
         workerId,
         milestoneLeaseToken: lease.token,
       });
+      let releaseCalls = 0;
+      s.orchestration = {
+        releaseActiveUnit: async () => { releaseCalls++; },
+      };
       let dispatchStatusAtPause: string | undefined;
       const deps = makeMockDeps({
         isDbAvailable: () => true,
@@ -2279,6 +2286,7 @@ test("custom-engine recovery break and retry terminalize their dispatch", async 
         action === "break" ? "failed" : undefined,
         "a terminal recovery abort must settle its dispatch before pausing",
       );
+      assert.equal(releaseCalls, action === "retry" ? 1 : 0);
       assert.equal(pi.calls.length, 0, `${action} must exit before invoking the agent`);
     } finally {
       closeDatabase();
@@ -4846,6 +4854,77 @@ test("#1672: crash closeout makes following active-unit skips ledger-visible", a
   assert.match(wedge!.sanctionedExit, /`\/gsd auto`/);
   assert.match(wedge!.sanctionedExit, /gsd_task_recovery_resume/);
   assert.doesNotMatch(wedge!.sanctionedExit, /Resolve the reported condition/);
+});
+
+test("#1721: idle active-unit skip releases the stale claim and re-advances immediately", async (t) => {
+  _resetPendingResolve();
+
+  const ctx = makeMockCtx();
+  ctx.ui.setStatus = () => {};
+  const pi = makeMockPi();
+  const unit = { unitType: "execute-task", unitId: "M001/S01/T01" };
+  const stateSnapshot = await makeMockDeps().deriveState("unused");
+  let advanceCalls = 0;
+  let releaseCalls = 0;
+  let claimActive = true;
+  const s = makeLoopSession({
+    currentMilestoneId: "M001",
+    orchestration: {
+      start: async () => ({ kind: "stopped" as const, reason: "unused" }),
+      advance: async () => {
+        advanceCalls++;
+        if (claimActive) {
+          return { kind: "skipped" as const, reason: "idempotent advance: unit already active" };
+        }
+        s.pendingOrchestrationDispatch = {
+          ...unit,
+          prompt: "retry recovered task",
+          pauseAfterUatDispatch: false,
+          state: stateSnapshot,
+          mid: "M001",
+          midTitle: "Milestone 1",
+        };
+        return { kind: "advanced" as const, unit, stateSnapshot };
+      },
+      releaseActiveUnit: async (released: UnitRef) => {
+        assert.deepEqual(released, unit);
+        releaseCalls++;
+        claimActive = false;
+      },
+      completeActiveUnit: async () => {},
+      retryActiveUnit: async () => {},
+      resume: async () => ({ kind: "stopped" as const, reason: "unused" }),
+      stop: async (reason: string) => ({ kind: "stopped" as const, reason }),
+      getStatus: () => ({
+        phase: "running" as const,
+        transitionCount: advanceCalls,
+        activeUnit: claimActive ? unit : undefined,
+      }),
+    } satisfies AutoOrchestrationModule,
+  });
+  openLoopDatabase(t, s);
+  const adjudicated: string[] = [];
+  const deps = makeMockDeps({
+    adjudicateNonAdvancingOutcome: (_session, input) => {
+      adjudicated.push(input.guardId);
+      return null;
+    },
+    taskExecutionBoundary: async () => {
+      s.active = false;
+      return { action: "retry" as const, reason: "task-recovery-repair" };
+    },
+  });
+
+  await autoLoop(ctx, pi, s, deps);
+
+  assert.equal(releaseCalls, 2, "the defensive skip recovery and deferred retry both release the claim");
+  assert.equal(advanceCalls, 2, "the recovered claim must be re-advanced in the same iteration");
+  assert.deepEqual(adjudicated, ["unit-retry"]);
+  assert.equal(
+    adjudicated.includes("orchestration-stale-active-unit"),
+    false,
+    "a recovered stale claim must not feed the stale-unit guard",
+  );
 });
 
 test("#1672: finalize exceptions make following active-unit skips ledger-visible", async (t) => {

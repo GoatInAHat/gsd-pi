@@ -1442,6 +1442,17 @@ export class AutoOrchestrator implements AutoOrchestrationModule {
     return { ...this.status, activeUnit: this.status.activeUnit ? { ...this.status.activeUnit } : undefined };
   }
 
+  public async releaseActiveUnit(unit: { unitType: string; unitId: string }): Promise<void> {
+    const unitKey = buildDispatchKey(unit.unitType, unit.unitId);
+    const activeUnitKey = this.status.activeUnit
+      ? buildDispatchKey(this.status.activeUnit.unitType, this.status.activeUnit.unitId)
+      : null;
+    if (activeUnitKey !== unitKey) return;
+
+    this.status.activeUnit = undefined;
+    this.lastAdvanceKey = null;
+  }
+
   public async completeActiveUnit(unit: { unitType: string; unitId: string }): Promise<void> {
     const unitKey = buildDispatchKey(unit.unitType, unit.unitId);
     const activeUnitKey = this.status.activeUnit

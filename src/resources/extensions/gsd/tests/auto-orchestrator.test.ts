@@ -847,6 +847,27 @@ test("retryActiveUnit clears in-flight idempotency without marking the unit fina
   assert.ok(f.journalNames().includes("unit-retry"));
 });
 
+test("releaseActiveUnit clears a deferred dispatch claim without finalizing the unit", async (t) => {
+  const f = makeFixture();
+  t.after(() => f.cleanup());
+
+  const first = await f.orchestrator.advance();
+  assert.equal(first.kind, "advanced");
+  if (first.kind !== "advanced") throw new Error("expected first advance");
+
+  await f.orchestrator.releaseActiveUnit?.(first.unit);
+  const second = await f.orchestrator.advance();
+
+  assert.equal(f.orchestrator.getStatus().activeUnit?.unitId, first.unit.unitId);
+  assert.equal(second.kind, "advanced");
+  if (second.kind !== "advanced") throw new Error("expected deferred unit to re-advance");
+  assert.deepEqual(second.unit, first.unit);
+  assert.equal(f.journalNames().includes("unit-finalized"), false);
+  const wedge = getOpenWedge(normalizeRealPath(f.base));
+  assert.equal(wedge.ok, true);
+  assert.equal(wedge.ok ? wedge.wedge : null, null);
+});
+
 test("retryActiveUnit clears finalized same-unit guard for post-hook retries", async (t) => {
   const f = makeFixture();
   t.after(() => f.cleanup());
