@@ -256,9 +256,12 @@ export async function getActiveMilestoneId(basePath: string): Promise<string | n
       }
       return null;
     }
+    return null;
   }
 
-  // Filesystem fallback for unmigrated projects or empty DB
+  // Filesystem fallback for unmigrated projects when no workflow DB is open.
+  // An open DB with zero milestone rows is authoritative emptiness — do not
+  // parse markdown as a substitute (T007 live-path cutover).
   const milestoneIds = findMilestoneIds(basePath);
   for (const mid of milestoneIds) {
     const parkedFile = resolveMilestoneFile(basePath, mid, "PARKED");
