@@ -73,6 +73,7 @@ export interface AutoOrchestrationModule {
   releaseActiveUnit?(unit: UnitRef): Promise<void>;
   completeActiveUnit(unit: UnitRef): Promise<void>;
   retryActiveUnit(unit: UnitRef): Promise<void>;
+  abandonActiveUnit(unit: UnitRef, reason: string): Promise<void>;
   resume(): Promise<AutoAdvanceResult>;
   stop(reason: string): Promise<AutoAdvanceResult>;
   getStatus(): AutoStatus;

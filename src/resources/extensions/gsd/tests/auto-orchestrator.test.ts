@@ -868,6 +868,23 @@ test("releaseActiveUnit clears a deferred dispatch claim without finalizing the 
   assert.equal(wedge.ok ? wedge.wedge : null, null);
 });
 
+test("abandonActiveUnit clears an abnormal exit so the same unit can advance again", async (t) => {
+  const f = makeFixture();
+  t.after(() => f.cleanup());
+
+  const first = await f.orchestrator.advance();
+  assert.equal(first.kind, "advanced");
+  if (first.kind !== "advanced") throw new Error("expected first advance");
+
+  await f.orchestrator.abandonActiveUnit(first.unit, "unit execution crashed");
+  const second = await f.orchestrator.advance();
+
+  assert.equal(second.kind, "advanced");
+  if (second.kind !== "advanced") throw new Error("expected re-advance after abandonment");
+  assert.deepEqual(second.unit, first.unit);
+  assert.ok(f.journalNames().includes("unit-abandon"));
+});
+
 test("retryActiveUnit clears finalized same-unit guard for post-hook retries", async (t) => {
   const f = makeFixture();
   t.after(() => f.cleanup());

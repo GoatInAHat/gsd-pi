@@ -333,6 +333,9 @@ function createLoopTestOrchestration(
     async retryActiveUnit() {
       clearActiveUnit();
     },
+    async abandonActiveUnit() {
+      clearActiveUnit();
+    },
     async resume() {
       status.phase = "running";
       status.transitionCount += 1;
@@ -3233,6 +3236,7 @@ test("autoLoop dev path dispatches orchestration.advance results without legacy 
         finalizedUnits.push(`${unit.unitType}:${unit.unitId}`);
       },
       retryActiveUnit: async () => {},
+      abandonActiveUnit: async () => {},
       resume: async () => ({ kind: "stopped" as const, reason: "unused" }),
       stop: async () => ({ kind: "stopped" as const, reason: "unused" }),
       getStatus: () => ({ phase: "running" as const, transitionCount: 1 }),
@@ -3314,6 +3318,7 @@ test("autoLoop pauses once when orchestration reports reconciliation drift error
       },
       completeActiveUnit: async () => {},
       retryActiveUnit: async () => {},
+      abandonActiveUnit: async () => {},
       resume: async () => ({ kind: "stopped" as const, reason: "unused" }),
       stop: async () => ({ kind: "stopped" as const, reason: "unused" }),
       getStatus: () => ({ phase: "error" as const, transitionCount: 1 }),
@@ -3359,6 +3364,7 @@ test("autoLoop retries next iteration when orchestration reports paused", async 
       },
       completeActiveUnit: async () => {},
       retryActiveUnit: async () => {},
+      abandonActiveUnit: async () => {},
       resume: async () => ({ kind: "stopped" as const, reason: "unused" }),
       stop: async () => ({ kind: "stopped" as const, reason: "unused" }),
       getStatus: () => ({ phase: "running" as const, transitionCount: advanceCalls }),
@@ -3415,6 +3421,7 @@ test("#1674: unknown orchestration outcomes hash the kind the loop read", async 
       },
       completeActiveUnit: async () => {},
       retryActiveUnit: async () => {},
+      abandonActiveUnit: async () => {},
       resume: async () => ({ kind: "stopped" as const, reason: "unused" }),
       stop: async () => ({ kind: "stopped" as const, reason: "unused" }),
       getStatus: () => ({ phase: "running" as const, transitionCount: advanceCalls }),
@@ -3473,6 +3480,7 @@ test("autoLoop consumes pending orchestration dispatch without advancing twice",
       },
       completeActiveUnit: async () => {},
       retryActiveUnit: async () => {},
+      abandonActiveUnit: async () => {},
       resume: async () => ({ kind: "stopped" as const, reason: "unused" }),
       stop: async () => ({ kind: "stopped" as const, reason: "unused" }),
       getStatus: () => ({ phase: "running" as const, transitionCount: 1 }),
@@ -3535,6 +3543,7 @@ test("autoLoop stops orchestrator complete state through completion surface", as
       }),
       completeActiveUnit: async () => {},
       retryActiveUnit: async () => {},
+      abandonActiveUnit: async () => {},
       resume: async () => ({ kind: "stopped" as const, reason: "unused" }),
       stop: async () => ({ kind: "stopped" as const, reason: "unused" }),
       getStatus: () => ({ phase: "running" as const, transitionCount: 1 }),
@@ -3769,6 +3778,7 @@ test("autoLoop releases orchestration active unit before artifact retry", async 
         retryActiveUnit: async (unit: { unitType: string; unitId: string }) => {
           retryUnits.push(`${unit.unitType}:${unit.unitId}`);
         },
+        abandonActiveUnit: async () => {},
         resume: async () => ({ kind: "stopped" as const, reason: "unused" }),
         stop: async () => ({ kind: "stopped" as const, reason: "unused" }),
         getStatus: () => ({ phase: "running" as const, transitionCount: 1 }),
@@ -4618,6 +4628,7 @@ test("ADR-047: pre-dispatch hook skips feed the loop-boundary ledger", async (t)
     }),
     completeActiveUnit: async () => {},
     retryActiveUnit: async () => {},
+    abandonActiveUnit: async () => {},
     resume: async () => ({ kind: "resumed" as const }),
     stop: async (reason: string) => ({ kind: "stopped" as const, reason }),
     getStatus: () => ({ phase: "running" as const, transitionCount: 1 }),
@@ -4758,6 +4769,7 @@ test("#1672: the max-iteration preflight exit persists a block signature across 
       }),
       completeActiveUnit: async () => {},
       retryActiveUnit: async () => {},
+      abandonActiveUnit: async () => {},
       resume: async () => ({ kind: "stopped" as const, reason: "unused" }),
       stop: async (reason: string) => ({ kind: "stopped" as const, reason }),
       getStatus: () => ({ phase: "running" as const, transitionCount: 1 }),
@@ -4788,7 +4800,7 @@ test("#1672: the max-iteration preflight exit persists a block signature across 
   assert.doesNotMatch(wedge!.sanctionedExit, /Resolve the reported condition/);
 });
 
-test("#1672: crash closeout makes following active-unit skips ledger-visible", async (t) => {
+test("abnormal unit exit abandons the active orchestration marker before the next advance", async (t) => {
   _resetPendingResolve();
 
   const ctx = makeMockCtx();
@@ -4797,6 +4809,8 @@ test("#1672: crash closeout makes following active-unit skips ledger-visible", a
   const pi = makeMockPi();
   let advanceCalls = 0;
   let executionStarted = false;
+  let activeMarker = false;
+  const abandoned: Array<{ unitType: string; unitId: string; reason: string }> = [];
   const currentUnitsAtAdvance: Array<string | null> = [];
   const s = makeLoopSession({
     currentMilestoneId: "M001",
@@ -4806,16 +4820,24 @@ test("#1672: crash closeout makes following active-unit skips ledger-visible", a
         advanceCalls++;
         currentUnitsAtAdvance.push(s.currentUnit?.id ?? null);
         if (advanceCalls === 1) {
+          activeMarker = true;
           return {
             kind: "advanced" as const,
             unit: { unitType: "plan-slice", unitId: "M001/S01" },
             stateSnapshot: await makeMockDeps().deriveState(s.basePath),
           };
         }
-        return { kind: "skipped" as const, reason: "idempotent advance: unit already active" };
+        if (activeMarker) {
+          return { kind: "skipped" as const, reason: "idempotent advance: unit already active" };
+        }
+        return { kind: "stopped" as const, reason: "no active unit" };
       },
       completeActiveUnit: async () => {},
       retryActiveUnit: async () => {},
+      abandonActiveUnit: async (unit, reason) => {
+        activeMarker = false;
+        abandoned.push({ ...unit, reason });
+      },
       resume: async () => ({ kind: "stopped" as const, reason: "unused" }),
       stop: async (reason: string) => ({ kind: "stopped" as const, reason }),
       getStatus: () => ({ phase: "running" as const, transitionCount: 1 }),
@@ -4840,20 +4862,17 @@ test("#1672: crash closeout makes following active-unit skips ledger-visible", a
   assert.equal(executionStarted, true);
   assert.deepEqual(
     currentUnitsAtAdvance,
-    [null, null, null],
-    "crash closeout must clear the execution marker before both idempotent skips",
+    [null, null],
+    "crash closeout and orchestration abandonment must both finish before the next advance",
   );
-  assert.equal(advanceCalls, 3, "the second post-crash skip must trip the backstop, not spin");
-  const stopEntry = deps.callLog.find(entry => entry.startsWith("stopAuto:"));
-  assert.match(stopEntry ?? "", /^stopAuto:Blocked: /, "a tripped stale skip stops through the blocked path");
+  assert.equal(advanceCalls, 2);
+  assert.deepEqual(abandoned.map(({ unitType, unitId }) => ({ unitType, unitId })), [
+    { unitType: "plan-slice", unitId: "M001/S01" },
+  ]);
+  assert.match(abandoned[0]?.reason ?? "", /unit execution crashed/);
   const wedgeResult = getOpenWedge(realpathSync(s.basePath));
   assert.equal(wedgeResult.ok, true);
-  const wedge = wedgeResult.ok ? wedgeResult.wedge : null;
-  assert.ok(wedge, "the stale active-unit skip must persist a wedge");
-  assert.equal(wedge!.guardId, "orchestration-stale-active-unit");
-  assert.match(wedge!.sanctionedExit, /`\/gsd auto`/);
-  assert.match(wedge!.sanctionedExit, /gsd_task_recovery_resume/);
-  assert.doesNotMatch(wedge!.sanctionedExit, /Resolve the reported condition/);
+  assert.equal(wedgeResult.ok ? wedgeResult.wedge : null, null);
 });
 
 test("#1721: idle active-unit skip releases the stale claim and re-advances immediately", async (t) => {
@@ -4893,6 +4912,9 @@ test("#1721: idle active-unit skip releases the stale claim and re-advances imme
       },
       completeActiveUnit: async () => {},
       retryActiveUnit: async () => {},
+      abandonActiveUnit: async () => {
+        claimActive = false;
+      },
       resume: async () => ({ kind: "stopped" as const, reason: "unused" }),
       stop: async (reason: string) => ({ kind: "stopped" as const, reason }),
       getStatus: () => ({
@@ -4927,7 +4949,7 @@ test("#1721: idle active-unit skip releases the stale claim and re-advances imme
   );
 });
 
-test("#1672: finalize exceptions make following active-unit skips ledger-visible", async (t) => {
+test("finalize exceptions abandon the active orchestration marker before the next advance", async (t) => {
   _resetPendingResolve();
 
   const ctx = makeMockCtx();
@@ -4935,6 +4957,8 @@ test("#1672: finalize exceptions make following active-unit skips ledger-visible
   ctx.ui.notify = () => {};
   const pi = makeMockPi();
   let advanceCalls = 0;
+  let activeMarker = false;
+  const abandoned: Array<{ unitType: string; unitId: string; reason: string }> = [];
   let inFlightDuringFinalize = false;
   const inFlightAtAdvance: boolean[] = [];
   const s = makeLoopSession({
@@ -4945,16 +4969,24 @@ test("#1672: finalize exceptions make following active-unit skips ledger-visible
         advanceCalls++;
         inFlightAtAdvance.push(s.unitExecutionInFlight);
         if (advanceCalls === 1) {
+          activeMarker = true;
           return {
             kind: "advanced" as const,
             unit: { unitType: "plan-slice", unitId: "M001/S01" },
             stateSnapshot: await makeMockDeps().deriveState(s.basePath),
           };
         }
-        return { kind: "skipped" as const, reason: "idempotent advance: unit already active" };
+        if (activeMarker) {
+          return { kind: "skipped" as const, reason: "idempotent advance: unit already active" };
+        }
+        return { kind: "stopped" as const, reason: "no active unit" };
       },
       completeActiveUnit: async () => {},
       retryActiveUnit: async () => {},
+      abandonActiveUnit: async (unit, reason) => {
+        activeMarker = false;
+        abandoned.push({ ...unit, reason });
+      },
       resume: async () => ({ kind: "stopped" as const, reason: "unused" }),
       stop: async (reason: string) => ({ kind: "stopped" as const, reason }),
       getStatus: () => ({ phase: "running" as const, transitionCount: 1 }),
@@ -4980,15 +5012,16 @@ test("#1672: finalize exceptions make following active-unit skips ledger-visible
   await autoLoop(ctx, pi, s, deps);
 
   assert.equal(inFlightDuringFinalize, true);
-  assert.deepEqual(inFlightAtAdvance, [false, false, false]);
+  assert.deepEqual(inFlightAtAdvance, [false, false]);
   assert.equal(s.currentUnit?.id, "M001/S01", "the test must retain the stale marker from finalize failure");
-  assert.equal(advanceCalls, 3, "the second stale skip must trip despite the stale currentUnit marker");
+  assert.equal(advanceCalls, 2);
+  assert.deepEqual(abandoned.map(({ unitType, unitId }) => ({ unitType, unitId })), [
+    { unitType: "plan-slice", unitId: "M001/S01" },
+  ]);
+  assert.match(abandoned[0]?.reason ?? "", /post-unit verification crashed/);
   const wedgeResult = getOpenWedge(realpathSync(s.basePath));
   assert.equal(wedgeResult.ok, true);
-  const wedge = wedgeResult.ok ? wedgeResult.wedge : null;
-  assert.ok(wedge);
-  assert.equal(wedge!.guardId, "orchestration-stale-active-unit");
-  assert.equal(wedge!.occurrenceCount, 2);
+  assert.equal(wedgeResult.ok ? wedgeResult.wedge : null, null);
 });
 
 test("autoLoop does not pause on repeated idempotent advance skips while a unit is in flight", async () => {
@@ -5014,6 +5047,7 @@ test("autoLoop does not pause on repeated idempotent advance skips while a unit 
       },
       completeActiveUnit: async () => {},
       retryActiveUnit: async () => {},
+      abandonActiveUnit: async () => {},
       resume: async () => ({ kind: "stopped" as const, reason: "unused" }),
       stop: async (reason: string) => ({ kind: "stopped" as const, reason }),
       getStatus: () => ({ phase: "running" as const, transitionCount: 1 }),
@@ -5050,6 +5084,7 @@ test("ADR-047 #1655: identical transient pauses trip at the loop outcome boundar
       advance: async () => ({ kind: "paused" as const, reason: "transient: database is locked" }),
       completeActiveUnit: async () => {},
       retryActiveUnit: async () => {},
+      abandonActiveUnit: async () => {},
       resume: async () => ({ kind: "stopped" as const, reason: "unused" }),
       stop: async (reason: string) => ({ kind: "stopped" as const, reason }),
       getStatus: () => ({ phase: "running" as const, transitionCount: 1 }),
