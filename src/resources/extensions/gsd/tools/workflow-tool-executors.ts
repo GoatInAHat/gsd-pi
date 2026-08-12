@@ -1892,14 +1892,11 @@ export async function executePlanMilestone(
         const holder = getAutoWorker(heldLease.worker_id);
         // Let one-shot and resumed-auto claim paths recover stale
         // same-process worker rows.
-        const projectRoot = normalizeRealPath(basePath);
         const activeAutoWorkerId = isAutoActive() ? autoSession.workerId : null;
-        const activeAutoWorker = activeAutoWorkerId ? getAutoWorker(activeAutoWorkerId) : null;
         const isOurAutoLease = !!activeAutoWorkerId && heldLease.worker_id === activeAutoWorkerId;
         const holderIsReentrantPeer = !!holder
           && holder.host === hostname()
-          && holder.pid === process.pid
-          && holder.project_root_realpath === (activeAutoWorker?.project_root_realpath ?? projectRoot);
+          && holder.pid === process.pid;
         if (holder?.status === "active" && !isOurAutoLease) {
           if (!holderIsReentrantPeer) {
             return milestoneLeaseConflictResult(params.milestoneId, heldLease.worker_id, heldLease.expires_at);

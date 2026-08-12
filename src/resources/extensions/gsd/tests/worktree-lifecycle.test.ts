@@ -16,7 +16,7 @@ import {
 } from "../worktree-lifecycle.js";
 import { WorktreeStateProjection } from "../worktree-state-projection.js";
 import { AutoSession } from "../auto/session.js";
-import { openDatabase, closeDatabase, insertMilestone } from "../gsd-db.js";
+import { openDatabase, closeDatabase, insertMilestone, _getAdapter } from "../gsd-db.js";
 import { registerAutoWorker } from "../db/auto-workers.js";
 import { claimMilestoneLease } from "../db/milestone-leases.js";
 
@@ -472,6 +472,8 @@ test("enterMilestone returns ok:false reason:lease-conflict when another worker 
   insertMilestone({ id: "M001", title: "Test", status: "active" });
   const holder = registerAutoWorker({ projectRootRealpath: base });
   const contender = registerAutoWorker({ projectRootRealpath: join(base, "other-project") });
+  _getAdapter()!.prepare("UPDATE workers SET pid = :pid WHERE worker_id = :worker_id")
+    .run({ ":pid": process.pid + 1, ":worker_id": contender });
   const claim = claimMilestoneLease(holder, "M001");
   assert.equal(claim.ok, true);
 
