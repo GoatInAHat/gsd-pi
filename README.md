@@ -28,16 +28,16 @@ See [CHANGELOG.md](./CHANGELOG.md) for release-by-release fixes and [Legacy Rele
 ## Latest Release Highlights
 
 <!-- release-highlights:start -->
-Latest release: **v1.14.0**
+Latest release: **v1.15.0**
 
-- **gsd:** Add state contract v1 projection (#1665).
-- **pi-ai:** Refresh MiniMax-M3 video input and adaptive thinking (#1573).
-- **gsd:** Hash actual guard inputs in block signatures (#1676).
-- **gsd:** Prevent persistent auto-mode wedges (#1673).
-- **issue:** [Bug]: Symlinked .gsd project store breaks the closeout consistency gate — milestone merge fails with 'fatal: not a git repository' (#1670).
-- **issue:** [Bug]: Auto-mode pause during unit setup leaks the milestone lease — same-process resume deadlocks against its own stale lease (#1669).
-- **issue:** Auto-mode silent re-dispatch loop: refreshRecoveryDbForArtifact catch-all for non-whitelisted unit types is a no-op reported as success (#1663).
-- **issue:** Bug: parent-workspace host verification fans out to all child repos when task targets orchestration root (#1656).
+- **model-router:** Add claude-sonnet-5 to model capability registries.
+- **tools:** Add gsd_requirement_list/get and gsd_decision_list/get (#1608).
+- **pi-ai:** Add missing kimi-coding subscription models to catalog.
+- **pi-ai:** Add Kimi Code (subscription) OAuth provider.
+- **ci:** Retrigger PR checks.
+- **gsd:** Deepen projection delivery ownership.
+- **gsd:** Own slice companion gate lifecycle.
+- **gsd:** Register required schema features once.
 
 <!-- release-highlights:end -->
 

@@ -8,6 +8,57 @@ This changelog starts from the `open-gsd/gsd-pi` ownership baseline. Earlier pro
 
 ## [Unreleased]
 
+## [1.15.0] - 2026-08-12
+
+### Added
+- **model-router**: add claude-sonnet-5 to model capability registries
+- **tools**: add gsd_requirement_list/get and gsd_decision_list/get (#1608)
+- **pi-ai**: add missing kimi-coding subscription models to catalog
+- **pi-ai**: add Kimi Code (subscription) OAuth provider
+
+### Fixed
+- **mcp-server**: register canonical read tools in contract order
+- **issue**: [Bug]: unable to build with pnpm
+- **gsd**: remove duplicate sonnet-5 keys after main rebase
+- **gsd**: dedupe sonnet-5 model-router keys
+- **gsd**: add copilot sonnet startup fallback when catalog lags
+- **contracts**: preserve workflow tool registration order
+- **model-router**: remove duplicate Sonnet registry entries
+- **pi-coding-agent**: type OAuth refresh lock result
+- **gsd**: resolve copilot sonnet-5 model alias warnings
+- **gsd**: keep projection bytes readable across mutation boundaries
+- **bug-3**: Stale worktree cleanup exposes raw EACCES errors EACCES cleanup failures now provide ownership and permission remediation.
+- **bug-2**: Write gate falsely reports that auto-mode is not running live and empty-path blocks now report auto-mode’s actual runtime state.
+- **bug-1**: Write gate ignores degraded branch-mode isolation write and bash gates now use the session’s effective isolation mode.
+- **gsd**: preserve projection mutation ordering
+- **gsd**: restore plan drift diagnostic
+- **contracts**: add gsd_decision_list/get and gsd_requirement_list/get to WORKFLOW_TOOL_CONTRACTS
+- **types**: add includeSuperseded to DecisionQueryOpts interface
+- resolve all 5 Codex adversarial review findings in PR #1613
+- **gsd**: scope milestone planning to project state
+- **issue**: Sticky isolationDegraded flag strands branch-mode milestone: hard-blocks /gsd auto after one failure, no recovery until process restart (#1692)
+- **gsd**: reopen workflow DB for task summary lineage
+- **gsd**: keep main-branch detection loud on a non-repo path
+- **gsd**: surface projection artifact failures
+- **gsd**: classify Windows projection lock contention
+- **gsd**: keep discussion writes layout-aware
+- **gsd**: recover branch isolation across auto runs
+- retire unused legacy Cloud v1 products (#1695)
+- **gsd**: keep branch entry idempotent on an unborn milestone branch
+- **issue**: Branch isolation fails on a zero-commit repo: git branch -f milestone/<MID> <unbornBranch> → 'not a valid object name'
+- **issue**: Windows: native projection root identity lock fails on 2nd+ acquisition, blocking plan-task/plan-slice renders
+- **daemon**: retire legacy Cloud v1 runtime (#1687)
+- **web**: retire hosted cloud mode (#1683)
+- **gsd**: classify staged task summaries consistently
+- **gsd**: repair liveness schema on v1.14 upgrade
+
+### Changed
+- **ci**: retrigger PR checks
+- **gsd**: deepen projection delivery ownership
+- **gsd**: own slice companion gate lifecycle
+- **gsd**: register required schema features once
+- **gsd**: centralize task summary projection writes
+
 ### Removed
 - **cloud**: remove the unused legacy Cloud v1 agent, MCP gateway, and macOS monitor; this retired code is unrelated to the current `gsd-cloud` project
 
