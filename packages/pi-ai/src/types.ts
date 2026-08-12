@@ -85,11 +85,18 @@ export interface ProviderResponse {
 	headers: Record<string, string>;
 }
 
+export type ApiKeyProvenance = {
+	type: "oauth";
+	provider: string;
+};
+
 export interface StreamOptions {
 	temperature?: number;
 	maxTokens?: number;
 	signal?: AbortSignal;
 	apiKey?: string;
+	/** Pass through the provenance returned by getOAuthApiKey() when using OAuth credentials. */
+	apiKeyProvenance?: ApiKeyProvenance;
 	/**
 	 * Preferred transport for providers that support multiple transports.
 	 * Providers that do not support this option ignore it.
