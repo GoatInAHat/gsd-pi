@@ -12,7 +12,7 @@ import { ALWAYS_PRESERVED_SHIM_TOOL_NAMES } from "@gsd/pi-ai";
 import type { GSDEcosystemBeforeAgentStartHandler } from "../ecosystem/gsd-extension-api.js";
 import { updateSnapshot } from "../ecosystem/gsd-extension-api.js";
 
-import { buildMilestoneFileName, canonicalPhaseDirName, clearPathCache, milestonesDir, legacyMilestonesDir, resolveMilestonePath, resolveSliceFile, resolveSlicePath } from "../paths.js";
+import { buildMilestoneFileName, canonicalPhaseDirName, clearPathCache, milestonesDir, legacyMilestonesDir, relMilestoneFile, resolveMilestonePath, resolveSliceFile, resolveSlicePath } from "../paths.js";
 import { applyAskUserQuestionsGateResult, clearDiscussionFlowState, currentWriteGateSnapshot, formatPendingAskUserQuestionsGateMessage, formatTimedOutAskUserQuestionsGateMessage, hostWriteGateAdapter, isApprovalGateVerifiedInSnapshot, isDepthConfirmationAnswer, isMilestoneDepthVerifiedInSnapshot, isQueuePhaseActive, resetWriteGateState, shouldBlockContextWrite, shouldBlockPlanningUnit, shouldBlockQueueExecution, shouldBlockWorktreeBash, shouldBlockWorktreeWrite, isGateQuestionId, getPendingGate, shouldBlockPendingGate, shouldBlockPendingGateBash, extractDepthVerificationMilestoneId, type WriteGateSnapshot } from "./write-gate.js";
 import { canonicalToolName } from "../engine-hook-contract.js";
 import { resolveManifest } from "../unit-context-manifest.js";
@@ -953,10 +953,25 @@ async function saveDiscussionQuestionRound(
       "Use it so `/gsd` can resume the in-flight milestone discussion.",
       "",
     ].join("\n");
-  await saveFile(
-    draftPath,
-    `${draftHeader.trimEnd()}\n\n## Captured Question Round — ${timestamp}\n\n${exchange}`,
-  );
+  const draftContent = `${draftHeader.trimEnd()}\n\n## Captured Question Round — ${timestamp}\n\n${exchange}`;
+  await saveFile(draftPath, draftContent);
+
+  try {
+    const { ensureDbOpen } = await import("./dynamic-tools.js");
+    if (await ensureDbOpen(basePath)) {
+      const { insertArtifact } = await import("../gsd-db.js");
+      insertArtifact({
+        path: relMilestoneFile(basePath, milestoneId, "CONTEXT-DRAFT").replace(/^\.gsd\//, ""),
+        artifact_type: "CONTEXT-DRAFT",
+        milestone_id: milestoneId,
+        slice_id: null,
+        task_id: null,
+        full_content: draftContent,
+      });
+    }
+  } catch (err) {
+    safetyLogWarning("guided", `failed to persist CONTEXT-DRAFT artifact for ${milestoneId}: ${(err as Error).message}`);
+  }
 }
 
 function withDepthGateDisplayReason<T extends { block: boolean; reason?: string }>(
