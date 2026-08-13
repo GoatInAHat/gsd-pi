@@ -1128,6 +1128,8 @@ test("executePlanMilestone refuses a same-milestone lease conflict", async () =>
     openTestDb(base);
     seedMilestone("M001", "Existing holder");
     const holder = registerAutoWorker({ projectRootRealpath: join(base, "other-project") });
+    _getAdapter()!.prepare("UPDATE workers SET pid = :pid WHERE worker_id = :worker_id")
+      .run({ ":pid": process.pid + 1, ":worker_id": holder });
     const lease = claimMilestoneLease(holder, "M001");
     assert.equal(lease.ok, true);
 
@@ -1208,13 +1210,15 @@ test("executePlanMilestone does not delete a peer worker's milestone row on leas
   try {
     openTestDb(base);
 
-    // Simulate a peer worker (different project_root) that has already
+    // Simulate a peer process that has already
     // created the milestone row and taken its lease. The one-shot executor
     // must observe the active lease and refuse — without removing the peer's
     // milestone row or lease. The pre-rollback bug was that
     // INSERT OR IGNORE's silent no-op was treated as proof of authorship and
     // the cleanup path then deleted the peer's row.
     const peer = registerAutoWorker({ projectRootRealpath: join(base, "peer-project") });
+    _getAdapter()!.prepare("UPDATE workers SET pid = :pid WHERE worker_id = :worker_id")
+      .run({ ":pid": process.pid + 1, ":worker_id": peer });
     seedMilestone("M050", "Peer-owned milestone");
     const peerLease = claimMilestoneLease(peer, "M050");
     assert.equal(peerLease.ok, true);
@@ -1249,6 +1253,8 @@ test("executePlanMilestone refuses when a foreign active worker holds the lease 
 
     // In-process auto must still reject a lease held by another worker.
     const foreign = registerAutoWorker({ projectRootRealpath: join(base, "foreign-project") });
+    _getAdapter()!.prepare("UPDATE workers SET pid = :pid WHERE worker_id = :worker_id")
+      .run({ ":pid": process.pid + 1, ":worker_id": foreign });
     const foreignLease = claimMilestoneLease(foreign, "M060");
     assert.equal(foreignLease.ok, true);
     const foreignToken = foreignLease.ok ? foreignLease.token : -1;
@@ -1320,7 +1326,7 @@ test("executePlanMilestone reclaims a same-process holder after active auto resu
     const heldToken = heldLease.ok ? heldLease.token : -1;
 
     autoSession.active = true;
-    autoSession.workerId = registerAutoWorker({ projectRootRealpath: normalizeRealPath(base) });
+    autoSession.workerId = registerAutoWorker({ projectRootRealpath: normalizeRealPath(worktree) });
 
     const result = await inProjectDir(worktree, () => executePlanMilestone(validMilestonePlan("M080"), worktree));
 
