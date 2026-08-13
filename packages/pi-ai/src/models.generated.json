@@ -231,6 +231,29 @@
       "contextWindow": 1000000,
       "maxTokens": 128000
     },
+    "anthropic.claude-opus-5": {
+      "id": "anthropic.claude-opus-5",
+      "name": "Claude Opus 5",
+      "api": "bedrock-converse-stream",
+      "provider": "amazon-bedrock",
+      "baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+      "reasoning": true,
+      "thinkingLevelMap": {
+        "xhigh": "xhigh"
+      },
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 5,
+        "output": 25,
+        "cacheRead": 0.5,
+        "cacheWrite": 6.25
+      },
+      "contextWindow": 1000000,
+      "maxTokens": 128000
+    },
     "anthropic.claude-sonnet-4-5-20250929-v1:0": {
       "id": "anthropic.claude-sonnet-4-5-20250929-v1:0",
       "name": "Claude Sonnet 4.5",
@@ -741,6 +764,29 @@
     "global.anthropic.claude-opus-4-8": {
       "id": "global.anthropic.claude-opus-4-8",
       "name": "Claude Opus 4.8 (Global)",
+      "api": "bedrock-converse-stream",
+      "provider": "amazon-bedrock",
+      "baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+      "reasoning": true,
+      "thinkingLevelMap": {
+        "xhigh": "xhigh"
+      },
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 5,
+        "output": 25,
+        "cacheRead": 0.5,
+        "cacheWrite": 6.25
+      },
+      "contextWindow": 1000000,
+      "maxTokens": 128000
+    },
+    "global.anthropic.claude-opus-5": {
+      "id": "global.anthropic.claude-opus-5",
+      "name": "Claude Opus 5 (Global)",
       "api": "bedrock-converse-stream",
       "provider": "amazon-bedrock",
       "baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -1841,6 +1887,29 @@
       "contextWindow": 1000000,
       "maxTokens": 128000
     },
+    "us.anthropic.claude-opus-5": {
+      "id": "us.anthropic.claude-opus-5",
+      "name": "Claude Opus 5 (US)",
+      "api": "bedrock-converse-stream",
+      "provider": "amazon-bedrock",
+      "baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+      "reasoning": true,
+      "thinkingLevelMap": {
+        "xhigh": "xhigh"
+      },
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 5,
+        "output": 25,
+        "cacheRead": 0.5,
+        "cacheWrite": 6.25
+      },
+      "contextWindow": 1000000,
+      "maxTokens": 128000
+    },
     "us.anthropic.claude-sonnet-4-5-20250929-v1:0": {
       "id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
       "name": "Claude Sonnet 4.5 (US)",
@@ -2484,6 +2553,32 @@
       "contextWindow": 1000000,
       "maxTokens": 128000
     },
+    "claude-opus-5": {
+      "id": "claude-opus-5",
+      "name": "Claude Opus 5",
+      "api": "anthropic-messages",
+      "provider": "anthropic",
+      "baseUrl": "https://api.anthropic.com",
+      "compat": {
+        "forceAdaptiveThinking": true
+      },
+      "reasoning": true,
+      "thinkingLevelMap": {
+        "xhigh": "xhigh"
+      },
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 5,
+        "output": 25,
+        "cacheRead": 0.5,
+        "cacheWrite": 6.25
+      },
+      "contextWindow": 1000000,
+      "maxTokens": 128000
+    },
     "claude-sonnet-4-0": {
       "id": "claude-sonnet-4-0",
       "name": "Claude Sonnet 4 (latest)",
@@ -2776,6 +2871,32 @@
     "claude-opus-4-8": {
       "id": "claude-opus-4-8",
       "name": "Claude Opus 4.8 (Vertex)",
+      "api": "anthropic-vertex",
+      "provider": "anthropic-vertex",
+      "baseUrl": "https://{location}-aiplatform.googleapis.com",
+      "compat": {
+        "forceAdaptiveThinking": true
+      },
+      "reasoning": true,
+      "thinkingLevelMap": {
+        "xhigh": "xhigh"
+      },
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 5,
+        "output": 25,
+        "cacheRead": 0.5,
+        "cacheWrite": 6.25
+      },
+      "contextWindow": 1000000,
+      "maxTokens": 128000
+    },
+    "claude-opus-5": {
+      "id": "claude-opus-5",
+      "name": "Claude Opus 5 (Vertex)",
       "api": "anthropic-vertex",
       "provider": "anthropic-vertex",
       "baseUrl": "https://{location}-aiplatform.googleapis.com",
