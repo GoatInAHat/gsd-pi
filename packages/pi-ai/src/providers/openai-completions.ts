@@ -265,14 +265,14 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 						type: "text_end",
 						contentIndex,
 						content: block.text,
-						partial: output,
+						
 					});
 				} else if (block.type === "thinking") {
 					stream.push({
 						type: "thinking_end",
 						contentIndex,
 						content: block.thinking,
-						partial: output,
+						
 					});
 				} else if (block.type === "toolCall") {
 					block.arguments = parseStreamingJson(block.partialArgs);
@@ -284,7 +284,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 						type: "toolcall_end",
 						contentIndex,
 						toolCall: block,
-						partial: output,
+						
 					});
 				}
 			};
@@ -292,7 +292,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 				if (!textBlock) {
 					textBlock = { type: "text", text: "" };
 					blocks.push(textBlock);
-					stream.push({ type: "text_start", contentIndex: getContentIndex(textBlock), partial: output });
+					stream.push({ type: "text_start", contentIndex: getContentIndex(textBlock) });
 				}
 				return textBlock;
 			};
@@ -304,7 +304,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 						thinkingSignature,
 					};
 					blocks.push(thinkingBlock);
-					stream.push({ type: "thinking_start", contentIndex: getContentIndex(thinkingBlock), partial: output });
+					stream.push({ type: "thinking_start", contentIndex: getContentIndex(thinkingBlock) });
 				}
 				return thinkingBlock;
 			};
@@ -333,7 +333,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 					stream.push({
 						type: "toolcall_start",
 						contentIndex: getContentIndex(block),
-						partial: output,
+						
 					});
 				}
 				if (streamIndex !== undefined && block.streamIndex === undefined) {
@@ -370,13 +370,13 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 				stream.push({
 					type: "toolcall_start",
 					contentIndex,
-					partial: output,
+					
 				});
 				stream.push({
 					type: "toolcall_delta",
 					contentIndex,
 					delta: partialArgs,
-					partial: output,
+					
 				});
 			};
 
@@ -423,7 +423,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 							type: "text_delta",
 							contentIndex: getContentIndex(block),
 							delta: choice.delta.content,
-							partial: output,
+							
 						});
 					}
 
@@ -455,7 +455,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 								type: "thinking_delta",
 								contentIndex: getContentIndex(block),
 								delta,
-								partial: output,
+								
 							});
 						}
 					}
@@ -481,7 +481,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 								type: "toolcall_delta",
 								contentIndex: getContentIndex(block),
 								delta,
-								partial: output,
+								
 							});
 						}
 					}

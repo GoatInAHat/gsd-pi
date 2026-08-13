@@ -338,14 +338,14 @@ function buildAssistantMessage(
 function emitDone(stream: AssistantMessageEventStream, message: AssistantMessage, text: string): void {
 	stream.push({ type: "start", partial: { ...message, content: [] } });
 	if (text) {
-		stream.push({ type: "text_start", contentIndex: 0, partial: message });
-		stream.push({ type: "text_delta", contentIndex: 0, delta: text, partial: message });
-		stream.push({ type: "text_end", contentIndex: 0, content: text, partial: message });
+		stream.push({ type: "text_start", contentIndex: 0 });
+		stream.push({ type: "text_delta", contentIndex: 0, delta: text });
+		stream.push({ type: "text_end", contentIndex: 0, content: text });
 	}
 	message.content.forEach((block, index) => {
 		if (block.type !== "toolCall") return;
-		stream.push({ type: "toolcall_start", contentIndex: index, partial: message });
-		stream.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: message });
+		stream.push({ type: "toolcall_start", contentIndex: index });
+		stream.push({ type: "toolcall_end", contentIndex: index, toolCall: block });
 	});
 	stream.push({ type: "done", reason: "stop", message });
 	stream.end(message);
@@ -395,10 +395,10 @@ export function streamViaCursorAgent(
 					ensureStart();
 					if (!textStarted) {
 						textStarted = true;
-						stream.push({ type: "text_start", contentIndex: 0, partial: partialMessage() });
+						stream.push({ type: "text_start", contentIndex: 0 });
 					}
 					text += parsed.text;
-					stream.push({ type: "text_delta", contentIndex: 0, delta: parsed.text, partial: partialMessage() });
+					stream.push({ type: "text_delta", contentIndex: 0, delta: parsed.text });
 					return;
 				}
 				if (parsed.type === "usage") {
@@ -411,8 +411,8 @@ export function streamViaCursorAgent(
 					content.push(parsed.toolCall);
 					const index = text ? content.length : content.length - 1;
 					const partial = partialMessage();
-					stream.push({ type: "toolcall_start", contentIndex: index, partial });
-					stream.push({ type: "toolcall_end", contentIndex: index, toolCall: parsed.toolCall, partial });
+					stream.push({ type: "toolcall_start", contentIndex: index });
+					stream.push({ type: "toolcall_end", contentIndex: index, toolCall: parsed.toolCall });
 					return;
 				}
 				if (parsed.type === "tool_result") {
@@ -439,7 +439,7 @@ export function streamViaCursorAgent(
 				emitDone(stream, finalMessage, text);
 				return;
 			}
-			if (textStarted) stream.push({ type: "text_end", contentIndex: 0, content: text, partial: finalMessage });
+			if (textStarted) stream.push({ type: "text_end", contentIndex: 0, content: text });
 			stream.push({ type: "done", reason: "stop", message: finalMessage });
 			stream.end(finalMessage);
 		} catch (error) {

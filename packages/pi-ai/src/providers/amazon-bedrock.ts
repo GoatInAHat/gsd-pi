@@ -360,7 +360,7 @@ function handleContentBlockStart(
 			index,
 		};
 		output.content.push(block);
-		stream.push({ type: "toolcall_start", contentIndex: blocks.length - 1, partial: output });
+		stream.push({ type: "toolcall_start", contentIndex: blocks.length - 1 });
 	}
 }
 
@@ -382,16 +382,16 @@ function handleContentBlockDelta(
 			output.content.push(newBlock);
 			index = blocks.length - 1;
 			block = blocks[index];
-			stream.push({ type: "text_start", contentIndex: index, partial: output });
+			stream.push({ type: "text_start", contentIndex: index });
 		}
 		if (block.type === "text") {
 			block.text += delta.text;
-			stream.push({ type: "text_delta", contentIndex: index, delta: delta.text, partial: output });
+			stream.push({ type: "text_delta", contentIndex: index, delta: delta.text });
 		}
 	} else if (delta?.toolUse && block?.type === "toolCall") {
 		block.partialJson = (block.partialJson || "") + (delta.toolUse.input || "");
 		block.arguments = parseStreamingJson(block.partialJson);
-		stream.push({ type: "toolcall_delta", contentIndex: index, delta: delta.toolUse.input || "", partial: output });
+		stream.push({ type: "toolcall_delta", contentIndex: index, delta: delta.toolUse.input || "" });
 	} else if (delta?.reasoningContent) {
 		let thinkingBlock = block;
 		let thinkingIndex = index;
@@ -401,7 +401,7 @@ function handleContentBlockDelta(
 			output.content.push(newBlock);
 			thinkingIndex = blocks.length - 1;
 			thinkingBlock = blocks[thinkingIndex];
-			stream.push({ type: "thinking_start", contentIndex: thinkingIndex, partial: output });
+			stream.push({ type: "thinking_start", contentIndex: thinkingIndex });
 		}
 
 		if (thinkingBlock?.type === "thinking") {
@@ -411,7 +411,7 @@ function handleContentBlockDelta(
 					type: "thinking_delta",
 					contentIndex: thinkingIndex,
 					delta: delta.reasoningContent.text,
-					partial: output,
+					
 				});
 			}
 			if (delta.reasoningContent.signature) {
@@ -450,17 +450,17 @@ function handleContentBlockStop(
 
 	switch (block.type) {
 		case "text":
-			stream.push({ type: "text_end", contentIndex: index, content: block.text, partial: output });
+			stream.push({ type: "text_end", contentIndex: index, content: block.text });
 			break;
 		case "thinking":
-			stream.push({ type: "thinking_end", contentIndex: index, content: block.thinking, partial: output });
+			stream.push({ type: "thinking_end", contentIndex: index, content: block.thinking });
 			break;
 		case "toolCall":
 			block.arguments = parseStreamingJson(block.partialJson);
 			// Finalize in-place and strip the scratch buffer so replay only
 			// carries parsed arguments.
 			delete (block as Block).partialJson;
-			stream.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: output });
+			stream.push({ type: "toolcall_end", contentIndex: index, toolCall: block });
 			break;
 	}
 }

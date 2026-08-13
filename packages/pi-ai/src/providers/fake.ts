@@ -307,7 +307,7 @@ export function createFakeProvider(opts: { transcriptPath: string }): ApiProvide
 				stream.push({ type: "start", partial: { ...message, content: [] } });
 
 				if (emit.kind === "text") {
-					stream.push({ type: "text_start", contentIndex: 0, partial: message });
+					stream.push({ type: "text_start", contentIndex: 0 });
 					stream.push({
 						type: "text_delta",
 						contentIndex: 0,
@@ -323,7 +323,7 @@ export function createFakeProvider(opts: { transcriptPath: string }): ApiProvide
 				} else if (emit.kind === "tool_use") {
 					for (const [i, c] of message.content.entries()) {
 						if (c.type !== "toolCall") continue;
-						stream.push({ type: "toolcall_start", contentIndex: i, partial: message });
+						stream.push({ type: "toolcall_start", contentIndex: i });
 						stream.push({
 							type: "toolcall_end",
 							contentIndex: i,

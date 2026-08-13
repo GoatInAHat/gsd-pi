@@ -559,7 +559,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 							index: event.index,
 						};
 						output.content.push(block);
-						stream.push({ type: "text_start", contentIndex: output.content.length - 1, partial: output });
+						stream.push({ type: "text_start", contentIndex: output.content.length - 1 });
 					} else if (event.content_block.type === "thinking") {
 						const block: Block = {
 							type: "thinking",
@@ -568,7 +568,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 							index: event.index,
 						};
 						output.content.push(block);
-						stream.push({ type: "thinking_start", contentIndex: output.content.length - 1, partial: output });
+						stream.push({ type: "thinking_start", contentIndex: output.content.length - 1 });
 					} else if (event.content_block.type === "redacted_thinking") {
 						const block: Block = {
 							type: "thinking",
@@ -578,7 +578,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 							index: event.index,
 						};
 						output.content.push(block);
-						stream.push({ type: "thinking_start", contentIndex: output.content.length - 1, partial: output });
+						stream.push({ type: "thinking_start", contentIndex: output.content.length - 1 });
 					} else if (event.content_block.type === "tool_use") {
 						const block: Block = {
 							type: "toolCall",
@@ -591,7 +591,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 							index: event.index,
 						};
 						output.content.push(block);
-						stream.push({ type: "toolcall_start", contentIndex: output.content.length - 1, partial: output });
+						stream.push({ type: "toolcall_start", contentIndex: output.content.length - 1 });
 					} else if (event.content_block.type === "server_tool_use") {
 						const block: Block = {
 							type: "serverToolUse",
@@ -603,7 +603,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 							index: event.index,
 						};
 						output.content.push(block);
-						stream.push({ type: "server_tool_use", contentIndex: output.content.length - 1, partial: output });
+						stream.push({ type: "server_tool_use", contentIndex: output.content.length - 1 });
 					} else if (event.content_block.type === "web_search_tool_result") {
 						const block: Block = {
 							type: "webSearchResult",
@@ -624,7 +624,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 								type: "text_delta",
 								contentIndex: index,
 								delta: event.delta.text,
-								partial: output,
+								
 							});
 						}
 					} else if (event.delta.type === "thinking_delta") {
@@ -636,7 +636,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 								type: "thinking_delta",
 								contentIndex: index,
 								delta: event.delta.thinking,
-								partial: output,
+								
 							});
 						}
 					} else if (event.delta.type === "input_json_delta") {
@@ -649,7 +649,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 								type: "toolcall_delta",
 								contentIndex: index,
 								delta: event.delta.partial_json,
-								partial: output,
+								
 							});
 						} else if (block && block.type === "serverToolUse") {
 							block.partialJson = (block.partialJson ?? "") + event.delta.partial_json;
@@ -673,14 +673,14 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 								type: "text_end",
 								contentIndex: index,
 								content: block.text,
-								partial: output,
+								
 							});
 						} else if (block.type === "thinking") {
 							stream.push({
 								type: "thinking_end",
 								contentIndex: index,
 								content: block.thinking,
-								partial: output,
+								
 							});
 						} else if (block.type === "toolCall") {
 							block.arguments = parseStreamingJson(block.partialJson);
@@ -691,7 +691,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 								type: "toolcall_end",
 								contentIndex: index,
 								toolCall: block,
-								partial: output,
+								
 							});
 						} else if (block.type === "serverToolUse") {
 							if (block.partialJson) {

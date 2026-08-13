@@ -325,12 +325,12 @@ export async function processResponsesStream<TApi extends Api>(
 				currentItem = item;
 				currentBlock = { type: "thinking", thinking: "" };
 				output.content.push(currentBlock);
-				stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
+				stream.push({ type: "thinking_start", contentIndex: blockIndex() });
 			} else if (item.type === "message") {
 				currentItem = item;
 				currentBlock = { type: "text", text: "" };
 				output.content.push(currentBlock);
-				stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+				stream.push({ type: "text_start", contentIndex: blockIndex() });
 			} else if (item.type === "function_call") {
 				currentItem = item;
 				currentBlock = {
@@ -341,7 +341,7 @@ export async function processResponsesStream<TApi extends Api>(
 					partialJson: item.arguments || "",
 				};
 				output.content.push(currentBlock);
-				stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+				stream.push({ type: "toolcall_start", contentIndex: blockIndex() });
 			}
 		} else if (event.type === "response.reasoning_summary_part.added") {
 			if (currentItem && currentItem.type === "reasoning") {
@@ -359,7 +359,7 @@ export async function processResponsesStream<TApi extends Api>(
 						type: "thinking_delta",
 						contentIndex: blockIndex(),
 						delta: event.delta,
-						partial: output,
+						
 					});
 				}
 			}
@@ -374,7 +374,7 @@ export async function processResponsesStream<TApi extends Api>(
 						type: "thinking_delta",
 						contentIndex: blockIndex(),
 						delta: "\n\n",
-						partial: output,
+						
 					});
 				}
 			}
@@ -385,7 +385,7 @@ export async function processResponsesStream<TApi extends Api>(
 					type: "thinking_delta",
 					contentIndex: blockIndex(),
 					delta: event.delta,
-					partial: output,
+					
 				});
 			}
 		} else if (event.type === "response.content_part.added") {
@@ -409,7 +409,7 @@ export async function processResponsesStream<TApi extends Api>(
 						type: "text_delta",
 						contentIndex: blockIndex(),
 						delta: event.delta,
-						partial: output,
+						
 					});
 				}
 			}
@@ -426,7 +426,7 @@ export async function processResponsesStream<TApi extends Api>(
 						type: "text_delta",
 						contentIndex: blockIndex(),
 						delta: event.delta,
-						partial: output,
+						
 					});
 				}
 			}
@@ -438,7 +438,7 @@ export async function processResponsesStream<TApi extends Api>(
 					type: "toolcall_delta",
 					contentIndex: blockIndex(),
 					delta: event.delta,
-					partial: output,
+					
 				});
 			}
 		} else if (event.type === "response.function_call_arguments.done") {
@@ -454,7 +454,7 @@ export async function processResponsesStream<TApi extends Api>(
 							type: "toolcall_delta",
 							contentIndex: blockIndex(),
 							delta,
-							partial: output,
+							
 						});
 					}
 				}
@@ -471,7 +471,7 @@ export async function processResponsesStream<TApi extends Api>(
 					type: "thinking_end",
 					contentIndex: blockIndex(),
 					content: currentBlock.thinking,
-					partial: output,
+					
 				});
 				currentBlock = null;
 			} else if (item.type === "message" && currentBlock?.type === "text") {
@@ -481,7 +481,7 @@ export async function processResponsesStream<TApi extends Api>(
 					type: "text_end",
 					contentIndex: blockIndex(),
 					content: currentBlock.text,
-					partial: output,
+					
 				});
 				currentBlock = null;
 			} else if (item.type === "function_call") {
@@ -507,7 +507,7 @@ export async function processResponsesStream<TApi extends Api>(
 				}
 
 				currentBlock = null;
-				stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
+				stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall });
 			}
 		} else if (event.type === "response.completed") {
 			const response = event.response;
