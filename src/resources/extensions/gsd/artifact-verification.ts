@@ -4,7 +4,7 @@
 import { parseUnitId } from "./unit-id.js";
 import { MILESTONE_ID_RE } from "./milestone-ids.js";
 import { clearParseCache } from "./files.js";
-import { parseLegacyRoadmap, parseLegacyPlan } from "./schemas/parsers.js";
+import { parseProjectionRoadmap, parseProjectionPlan } from "./schemas/parsers.js";
 import {
   isDbAvailable,
   getSlice,
@@ -94,7 +94,7 @@ export function readTerminalTaskRecoveryAbort(
  * Optional override for the roadmap parser used by plan-milestone verification.
  * That parse reads the artifact's own content (does it declare any slices?), not
  * workflow authority, so it survives the DB cutover. Production leaves this null
- * so the real parseLegacyRoadmap runs; tests inject a throwing function to
+ * so the real parseProjectionRoadmap runs; tests inject a throwing function to
  * deterministically exercise the parse-failure catch.
  * @internal
  */
@@ -115,7 +115,7 @@ export function _setRoadmapParserFnForTests(
 
 function parseRoadmapForRecovery(content: string): ReturnType<NonNullable<typeof _roadmapParserFn>> {
   if (_roadmapParserFn) return _roadmapParserFn(content);
-  return parseLegacyRoadmap(content) as unknown as ReturnType<NonNullable<typeof _roadmapParserFn>>;
+  return parseProjectionRoadmap(content) as unknown as ReturnType<NonNullable<typeof _roadmapParserFn>>;
 }
 
 /** Slice count for plan-milestone verification; shared by scoped and legacy paths. */
@@ -468,7 +468,7 @@ export function verifyExpectedArtifact(
         let parsedTaskIds: string[] | null = null;
         const getParsedTaskIds = (): string[] => {
           if (parsedTaskIds) return parsedTaskIds;
-          parsedTaskIds = parseLegacyPlan(planContent).tasks.map((t: { id: string }) => t.id);
+          parsedTaskIds = parseProjectionPlan(planContent).tasks.map((t: { id: string }) => t.id);
           return parsedTaskIds;
         };
         const tasksBlockMatch = planContent.match(/<tasks>([\s\S]*?)<\/tasks>/i);

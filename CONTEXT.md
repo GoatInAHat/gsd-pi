@@ -90,12 +90,32 @@ completed.
 - **`tool-unavailable` (Recovery kind)**: the Recovery Classification failure kind for a tool call that raced the workflow MCP server's registration (`No such tool available` / a Tool Surface Readiness abort). Transient — action `retry` with bounded attempts and its own exit reason; distinct from `tool-schema`/`tool-contract`, which are deterministic stops. The system retries; the model must never improvise a fallback around a missing workflow tool.
 - **Workflow Bridge Warm-up**: the stdio MCP server's eager load + shape-check of the executor and write-gate bridges before connecting when workflow tools are enabled. A broken bridge fails the spawn with the actionable error (fail closed) instead of advertising tools that error on first call; a healthy spawn pre-pays the bridge import.
 
+## State layer (filesystem-state cutover shipped)
+
+The live project-state path is **database-authoritative**. `.gsd/gsd.db` decides
+phase, registry, and progress. Markdown files under `.gsd/` (STATE.md, ROADMAP,
+PLAN, SUMMARY, CONTEXT, and the rest of the inventory) are stamped **read-only
+projections** of that database. They are not a fallback when the DB is missing:
+an unavailable DB fails closed.
+
+The frozen projection format, stamp, and reader contract live in
+[`docs/dev/state-db-cutover-projection-contract.md`](docs/dev/state-db-cutover-projection-contract.md).
+External readers should treat that document as the reference, not on-disk
+markdown as authority.
+
+Downgrade recovery uses the explicit backup-restore command:
+`/gsd db restore-backup`. Canonical lifecycle *read* authority (public status
+responses and the D005 shadow surface) remains deferred under M003; that
+surface is still pinned by `gate:lifecycle-shadow-no-cutover`.
+
 ## Current pre-cutover architecture
 
 > [ADR-046](docs/dev/ADR-046-database-authoritative-workflow-lifecycle.md)
-> defines the accepted post-cutover direction. The entries below describe the
-> current pre-cutover runtime only. Future-looking recommendations inherited
-> from earlier ADRs are historical and do not override ADR-046.
+> defines the accepted post-cutover direction. Filesystem-state authority has
+> cut over (see **State layer** above). The entries below still describe
+> runtime modules whose *canonical lifecycle* read surface remains on the
+> pre-cutover D005 contract. Future-looking recommendations inherited from
+> earlier ADRs are historical and do not override ADR-046.
 
 - **Auto Orchestration module**: the module that owns the pre-dispatch invariant pipeline and lifecycle telemetry. It runs the resource-version guard and pre-dispatch health gate before reconciliation, then gates whether a Unit may dispatch (resource-version guard → pre-dispatch health gate → State Reconciliation → Dispatch decision → Tool Contract → Worktree Safety) and journals lifecycle transitions, but does not execute the Unit or own runtime recovery for Unit-execution failures. The auto-loop runs the Unit and calls Recovery Classification directly when it fails.
 - **Dispatch adapter**: adapter behind the Dispatch seam.
@@ -265,7 +285,7 @@ Dispatch remains responsible for selecting the next Unit from reconciled state. 
 
 - Write-gate state goes through the **Write-Gate State Adapter** seam (host reconcile-on-read / child write-through, read-merge-write snapshot persistence, per-basePath deferred gates). No file locking; temp+rename atomicity and the persistence opt-out are preserved. See `docs/dev/ADR-040-write-gate-two-adapter-seam.md`.
 
-- Tool-hook guarantees are declared once in the **Engine Hook Contract**; decision reads of markdown projections are banned from dispatch/gate/completion paths (structural test `tests/parsers-legacy-importers.test.ts`; allowlist with per-entry justification). Open follow-up from the contract work: nine `tool_call`-only guards have no universal-hook mirror and are silently dead under external engines — see ADR-041's consequences for the list. See `docs/dev/ADR-041-engine-hook-contract.md`.
+- Tool-hook guarantees are declared once in the **Engine Hook Contract**; decision reads of markdown projections are banned from dispatch/gate/completion paths (structural test `tests/parsers-legacy-importers.test.ts`; zero-importer / file-absence invariant after T020). Open follow-up from the contract work: nine `tool_call`-only guards have no universal-hook mirror and are silently dead under external engines — see ADR-041's consequences for the list. See `docs/dev/ADR-041-engine-hook-contract.md`.
 
 - **Historical proposal, superseded before adoption:** ADR-035 proposed moving projection-after-write from an 11-site caller convention to Dirty Projection Scope marking at the write seam plus one Projection Flush seam. ADR-046 replaces that process-local design with durable, revision-aware Projection Work stored with the Domain Operation.
 

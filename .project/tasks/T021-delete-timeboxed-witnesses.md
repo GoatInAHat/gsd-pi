@@ -3,12 +3,12 @@ id: T021
 title: Delete ADR-046-timeboxed witnesses and unadopted import/reconcile compatibility paths (timebox-gated)
 wave: 4
 deps: [T009, T012]
-status: pending
+status: done
 agent: null
 commit: null
-base: null
+base: 75397cca5
 worktree: null
-task_branch: null
+task_branch: fix/wave-4-legacy-path-deletion
 files:
   - src/resources/extensions/gsd/tests/md-importer-adopted-authority.test.ts
   - src/resources/extensions/gsd/tests/workflow-reconcile.test.ts
@@ -77,3 +77,4 @@ test ! -f src/resources/extensions/gsd/tests/md-importer-adopted-authority.test.
 ## Log
 
 - 2026-08-01 — created by planner
+- 2026-08-12 — same timebox waiver as T020. Deleted the four timeboxed test files. Removed unadopted checkbox-overwrite (md-importer) and unadopted state-event replay (workflow-reconcile). Successor gate no longer lists frozen-public-response / mode-transport-matrix / unadopted-import / unadopted-reconcile. `pnpm run gate:lifecycle-shadow-no-cutover` → PASS Structural 7/7 Behavioral 11/11.

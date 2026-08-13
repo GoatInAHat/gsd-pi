@@ -53,7 +53,7 @@ import {
   type LegacyImportSurface,
 } from "../legacy-import-surfaces.ts";
 import { _getAdapter, closeDatabase, openDatabase, SCHEMA_VERSION } from "../gsd-db.ts";
-import { parseLegacyRoadmap as parseRoadmap } from "../schemas/parsers.ts";
+import { parseProjectionRoadmap as parseRoadmap } from "../schemas/parsers.ts";
 import { redactSecrets } from "../redact-secrets.ts";
 import { listRuns } from "../run-manager.ts";
 import {

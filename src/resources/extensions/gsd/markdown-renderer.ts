@@ -49,7 +49,7 @@ import {
   buildSliceFileName,
 } from "./paths.js";
 import { saveFile, clearParseCache, registerCacheClearCallback } from "./files.js";
-import { parseLegacyRoadmap } from "./schemas/parsers.js";
+import { parseProjectionRoadmap } from "./schemas/parsers.js";
 import { invalidateStateCache } from "./state.js";
 import { clearPathCache, milestonesDir, legacyMilestonesDir, isLegacyMilestonesLayout, resolveMilestonePath, relSliceFile, canonicalPhaseDirName } from "./paths.js";
 import { readCompatMarker, writeCompatMarker, computeProjectionSha, deriveCompatProjectionKey } from "./compat/compat-marker.js";
@@ -1278,7 +1278,7 @@ function projectionRenderIntents(basePath: string): ProjectionRenderIntent[] {
         const artifactType = artifact.artifact_type.toUpperCase();
         if (!artifact.full_content.trim()) continue;
         if ((artifactType === "SUMMARY" || artifactType === "UAT") && !sliceComplete) continue;
-        if (artifactType === "PLAN" && isAutoRecoveryPlaceholderPlan(artifact.full_content)) continue;
+        if (artifactType === "PLAN") continue;
         record(
           join(basePath, relSliceFile(basePath, milestone.id, slice.id, artifactType)),
           artifact.full_content,
@@ -1380,7 +1380,7 @@ function detectStaleRendersImpl(basePath: string): StaleEntry[] {
     const roadmapPath = targetMilestoneFile(basePath, milestone.id, "ROADMAP", milestone.title);
     if (existsSync(roadmapPath)) {
       try {
-        const parsed = parseProjectionByIdentity(roadmapPath, parseLegacyRoadmap) as ReturnType<typeof parseLegacyRoadmap>;
+        const parsed = parseProjectionByIdentity(roadmapPath, parseProjectionRoadmap) as ReturnType<typeof parseProjectionRoadmap>;
 
         for (const slice of slices) {
           const isCompleteInDb = isClosedStatus(slice.status);
@@ -1492,7 +1492,7 @@ function detectStaleRendersImpl(basePath: string): StaleEntry[] {
  * markdown parsers directly.
  */
 export function roadmapRenderMarksSliceDone(roadmapContent: string, sliceId: string): boolean {
-  return parseLegacyRoadmap(roadmapContent).slices.some((slice) => slice.id === sliceId && slice.done);
+  return parseProjectionRoadmap(roadmapContent).slices.some((slice) => slice.id === sliceId && slice.done);
 }
 
 // ─── Stale Repair ─────────────────────────────────────────────────────────

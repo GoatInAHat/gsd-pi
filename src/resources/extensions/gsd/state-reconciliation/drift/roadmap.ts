@@ -15,7 +15,7 @@ import {
 } from "../../gsd-db.js";
 import { renderRoadmapFromDb } from "../../markdown-renderer.js";
 import { findMilestoneIds } from "../../milestone-ids.js";
-import { parseLegacyRoadmap as parseRoadmap } from "../../schemas/parsers.js";
+import { parseProjectionRoadmap as parseRoadmap } from "../../schemas/parsers.js";
 import { resolveMilestoneFile } from "../../paths.js";
 import {
   isClosedStatus,

@@ -3,12 +3,12 @@ id: T023
 title: Milestone closeout — full gate suite green at the cutover commit; status docs updated
 wave: 4
 deps: [T017, T018, T019, T020, T021, T022]
-status: pending
+status: done
 agent: null
 commit: null
-base: null
+base: 75397cca5
 worktree: null
-task_branch: null
+task_branch: fix/wave-4-legacy-path-deletion
 files:
   - docs/dev/2026-05-03-long-running-refactor-plan-of-plans.md
   - CONTEXT.md
@@ -76,3 +76,4 @@ grep -q "## Closeout evidence" docs/dev/state-db-cutover-milestone-decision.md &
 ## Log
 
 - 2026-08-01 — created by planner
+- 2026-08-12 — closeout docs written (plan-of-plans, CONTEXT.md, decision-doc Closeout evidence). Timebox waiver recorded. `baseline:refactor:gate` 34/34 PASS; `baseline:refactor:phase0` 140/140 PASS; `gate:lifecycle-shadow-no-cutover` 7/7+11/11 PASS; legacy evidence+gate PASS; proof PASS; `verify:fast` PASS.
