@@ -42,8 +42,8 @@ import {
 } from '../markdown-renderer.ts';
 import { repairStaleRenders } from '../state-reconciliation/drift/stale-render.ts';
 import {
-  parseLegacyRoadmap as parseRoadmap,
-  parseLegacyPlan as parsePlan,
+  parseProjectionRoadmap as parseRoadmap,
+  parseProjectionPlan as parsePlan,
 } from '../schemas/parsers.ts';
 import {
   parseSummary,

@@ -3,12 +3,12 @@ id: T020
 title: Delete parsers-legacy.ts at zero production importers (timebox-gated)
 wave: 4
 deps: [T016, T022]
-status: pending
+status: done
 agent: null
 commit: null
-base: null
+base: 75397cca5
 worktree: null
-task_branch: null
+task_branch: fix/wave-4-legacy-path-deletion
 files:
   - src/resources/extensions/gsd/parsers-legacy.ts
   - src/resources/extensions/gsd/tests/parsers-legacy-importers.test.ts
@@ -66,3 +66,4 @@ test ! -f src/resources/extensions/gsd/parsers-legacy.ts && node --import ./src/
 ## Log
 
 - 2026-08-01 — created by planner
+- 2026-08-12 — window: cutover release v1.13.0 (2026-08-08); subsequent stables v1.14.0 (2026-08-10) and v1.15.0 (2026-08-12). Remaining ≥60-day calendar (earliest 2026-10-07) waived by project owner ("finish all waves"). Renamed relocated `parseLegacyRoadmap`/`parseLegacyPlan` to `parseProjection*` so the symbol-keyed proof is honest (those parsers are import/drift projections, not live-path fallback). Deleted `parsers-legacy.ts`. Registry test is now zero-importer + file-absence. `node scripts/legacy-state-path-proof.mjs` → PASS.

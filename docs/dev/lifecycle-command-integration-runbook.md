@@ -478,7 +478,6 @@ node --import ./src/resources/extensions/gsd/tests/resolve-ts.mjs \
   src/resources/extensions/gsd/tests/milestone-closeout-fencing.test.ts \
   src/resources/extensions/gsd/tests/auto-worktree-merge-db-ready.test.ts \
   src/resources/extensions/gsd/tests/auto-recovery.test.ts \
-  src/resources/extensions/gsd/tests/workflow-reconcile.test.ts \
   src/resources/extensions/gsd/tests/workflow-authority-faults.test.ts
 pnpm exec tsx --test \
   src/resources/extensions/gsd/tests/workflow-tool-executors.test.ts \

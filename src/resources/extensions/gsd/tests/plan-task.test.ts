@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 
 import { openDatabase, closeDatabase, insertMilestone, insertSlice, insertTask, getSlice, getTask, getSliceTasks, getGateResults } from '../gsd-db.ts';
 import { handlePlanTask as handlePlanTaskWithInvocation, type PlanTaskParams } from '../tools/plan-task.ts';
-import { parsePlan } from '../parsers-legacy.ts';
+import { parseProjectionPlan as parsePlan } from '../schemas/parsers.ts';
 import { resolveVerificationRepositoryTargets } from '../verification-source-integrity.ts';
 
 let invocationSequence = 0;

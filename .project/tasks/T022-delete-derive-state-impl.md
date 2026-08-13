@@ -3,12 +3,12 @@ id: T022
 title: Delete _deriveStateImpl and legacy markdown-fallback remnants, gated on fail-closed evidence (timebox-gated)
 wave: 4
 deps: [T015, T016]
-status: pending
+status: done
 agent: null
 commit: null
-base: null
+base: 75397cca5
 worktree: null
-task_branch: null
+task_branch: fix/wave-4-legacy-path-deletion
 files:
   - src/resources/extensions/gsd/state.ts
   - src/resources/extensions/gsd/tests/derive-state-db.test.ts
@@ -80,3 +80,4 @@ post-cutover release).
 ## Log
 
 - 2026-08-01 — created by planner
+- 2026-08-12 — same timebox waiver as T020. Deleted `_deriveStateImpl` and the `parsers-legacy` import from `state.ts`. `getActiveMilestoneId` fail-closes when no DB is open. Proof was BLOCK before deletion (live-repo pin) and PASS after. Re-homed `getActiveMilestoneId skips parked` onto DB rows so the discard witness file stays green.

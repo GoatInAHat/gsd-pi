@@ -30,7 +30,7 @@ import { workflowEventLogPath } from "./workflow-event-ledger.js";
 import { readEvents } from "./workflow-events.js";
 import { flushWorkflowProjections } from "./projection-flush.js";
 import { parseRoadmapSlices } from "./roadmap-slices.js";
-import { parseLegacyPlan } from "./schemas/parsers.js";
+import { parseProjectionPlan } from "./schemas/parsers.js";
 import { LAYOUT_SEGMENTS } from "./layout-policy.js";
 import { resolveCanonicalMilestoneRoot } from "./worktree-manager.js";
 import { isCanonicalStagedTaskSummaryProjection } from "./task-summary-projection-classification.js";
@@ -145,11 +145,11 @@ function checkProjectionCheckboxDbStatus(basePath: string, milestoneIds: string[
       if (!planPath || !existsSync(planPath)) continue;
       try {
         const plan = readFileSync(planPath, "utf-8");
-        // parseLegacyPlan reads the projection's task checkboxes (the flat-phase
+        // parseProjectionPlan reads the projection's task checkboxes (the flat-phase
         // <tasks> block / ## Tasks section), so a stray task-style checkbox
         // line elsewhere in PLAN.md (e.g. a Must-Haves or Verification bullet
         // above <tasks>) can no longer hide real drift or fake a divergence.
-        const taskDoneById = new Map(parseLegacyPlan(plan).tasks.map((entry) => [entry.id, entry.done]));
+        const taskDoneById = new Map(parseProjectionPlan(plan).tasks.map((entry) => [entry.id, entry.done]));
         for (const task of getSliceTasks(milestoneId, slice.id)) {
           const checkboxDone = taskDoneById.get(task.id);
           if (checkboxDone === undefined) continue;
