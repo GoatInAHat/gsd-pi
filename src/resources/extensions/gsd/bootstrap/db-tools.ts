@@ -4,11 +4,17 @@ import { StringEnum, Type } from "@gsd/pi-ai";
 import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import { Text } from "@gsd/pi-tui";
 import { SUMMARY_SAVE_CONTENT_MAX_LENGTH } from "@opengsd/contracts";
+import { existsSync } from "node:fs";
 import { getErrorMessage } from "../error-utils.js";
 import { piExecutionInvocation } from "../execution-invocation.js";
 import { incrementLegacyTelemetry } from "../legacy-telemetry.js";
 import { piPlanningInvocation } from "../planning-invocation.js";
 import { loadEffectiveGSDPreferences } from "../preferences.js";
+import type { DbAdapter } from "../db-adapter.js";
+import {
+	openWorkflowDatabaseIsolated,
+	resolveProjectRootDbPath,
+} from "../db-workspace.js";
 import { prepareSaveGateResultArguments } from "../tools/save-gate-result-args.js";
 import { logError } from "../workflow-logger.js";
 import { importWorkflowExecutorsModule } from "../workflow-mcp.js";
@@ -136,6 +142,25 @@ function formatToolErrorText(result: any, details: any): string {
 	return typeof message === "string" && message.startsWith("Error")
 		? message
 		: `Error: ${message}`;
+}
+
+function withCanonicalReadAdapter<T>(
+	basePath: string,
+	run: (adapter: DbAdapter) => Promise<T>,
+): Promise<T> {
+	const dbPath = resolveProjectRootDbPath(basePath);
+	if (!existsSync(dbPath)) {
+		throw new Error("Database adapter not available (db_unavailable)");
+	}
+	const adapter = openWorkflowDatabaseIsolated(dbPath);
+	if (!adapter) {
+		throw new Error("Database adapter not available (db_unavailable)");
+	}
+	return Promise.resolve()
+		.then(() => run(adapter))
+		.finally(() => {
+			adapter.close();
+		});
 }
 
 const UAT_EVIDENCE_KIND_VALUES = [
@@ -2771,38 +2796,30 @@ export function registerDbTools(pi: ExtensionAPI): void {
 		_ctx: unknown,
 	) => {
 		const basePath = resolveCtxCwd(_ctx);
-		const dbAvailable = await ensureDbOpen(basePath);
-		if (!dbAvailable) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: "Error: GSD database is not available.",
-					},
-				],
-				details: {
-					operation: "list_requirements",
-					error: "db_unavailable",
-				} as any,
-			};
-		}
-
 		try {
 			const { queryRequirementsWithLimit } = await import(
 				"../context-store.js"
 			);
-			const limit = Math.min(params.limit ?? 200, 500);
-			const results = queryRequirementsWithLimit({
-				status: params.status ?? undefined,
-				milestoneId: params.milestoneId ?? undefined,
-				sliceId: params.sliceId ?? undefined,
-				limit,
-			});
+			const filtered = await withCanonicalReadAdapter(
+				basePath,
+				async (adapter) => {
+					const limit = Math.min(params.limit ?? 200, 500);
+					const results = queryRequirementsWithLimit(
+						{
+							status: params.status ?? undefined,
+							milestoneId: params.milestoneId ?? undefined,
+							sliceId: params.sliceId ?? undefined,
+							limit,
+						},
+						adapter,
+					);
 
-			// JS-level class filter (not in DB query)
-			const filtered = params.class
-				? results.filter((r: any) => r.class === params.class)
-				: results;
+					// JS-level class filter (not in DB query)
+					return params.class
+						? results.filter((r: any) => r.class === params.class)
+						: results;
+				},
+			);
 
 			return {
 				content: [
@@ -2940,25 +2957,11 @@ export function registerDbTools(pi: ExtensionAPI): void {
 		_ctx: unknown,
 	) => {
 		const basePath = resolveCtxCwd(_ctx);
-		const dbAvailable = await ensureDbOpen(basePath);
-		if (!dbAvailable) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: "Error: GSD database is not available.",
-					},
-				],
-				details: {
-					operation: "get_requirement",
-					id: params.id,
-					error: "db_unavailable",
-				} as any,
-			};
-		}
 		try {
 			const { getRequirementByIdStrict } = await import("../context-store.js");
-			const req = getRequirementByIdStrict(params.id);
+			const req = await withCanonicalReadAdapter(basePath, async (adapter) =>
+				getRequirementByIdStrict(params.id, adapter),
+			);
 
 			if (!req) {
 				// getRequirementByIdStrict returns null for not found (absent or superseded)
@@ -3101,30 +3104,20 @@ export function registerDbTools(pi: ExtensionAPI): void {
 		_ctx: unknown,
 	) => {
 		const basePath = resolveCtxCwd(_ctx);
-		const dbAvailable = await ensureDbOpen(basePath);
-		if (!dbAvailable) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: "Error: GSD database is not available.",
-					},
-				],
-				details: {
-					operation: "list_decisions",
-					error: "db_unavailable",
-				} as any,
-			};
-		}
 		try {
 			const { queryDecisionsWithLimit } = await import("../context-store.js");
 
-			const limit = Math.min(params.limit ?? 200, 500);
-			const results = queryDecisionsWithLimit({
-				scope: params.scope ?? undefined,
-				milestoneId: params.milestoneId ?? undefined,
-				includeSuperseded: params.includeSuperseded === true,
-				limit,
+			const results = await withCanonicalReadAdapter(basePath, async (adapter) => {
+				const limit = Math.min(params.limit ?? 200, 500);
+				return queryDecisionsWithLimit(
+					{
+						scope: params.scope ?? undefined,
+						milestoneId: params.milestoneId ?? undefined,
+						includeSuperseded: params.includeSuperseded === true,
+						limit,
+					},
+					adapter,
+				);
 			});
 
 			return {
@@ -3260,27 +3253,14 @@ export function registerDbTools(pi: ExtensionAPI): void {
 		_ctx: unknown,
 	) => {
 		const basePath = resolveCtxCwd(_ctx);
-		const dbAvailable = await ensureDbOpen(basePath);
-		if (!dbAvailable) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: "Error: GSD database is not available.",
-					},
-				],
-				details: {
-					operation: "get_decision",
-					id: params.id,
-					error: "db_unavailable",
-				} as any,
-			};
-		}
 		try {
 			const { getDecisionByIdStrict } = await import("../context-store.js");
-			const decision = getDecisionByIdStrict(
-				params.id,
-				params.includeSuperseded === true,
+			const decision = await withCanonicalReadAdapter(basePath, async (adapter) =>
+				getDecisionByIdStrict(
+					params.id,
+					params.includeSuperseded === true,
+					adapter,
+				),
 			);
 
 			if (!decision) {
