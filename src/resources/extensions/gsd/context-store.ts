@@ -20,6 +20,7 @@ export interface RequirementQueryOpts {
 	milestoneId?: string;
 	sliceId?: string;
 	status?: string;
+	class?: string;
 }
 
 function resolveReadAdapter(adapter?: DbAdapter): DbAdapter {
@@ -294,6 +295,11 @@ export function queryRequirements(opts?: RequirementQueryOpts): Requirement[] {
 		if (opts?.status) {
 			clauses.push("status = :status");
 			params[":status"] = opts.status;
+		}
+
+		if (opts?.class) {
+			clauses.push("class = :class");
+			params[":class"] = opts.class;
 		}
 
 		const sql = `SELECT * FROM requirements WHERE ${clauses.join(" AND ")} ORDER BY id`;
