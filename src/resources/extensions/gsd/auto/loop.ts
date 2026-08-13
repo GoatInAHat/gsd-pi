@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AutoSession } from "./session.js";
-import type { AutoTerminalOutcome } from "./contracts.js";
+import type { AutoTerminalOutcome, UnitRef } from "./contracts.js";
 import type { LoopDeps, StopAutoOptions } from "./loop-deps.js";
 import type { GSDState } from "../types.js";
 import {
@@ -554,6 +554,8 @@ export async function autoLoop(
       options?: StopAutoOptions;
     } | null = null;
     let ownsUnitExecution = false;
+    let orchestrationUnitPendingCloseout: UnitRef | null = null;
+    let abnormalUnitExitReason = "unit exited without clean closeout";
     const deferStopAuto: LoopDeps["stopAuto"] = async (_ctx, _pi, reason, options) => {
       pendingStopAuto ??= { reason, options };
     };
@@ -571,6 +573,9 @@ export async function autoLoop(
       guardId: string | null,
       inputPayload?: string,
     ): void => {
+      if (orchestrationUnitPendingCloseout) {
+        abnormalUnitExitReason = error ?? guardId ?? status;
+      }
       turnReporter.finish({
         unitType: observedUnitType,
         unitId: observedUnitId,
@@ -958,10 +963,13 @@ export async function autoLoop(
           if (customDispatchId !== null && !customDispatchSettled) {
             throw new Error(`Could not terminalize custom-engine dispatch ${customDispatchId} before unit retry`);
           }
-          await s.orchestration?.releaseActiveUnit?.({
-            unitType: iterData.unitType,
-            unitId: iterData.unitId,
-          });
+          await s.orchestration?.releaseActiveUnit?.(
+            orchestrationUnitPendingCloseout ?? {
+              unitType: iterData.unitType,
+              unitId: iterData.unitId,
+            },
+          );
+          orchestrationUnitPendingCloseout = null;
           finishIncompleteIteration({
             status: "retry",
             reason: unitPhaseResult.reason,
@@ -1428,6 +1436,7 @@ export async function autoLoop(
             );
             continue;
           }
+          orchestrationUnitPendingCloseout = { ...orchestrationResult.unit };
           const pendingDispatch = s.pendingOrchestrationDispatch;
           iterData = {
             unitType: pendingDispatch?.unitType ?? orchestrationResult.unit.unitType,
@@ -1756,10 +1765,13 @@ export async function autoLoop(
             markFailed: markDispatchFailed,
             logWriteFailure: logDispatchLedgerWriteFailure,
           }));
-        await s.orchestration?.releaseActiveUnit?.({
-          unitType: iterData.unitType,
-          unitId: iterData.unitId,
-        });
+        await s.orchestration?.releaseActiveUnit?.(
+          orchestrationUnitPendingCloseout ?? {
+            unitType: iterData.unitType,
+            unitId: iterData.unitId,
+          },
+        );
+        orchestrationUnitPendingCloseout = null;
         finishIncompleteIteration({
           status: "retry",
           reason: unitPhaseResult.reason,
@@ -1861,10 +1873,13 @@ export async function autoLoop(
             markFailed: markDispatchFailed,
             logWriteFailure: logDispatchLedgerWriteFailure,
           }));
-        await s.orchestration?.retryActiveUnit({
-          unitType: iterData.unitType,
-          unitId: iterData.unitId,
-        });
+        await s.orchestration?.retryActiveUnit(
+          orchestrationUnitPendingCloseout ?? {
+            unitType: iterData.unitType,
+            unitId: iterData.unitId,
+          },
+        );
+        orchestrationUnitPendingCloseout = null;
         finishIncompleteIteration({
           status: "retry",
           reason: "finalize-retry",
@@ -1892,10 +1907,13 @@ export async function autoLoop(
           markCompleted: markDispatchCompleted,
           logWriteFailure: logDispatchLedgerWriteFailure,
         }));
-      await s.orchestration?.completeActiveUnit({
-        unitType: iterData.unitType,
-        unitId: iterData.unitId,
-      });
+      await s.orchestration?.completeActiveUnit(
+        orchestrationUnitPendingCloseout ?? {
+          unitType: iterData.unitType,
+          unitId: iterData.unitId,
+        },
+      );
+      orchestrationUnitPendingCloseout = null;
       completeIteration();
       finishTurn("completed", "none", undefined, null);
       if (finalizeDecision.action === "complete-and-break") {
@@ -1907,6 +1925,9 @@ export async function autoLoop(
     } catch (loopErr) {
       // ── Blanket catch: absorb unexpected exceptions, apply graduated recovery ──
       const msg = loopErr instanceof Error ? loopErr.message : String(loopErr);
+      if (orchestrationUnitPendingCloseout) {
+        abnormalUnitExitReason = msg;
+      }
       if (dispatchId !== null && !dispatchSettled && !(loopErr instanceof ModelPolicyDispatchBlockedError)) {
         dispatchSettled = settleDispatchFailed(
           dispatchId,
@@ -2067,6 +2088,13 @@ export async function autoLoop(
       }
       finishTurn(errorDecision.turnStatus, "execution", msg, "iteration-error");
     } finally {
+      if (orchestrationUnitPendingCloseout) {
+        await s.orchestration?.abandonActiveUnit(
+          orchestrationUnitPendingCloseout,
+          abnormalUnitExitReason,
+        );
+        orchestrationUnitPendingCloseout = null;
+      }
       if (ownsUnitExecution) {
         s.unitExecutionInFlight = false;
       }

@@ -12,7 +12,7 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@gsd/pi-coding-agent";
 
-import type { AutoAdvanceResult, AutoOrchestrationModule, AutoSessionContext, AutoStatus, AutoTerminalOutcome } from "./contracts.js";
+import type { AutoAdvanceResult, AutoOrchestrationModule, AutoSessionContext, AutoStatus, AutoTerminalOutcome, UnitRef } from "./contracts.js";
 import type { AutoSession, PendingOrchestrationDispatch } from "./session.js";
 import type { GSDState, Phase } from "../types.js";
 import type { MinimalModelRegistry } from "../context-budget.js";
@@ -1546,6 +1546,28 @@ export class AutoOrchestrator implements AutoOrchestrationModule {
     this.journalTransition({
       name: "unit-retry",
       reason: "finalize-retry",
+      unitType: unit.unitType,
+      unitId: unit.unitId,
+    });
+  }
+
+  public async abandonActiveUnit(
+    unit: UnitRef,
+    reason: string,
+  ): Promise<void> {
+    const unitKey = buildDispatchKey(unit.unitType, unit.unitId);
+    const activeUnitKey = this.status.activeUnit
+      ? buildDispatchKey(this.status.activeUnit.unitType, this.status.activeUnit.unitId)
+      : null;
+    if (activeUnitKey !== unitKey) return;
+
+    this.status.activeUnit = undefined;
+    this.lastAdvanceKey = null;
+    this.pendingTargetSnapshot = null;
+    this.bumpTransition();
+    this.journalTransition({
+      name: "unit-abandon",
+      reason,
       unitType: unit.unitType,
       unitId: unit.unitId,
     });
