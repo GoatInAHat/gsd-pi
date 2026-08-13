@@ -70,6 +70,7 @@ export type AutoAdvanceResult =
 export interface AutoOrchestrationModule {
   start(sessionContext: AutoSessionContext): Promise<AutoAdvanceResult>;
   advance(): Promise<AutoAdvanceResult>;
+  releaseActiveUnit?(unit: UnitRef): Promise<void>;
   completeActiveUnit(unit: UnitRef): Promise<void>;
   retryActiveUnit(unit: UnitRef): Promise<void>;
   resume(): Promise<AutoAdvanceResult>;
