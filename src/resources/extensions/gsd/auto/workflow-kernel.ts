@@ -11,7 +11,10 @@ export type WorkflowStopReason =
   | "missing-command-context"
   | "session-lock-lost";
 
-export type DispatchClaimSkipReason = "already-active" | "stale-lease";
+export type DispatchClaimSkipReason =
+  | "already-active"
+  | "stale-lease"
+  | "dispatch-claim-degraded";
 
 export type DispatchClaimInput =
   | { kind: "opened"; dispatchId: number }
@@ -19,7 +22,7 @@ export type DispatchClaimInput =
   | { kind: "degraded" };
 
 export type DispatchClaimDecision =
-  | { action: "run"; dispatchId: number | null }
+  | { action: "run"; dispatchId: number }
   | { action: "skip"; reason: DispatchClaimSkipReason };
 
 export type EngineDispatchInput =
@@ -263,8 +266,8 @@ export function decideDispatchClaim(input: DispatchClaimInput): DispatchClaimDec
   }
 
   return {
-    action: "run",
-    dispatchId: null,
+    action: "skip",
+    reason: "dispatch-claim-degraded",
   };
 }
 
