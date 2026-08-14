@@ -64,6 +64,7 @@ export const BUNDLED_COST_TABLE: ModelCostEntry[] = [
   { id: "gpt-5.2-codex", inputPer1k: 0.005, outputPer1k: 0.02, updatedAt: "2026-03-29" },
   { id: "gpt-5.3-codex", inputPer1k: 0.005, outputPer1k: 0.02, updatedAt: "2026-03-29" },
   { id: "gpt-5.3-codex-spark", inputPer1k: 0.0003, outputPer1k: 0.0012, updatedAt: "2026-03-29" },
+  { id: "mai-code-1.1-flash", inputPer1k: 0.0002, outputPer1k: 0.0012, updatedAt: "2026-08-14" },
   { id: "gpt-5.4", inputPer1k: 0.005, outputPer1k: 0.02, updatedAt: "2026-03-29" },
   { id: "gpt-5.4-mini", inputPer1k: 0.00075, outputPer1k: 0.0045, updatedAt: "2026-04-18" },
   // GPT-5.5 API list price, also used for live Codex OAuth routing.
