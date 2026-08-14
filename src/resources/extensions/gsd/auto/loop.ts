@@ -134,6 +134,7 @@ import {
 } from "./custom-task-host-verification.js";
 import {
   claimTaskAttempt,
+  interruptOrphanedTaskAttempts,
   readLatestTaskAttempt,
   readTaskAttempt,
   settleTaskAttempt,
@@ -465,6 +466,21 @@ export async function autoLoop(
 ): Promise<void> {
   debugLog("autoLoop", { phase: "enter" });
   resetSessionTimeoutState();
+  if (s.workerId && s.currentMilestoneId) {
+    const repaired = interruptOrphanedTaskAttempts({
+      workerId: s.workerId,
+      milestoneId: s.currentMilestoneId,
+    });
+    if (repaired.milestoneLeaseToken !== null) {
+      s.milestoneLeaseToken = repaired.milestoneLeaseToken;
+    }
+    if (repaired.attemptIds.length > 0) {
+      debugLog("autoLoop", {
+        phase: "orphaned-task-attempts-interrupted",
+        attemptIds: repaired.attemptIds,
+      });
+    }
+  }
   let iteration = 0;
   const dispatchContract = options?.dispatchContract ?? "legacy-direct";
   const unitDispatchDeps = createExecutionGraphUnitDispatchDeps();
