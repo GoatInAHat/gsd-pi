@@ -33,9 +33,6 @@ function makeDeps() {
       async abandonActiveUnit(unit: { unitType: string; unitId: string }, reason: string) {
         orch.push({ method: "abandon", ...unit, reason });
       },
-      async releaseActiveUnit(unit: { unitType: string; unitId: string }) {
-        orch.push({ method: "release", ...unit });
-      },
     },
   };
 }
@@ -103,5 +100,10 @@ test("settleIterationRun does not write a ledger row when dispatchId is null", a
   );
   assert.equal(settled, false);
   assert.deepEqual(ledger, []);
-  assert.deepEqual(orch, [{ method: "release", unitType: "execute-task", unitId: "M001/S01/T01" }]);
+  assert.deepEqual(orch, [{
+    method: "abandon",
+    unitType: "execute-task",
+    unitId: "M001/S01/T01",
+    reason: "claim never opened",
+  }]);
 });

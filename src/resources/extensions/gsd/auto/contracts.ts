@@ -20,7 +20,11 @@ export interface UnitRef {
   unitId: string;
 }
 
-export type AutoSkipCode = "unit-already-active" | "completed-no-advance";
+export type AutoSkipCode =
+  | "unit-already-active"
+  | "completed-no-advance"
+  | "already-closed"
+  | "no-dispatch";
 
 export const UNIT_ALREADY_ACTIVE_SKIP_CODE = "unit-already-active" as const;
 export const UNIT_ALREADY_ACTIVE_SKIP_REASON = "idempotent advance: unit already active";
@@ -62,8 +66,8 @@ export type AutoTerminalOutcome =
 export type AutoAdvanceResult =
   | { kind: "started" }
   | { kind: "resumed" }
-  | { kind: "advanced"; unit: UnitRef; stateSnapshot: GSDState; dispatchId?: number }
-  | { kind: "skipped"; reason: string; code?: AutoSkipCode; stateSnapshot?: GSDState }
+  | { kind: "advanced"; unit: UnitRef; stateSnapshot: GSDState; dispatchId: number }
+  | { kind: "skipped"; reason: string; code: AutoSkipCode; stateSnapshot?: GSDState }
   | {
       kind: "blocked";
       reason: string;
@@ -83,7 +87,11 @@ export type AutoAdvanceResult =
 export interface AutoOrchestrationModule {
   start(sessionContext: AutoSessionContext): Promise<AutoAdvanceResult>;
   advance(): Promise<AutoAdvanceResult>;
-  releaseActiveUnit?(unit: UnitRef): Promise<void>;
+  settle(
+    dispatchId: number,
+    outcome: "completed" | "failed" | "retry" | "canceled",
+    reason: string,
+  ): Promise<void>;
   completeActiveUnit(unit: UnitRef): Promise<void>;
   retryActiveUnit(unit: UnitRef): Promise<void>;
   abandonActiveUnit(unit: UnitRef, reason: string): Promise<void>;

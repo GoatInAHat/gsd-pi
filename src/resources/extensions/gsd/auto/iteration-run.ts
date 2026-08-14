@@ -22,7 +22,6 @@ export interface SettleIterationRunDeps {
   completeActiveUnit?: (unit: UnitRef) => Promise<void>;
   retryActiveUnit?: (unit: UnitRef) => Promise<void>;
   abandonActiveUnit?: (unit: UnitRef, reason: string) => Promise<void>;
-  releaseActiveUnit?: (unit: UnitRef) => Promise<void>;
 }
 
 /**
@@ -58,11 +57,7 @@ export async function settleIterationRun(
       await deps.abandonActiveUnit?.(unit, reason);
       break;
     case "canceled":
-      if (deps.releaseActiveUnit) {
-        await deps.releaseActiveUnit(unit);
-      } else {
-        await deps.abandonActiveUnit?.(unit, reason);
-      }
+      await deps.abandonActiveUnit?.(unit, reason);
       break;
     default: {
       const exhaustive: never = outcome;

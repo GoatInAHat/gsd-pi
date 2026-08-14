@@ -642,7 +642,6 @@ export async function autoLoop(
           completeActiveUnit: s.orchestration?.completeActiveUnit?.bind(s.orchestration),
           retryActiveUnit: s.orchestration?.retryActiveUnit?.bind(s.orchestration),
           abandonActiveUnit: s.orchestration?.abandonActiveUnit?.bind(s.orchestration),
-          releaseActiveUnit: s.orchestration?.releaseActiveUnit?.bind(s.orchestration),
         },
       );
     };
@@ -1327,6 +1326,7 @@ export async function autoLoop(
                   unitId: existingPendingDispatch.unitId,
                 },
                 stateSnapshot: existingPendingDispatch.state,
+                dispatchId: existingPendingDispatch.dispatchId ?? 0,
               }
             : await orchestration.advance();
 
@@ -1335,11 +1335,20 @@ export async function autoLoop(
             isUnitAlreadyActiveSkip(orchestrationResult) &&
             !s.unitExecutionInFlight
           ) {
-            const staleActiveUnit = orchestration.getStatus().activeUnit;
-            if (staleActiveUnit && orchestration.releaseActiveUnit) {
-              await orchestration.releaseActiveUnit(staleActiveUnit);
-              orchestrationResult = await orchestration.advance();
-            }
+            s.pendingOrchestrationDispatch = null;
+            await deferStopAuto(ctx, pi, markBlockedStopReason(orchestrationResult.reason));
+            finishTurn(
+              "stopped",
+              "none",
+              orchestrationResult.reason,
+              "orchestration-stale-active-unit",
+            );
+            finishIncompleteIteration({
+              status: "stopped",
+              reason: orchestrationResult.reason,
+              failureClass: "manual-attention",
+            });
+            break;
           }
 
           if (orchestrationResult.kind === "blocked") {
@@ -1517,6 +1526,9 @@ export async function autoLoop(
             isRetry: false,
             previousTier: undefined,
           };
+          if (orchestrationResult.dispatchId > 0) {
+            dispatchId = orchestrationResult.dispatchId;
+          }
           const preDispatchResult = deps.runPreDispatchHooks(
             iterData.unitType,
             iterData.unitId,
@@ -1645,12 +1657,9 @@ export async function autoLoop(
         throw new Error("iteration data missing after dispatch");
       }
 
-      // Phase B: claim a unit_dispatches row before invoking the unit. The
-      // partial unique index idx_unit_dispatches_active_per_unit prevents
-      // a second worker from claiming the same unit concurrently. When this
-      // process has a worker identity, make the milestone lease explicit before
-      // claiming so a step-mode handoff cannot leave us running with a stale
-      // in-memory token and no backing lease row.
+      if (dispatchId === null) {
+      // Sidecar (and pending-dispatch tests without a UnitRun id) still claim
+      // here. Canonical advance() already opened the unit_dispatches row.
       let leaseBeforeClaim = ensureDispatchLease(s, iterData.mid, {
         claimMilestoneLease,
         logLeaseRecovered: logDispatchLeaseRecovered,
@@ -1762,6 +1771,7 @@ export async function autoLoop(
         break;
       }
       dispatchId = dispatchDecision.dispatchId;
+      }
 
       let unitPhaseResult: Awaited<ReturnType<typeof runUnitPhaseViaContract>>;
       try {

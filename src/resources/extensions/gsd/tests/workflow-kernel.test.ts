@@ -108,10 +108,11 @@ test("decideWorkflowLoop preserves session lock loss detail", () => {
 });
 
 test("decideDispatchClaim runs with an opened dispatch id", () => {
-  assert.deepEqual(
-    decideDispatchClaim({ kind: "opened", dispatchId: 42 }),
-    { action: "run", dispatchId: 42 },
-  );
+  const result = decideDispatchClaim({ kind: "opened", dispatchId: 42 });
+  assert.deepEqual(result, { action: "run", dispatchId: 42 });
+  if (result.action !== "run") throw new Error("expected run");
+  assert.equal(typeof result.dispatchId, "number");
+  assert.notEqual(result.dispatchId, null);
 });
 
 test("decideDispatchClaim stops degraded dispatches with the claim reason", () => {
