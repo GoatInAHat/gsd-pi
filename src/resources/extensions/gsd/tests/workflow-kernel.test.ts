@@ -114,10 +114,10 @@ test("decideDispatchClaim runs with an opened dispatch id", () => {
   );
 });
 
-test("decideDispatchClaim runs degraded dispatches without a ledger id", () => {
+test("decideDispatchClaim skips degraded dispatches with a stable reason", () => {
   assert.deepEqual(
     decideDispatchClaim({ kind: "degraded" }),
-    { action: "run", dispatchId: null },
+    { action: "skip", reason: "dispatch-claim-degraded" },
   );
 });
 
