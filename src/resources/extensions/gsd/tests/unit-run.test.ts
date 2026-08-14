@@ -18,6 +18,7 @@ import {
 import { AutoSession } from "../auto/session.ts";
 import {
   claimUnitRun,
+  iterationDataForClaim,
   resolveExistingUnitRun,
 } from "../auto/unit-run.ts";
 import type { GSDState } from "../types.ts";
@@ -218,4 +219,25 @@ test("claimUnitRun degrades with a reason when the worker is missing", () => {
   if (result.kind !== "degraded") throw new Error("expected degraded");
   assert.equal(typeof result.reason, "string");
   assert.ok(result.reason.length > 0);
+});
+
+test("resolveExistingUnitRun claims when workerId is null", () => {
+  assert.deepEqual(
+    resolveExistingUnitRun({
+      workerId: null,
+      unitType: "plan-slice",
+      unitId: "M001/S01",
+      unitExecutionInFlight: false,
+    }),
+    { kind: "claim" },
+  );
+});
+
+test("iterationDataForClaim maps a null session milestone to undefined", () => {
+  const session = new AutoSession();
+  session.currentMilestoneId = null;
+  const data = iterationDataForClaim("plan-slice", "/S01", state, session);
+  assert.equal(data.mid, undefined);
+  assert.equal(data.unitType, "plan-slice");
+  assert.equal(data.unitId, "/S01");
 });

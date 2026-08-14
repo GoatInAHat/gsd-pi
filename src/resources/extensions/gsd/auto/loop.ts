@@ -872,8 +872,9 @@ export async function autoLoop(
             ...details,
           }),
         });
-        observedUnitType = iterData.unitType;
-        observedUnitId = iterData.unitId;
+        const customIterData = iterData;
+        observedUnitType = customIterData.unitType;
+        observedUnitId = customIterData.unitId;
 
         let customDispatchId: number | null = null;
         let customDispatchSettled = false;
@@ -942,8 +943,8 @@ export async function autoLoop(
             WORKER_HEARTBEAT_INTERVAL_MS,
             () => (deps.taskExecutionBoundary ?? runWithTaskExecutionAttempt)(
               {
-                unitType: iterData.unitType,
-                unitId: iterData.unitId,
+                unitType: customIterData.unitType,
+                unitId: customIterData.unitId,
                 dispatchId: customDispatchId,
                 workerId: s.workerId,
                 milestoneLeaseToken: s.milestoneLeaseToken,
@@ -956,7 +957,7 @@ export async function autoLoop(
               () => runUnitPhaseViaContract(
                 dispatchContract,
                 ic,
-                iterData,
+                customIterData,
                 loopState,
                 undefined,
                 unitDispatchDeps,
@@ -1088,14 +1089,14 @@ export async function autoLoop(
           verifyPolicy: async () => {
             if (policy.verifyWithEvidence) {
               const result = await policy.verifyWithEvidence(
-                iterData.unitType,
-                iterData.unitId,
+                customIterData.unitType,
+                customIterData.unitId,
                 { basePath: s.basePath },
               );
               verificationReads.push({ source: "policy", evidence: result.inputPayload });
               return result.outcome;
             }
-            const outcome = await policy.verify(iterData.unitType, iterData.unitId, { basePath: s.basePath });
+            const outcome = await policy.verify(customIterData.unitType, customIterData.unitId, { basePath: s.basePath });
             verificationReads.push({ source: "policy", evidence: JSON.stringify({ outcome }) });
             return outcome;
           },
@@ -1656,6 +1657,7 @@ export async function autoLoop(
       if (!iterData) {
         throw new Error("iteration data missing after dispatch");
       }
+      const unitIterData = iterData;
 
       if (dispatchId === null) {
       // Sidecar (and pending-dispatch tests without a UnitRun id) still claim
@@ -1783,8 +1785,8 @@ export async function autoLoop(
           WORKER_HEARTBEAT_INTERVAL_MS,
           () => (deps.taskExecutionBoundary ?? runWithTaskExecutionAttempt)(
             {
-              unitType: iterData.unitType,
-              unitId: iterData.unitId,
+              unitType: unitIterData.unitType,
+              unitId: unitIterData.unitId,
               dispatchId,
               workerId: s.workerId,
               milestoneLeaseToken: s.milestoneLeaseToken,
@@ -1797,7 +1799,7 @@ export async function autoLoop(
             () => runUnitPhaseViaContract(
               dispatchContract,
               ic,
-              iterData,
+              unitIterData,
               loopState,
               sidecarItem,
               unitDispatchDeps,

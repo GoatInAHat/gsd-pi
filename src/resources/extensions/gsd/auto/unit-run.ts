@@ -39,7 +39,7 @@ export type UnitRunAdvanceResolution =
   | { kind: "claim" };
 
 export function resolveExistingUnitRun(input: {
-  workerId: string | undefined;
+  workerId: string | null | undefined;
   unitType: string;
   unitId: string;
   unitExecutionInFlight: boolean;
@@ -68,7 +68,7 @@ export function iterationDataForClaim(
     finalPrompt: "",
     pauseAfterUatDispatch: false,
     state,
-    mid: parsed.milestone || session.currentMilestoneId,
+    mid: parsed.milestone || session.currentMilestoneId || undefined,
     midTitle: state.activeMilestone?.title,
     isRetry: false,
     previousTier: undefined,
