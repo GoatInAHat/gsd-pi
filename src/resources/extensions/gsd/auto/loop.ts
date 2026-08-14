@@ -1615,7 +1615,8 @@ export async function autoLoop(
         break;
       }
 
-      let dispatchClaim = openDispatchClaim(s, flowId, turnId, iterData, {
+      const openClaim = deps.openDispatchClaim ?? openDispatchClaim;
+      let dispatchClaim = openClaim(s, flowId, turnId, iterData, {
         getRecentDispatchesForUnit,
         recordDispatchClaim,
         markDispatchRunning,
@@ -1636,7 +1637,7 @@ export async function autoLoop(
           logLeaseRecoveryFailed: logDispatchLeaseRecoveryFailed,
         }, { forceReclaim: true });
         if (leaseRecovery.kind === "ready") {
-          dispatchClaim = openDispatchClaim(s, flowId, turnId, iterData, {
+          dispatchClaim = openClaim(s, flowId, turnId, iterData, {
             getRecentDispatchesForUnit,
             recordDispatchClaim,
             markDispatchRunning,
