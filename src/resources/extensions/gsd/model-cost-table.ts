@@ -64,7 +64,6 @@ export const BUNDLED_COST_TABLE: ModelCostEntry[] = [
   { id: "gpt-5.2-codex", inputPer1k: 0.005, outputPer1k: 0.02, updatedAt: "2026-03-29" },
   { id: "gpt-5.3-codex", inputPer1k: 0.005, outputPer1k: 0.02, updatedAt: "2026-03-29" },
   { id: "gpt-5.3-codex-spark", inputPer1k: 0.0003, outputPer1k: 0.0012, updatedAt: "2026-03-29" },
-  { id: "mai-code-1.1-flash", inputPer1k: 0.0002, outputPer1k: 0.0012, updatedAt: "2026-08-14" },
   { id: "gpt-5.4", inputPer1k: 0.005, outputPer1k: 0.02, updatedAt: "2026-03-29" },
   { id: "gpt-5.4-mini", inputPer1k: 0.00075, outputPer1k: 0.0045, updatedAt: "2026-04-18" },
   // GPT-5.5 API list price, also used for live Codex OAuth routing.
@@ -73,6 +72,9 @@ export const BUNDLED_COST_TABLE: ModelCostEntry[] = [
   { id: "gpt-5.6-sol", inputPer1k: 0.005, outputPer1k: 0.03, tiers: [{ inputTokensAbove: 272000, inputPer1k: 0.01, outputPer1k: 0.045 }], updatedAt: "2026-07-11" },
   { id: "gpt-5.6-terra", inputPer1k: 0.0025, outputPer1k: 0.015, tiers: [{ inputTokensAbove: 272000, inputPer1k: 0.005, outputPer1k: 0.0225 }], updatedAt: "2026-07-11" },
   { id: "gpt-5.6-luna", inputPer1k: 0.001, outputPer1k: 0.006, tiers: [{ inputTokensAbove: 272000, inputPer1k: 0.002, outputPer1k: 0.009 }], updatedAt: "2026-07-11" },
+
+  // GitHub Copilot
+  { id: "mai-code-1.1-flash", inputPer1k: 0.0002, outputPer1k: 0.0012, updatedAt: "2026-08-14" },
 
   // Google
   { id: "gemini-2.0-flash", inputPer1k: 0.0001, outputPer1k: 0.0004, updatedAt: "2025-03-15" },
