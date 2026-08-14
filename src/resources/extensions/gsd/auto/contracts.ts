@@ -20,6 +20,19 @@ export interface UnitRef {
   unitId: string;
 }
 
+export type AutoSkipCode = "unit-already-active" | "completed-no-advance";
+
+export const UNIT_ALREADY_ACTIVE_SKIP_CODE = "unit-already-active" as const;
+export const UNIT_ALREADY_ACTIVE_SKIP_REASON = "idempotent advance: unit already active";
+
+export function isUnitAlreadyActiveSkip(result: {
+  kind: string;
+  code?: string;
+  reason?: string;
+}): boolean {
+  return result.kind === "skipped" && result.code === UNIT_ALREADY_ACTIVE_SKIP_CODE;
+}
+
 export interface AutoStatus {
   phase: "idle" | "running" | "paused" | "stopped" | "error";
   activeUnit?: UnitRef;
@@ -49,8 +62,8 @@ export type AutoTerminalOutcome =
 export type AutoAdvanceResult =
   | { kind: "started" }
   | { kind: "resumed" }
-  | { kind: "advanced"; unit: UnitRef; stateSnapshot: GSDState }
-  | { kind: "skipped"; reason: string; stateSnapshot?: GSDState }
+  | { kind: "advanced"; unit: UnitRef; stateSnapshot: GSDState; dispatchId?: number }
+  | { kind: "skipped"; reason: string; code?: AutoSkipCode; stateSnapshot?: GSDState }
   | {
       kind: "blocked";
       reason: string;

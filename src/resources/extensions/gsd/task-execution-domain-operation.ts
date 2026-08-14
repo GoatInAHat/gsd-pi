@@ -32,7 +32,7 @@ import {
   internalExecutionInvocation,
   type ExecutionInvocation,
 } from "./execution-invocation.js";
-import { isDbAvailable } from "./gsd-db.js";
+import { isDbAvailable, setTaskSummaryMd } from "./gsd-db.js";
 import { ensureHostTechnicalCriterion } from "./task-verification-domain-operation.js";
 import type { RecoveryAction } from "./recovery-classification.js";
 import type { TaskFailureKind } from "./recovery-policy.js";
@@ -452,6 +452,9 @@ export function settleTaskAttempt(input: SettleTaskAttemptInput): SettleTaskAtte
     },
   }, (context) => {
     const attempt = loadAttemptExecution(input.attemptId);
+    if (input.outcome === "interrupted") {
+      setTaskSummaryMd(attempt.milestone_id, attempt.slice_id, attempt.task_id, "");
+    }
     if (input.stagedTaskCompletion) {
       writeStagedTaskCompletion(context, {
         milestoneId: attempt.milestone_id,

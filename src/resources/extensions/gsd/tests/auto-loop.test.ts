@@ -4834,7 +4834,7 @@ test("abnormal unit exit abandons the active orchestration marker before the nex
           };
         }
         if (activeMarker) {
-          return { kind: "skipped" as const, reason: "idempotent advance: unit already active" };
+          return { kind: "skipped" as const, code: "unit-already-active" as const, reason: "idempotent advance: unit already active" };
         }
         return { kind: "stopped" as const, reason: "no active unit" };
       },
@@ -4899,7 +4899,7 @@ test("#1721: idle active-unit skip releases the stale claim and re-advances imme
       advance: async () => {
         advanceCalls++;
         if (claimActive) {
-          return { kind: "skipped" as const, reason: "idempotent advance: unit already active" };
+          return { kind: "skipped" as const, code: "unit-already-active" as const, reason: "idempotent advance: unit already active" };
         }
         s.pendingOrchestrationDispatch = {
           ...unit,
@@ -4981,7 +4981,7 @@ test("#1672: an unclearable active-unit marker still makes following skips ledge
             stateSnapshot: await makeMockDeps().deriveState(s.basePath),
           };
         }
-        return { kind: "skipped" as const, reason: "idempotent advance: unit already active" };
+        return { kind: "skipped" as const, code: "unit-already-active" as const, reason: "idempotent advance: unit already active" };
       },
       completeActiveUnit: async () => {},
       retryActiveUnit: async () => {},
@@ -5047,7 +5047,7 @@ test("finalize exceptions abandon the active orchestration marker before the nex
           };
         }
         if (activeMarker) {
-          return { kind: "skipped" as const, reason: "idempotent advance: unit already active" };
+          return { kind: "skipped" as const, code: "unit-already-active" as const, reason: "idempotent advance: unit already active" };
         }
         return { kind: "stopped" as const, reason: "no active unit" };
       },
@@ -5113,7 +5113,7 @@ test("autoLoop does not pause on repeated idempotent advance skips while a unit 
       advance: async () => {
         advanceCalls++;
         if (advanceCalls >= 5) s.active = false;
-        return { kind: "skipped" as const, reason: "idempotent advance: unit already active" };
+        return { kind: "skipped" as const, code: "unit-already-active" as const, reason: "idempotent advance: unit already active" };
       },
       completeActiveUnit: async () => {},
       retryActiveUnit: async () => {},

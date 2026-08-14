@@ -114,10 +114,14 @@ test("decideDispatchClaim runs with an opened dispatch id", () => {
   );
 });
 
-test("decideDispatchClaim skips degraded dispatches with a stable reason", () => {
+test("decideDispatchClaim stops degraded dispatches with the claim reason", () => {
   assert.deepEqual(
-    decideDispatchClaim({ kind: "degraded" }),
-    { action: "skip", reason: "dispatch-claim-degraded" },
+    decideDispatchClaim({ kind: "degraded", reason: "missing-worker-or-lease" }),
+    {
+      action: "stop",
+      reason: "dispatch-claim-degraded",
+      message: "missing-worker-or-lease",
+    },
   );
 });
 

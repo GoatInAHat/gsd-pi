@@ -710,6 +710,7 @@ test("advance() is idempotent for the same active unit", async (t) => {
   assert.equal(second.kind, "skipped");
   if (second.kind !== "skipped") return;
   assert.equal(second.reason, "idempotent advance: unit already active");
+  assert.equal(second.code, "unit-already-active");
 });
 
 test("idempotency skip fires with its own reason before saturation", async (t) => {
@@ -723,6 +724,7 @@ test("idempotency skip fires with its own reason before saturation", async (t) =
   assert.equal(second.kind, "skipped");
   if (second.kind !== "skipped") return;
   assert.equal(second.reason, "idempotent advance: unit already active");
+  assert.equal(second.code, "unit-already-active");
 });
 
 test("completeActiveUnit clears in-flight idempotency and stops stale same-unit advance", async (t) => {

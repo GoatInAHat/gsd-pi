@@ -13,6 +13,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@gsd/pi-coding-agent";
 
 import type { AutoAdvanceResult, AutoOrchestrationModule, AutoSessionContext, AutoStatus, AutoTerminalOutcome, UnitRef } from "./contracts.js";
+import { UNIT_ALREADY_ACTIVE_SKIP_CODE, UNIT_ALREADY_ACTIVE_SKIP_REASON } from "./contracts.js";
 import type { AutoSession, PendingOrchestrationDispatch } from "./session.js";
 import type { GSDState, Phase } from "../types.js";
 import type { MinimalModelRegistry } from "../context-budget.js";
@@ -1248,6 +1249,7 @@ export class AutoOrchestrator implements AutoOrchestrationModule {
         }
         const skipped: AutoAdvanceResult = {
           kind: "skipped",
+          code: "completed-no-advance",
           reason: `state did not advance after finalized ${decision.unitType} ${decision.unitId}`,
           stateSnapshot: reconciliation.stateSnapshot,
         };
@@ -1275,7 +1277,11 @@ export class AutoOrchestrator implements AutoOrchestrationModule {
         // Unit already active — benign no-op. Return skipped so the loop re-polls
         // without cancelling the in-flight unit (blocked+pause would force-cancel it).
         this.clearPendingDispatch();
-        const skipped: AutoAdvanceResult = { kind: "skipped", reason: "idempotent advance: unit already active" };
+        const skipped: AutoAdvanceResult = {
+          kind: "skipped",
+          code: UNIT_ALREADY_ACTIVE_SKIP_CODE,
+          reason: UNIT_ALREADY_ACTIVE_SKIP_REASON,
+        };
         this.journalTransition({
           name: "advance-skipped",
           reason: skipped.reason,
