@@ -424,12 +424,20 @@ export async function runWithTaskExecutionAttempt(
       retryOfAttemptId = predecessor.attemptId;
     }
   } else if (predecessor) {
+    const terminalRecovery = deps.readTaskRecoveryRoute(predecessor.attemptId);
+    if (
+      terminalRecovery?.recoveryOwner === "agent" &&
+      terminalRecovery.action === "abort" &&
+      !terminalRecovery.resumeAuthorized
+    ) {
+      return taskRecoveryAbortResult(terminalRecovery.recoveryActionId);
+    }
     if (isTaskAttemptAwaitingVerification(predecessor)) {
       return { action: "next", data: {} };
     }
     if (predecessor.nextStage === "route") {
       if (predecessor.outcome === "succeeded") {
-        const recovery = deps.readTaskRecoveryRoute(predecessor.attemptId);
+        const recovery = terminalRecovery;
         if (!recovery) {
           const verdict = deps.readTaskTechnicalVerdict(predecessor.attemptId);
           if (!verdict) {
@@ -439,9 +447,6 @@ export async function runWithTaskExecutionAttempt(
         }
         if (recovery.recoveryOwner !== "agent") {
           return { action: "next", data: {} };
-        }
-        if (recovery.action === "abort" && !recovery.resumeAuthorized) {
-          return taskRecoveryAbortResult(recovery.recoveryActionId);
         }
       } else {
         if (!predecessor.resultId) {

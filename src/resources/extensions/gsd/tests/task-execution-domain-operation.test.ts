@@ -366,6 +366,8 @@ test("interruptOrphanedTaskAttempts settles a running Attempt after its lease hi
     );
   `);
 
+  db().exec(`UPDATE tasks SET full_summary_md = 'leaked staged summary' WHERE id = 'T01'`);
+
   const repaired = interruptOrphanedTaskAttempts({
     workerId: "worker-2",
     milestoneId: "M001",
@@ -389,6 +391,7 @@ test("interruptOrphanedTaskAttempts settles a running Attempt after its lease hi
     SELECT outcome, failure_class FROM workflow_attempt_results
   `), { outcome: "interrupted", failure_class: "stale-worker" });
   assert.equal(row("SELECT status FROM unit_dispatches").status, "failed");
+  assert.equal(row("SELECT full_summary_md FROM tasks").full_summary_md, "");
 });
 
 for (const contract of [

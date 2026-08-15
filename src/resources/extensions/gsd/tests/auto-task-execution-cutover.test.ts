@@ -1077,7 +1077,7 @@ test("a newly routed failed predecessor redispatches before its lineage-linked r
   assert.deepEqual(routed, { action: "retry", reason: "task-recovery-repair" });
   assert.equal(runs, 0);
   assert.equal(domain.claims.length, 0);
-  assert.deepEqual(domain.calls.map((call) => call.name), ["read-latest", "route"]);
+  assert.deepEqual(domain.calls.map((call) => call.name), ["read-latest", "read-recovery", "route"]);
 
   routeStatus = "replayed";
   const resumed = await runWithTaskExecutionAttempt(input({ dispatchId: 42 }), async () => {
@@ -1113,6 +1113,40 @@ test("a succeeded predecessor awaiting verification resumes verification without
   }, domain.deps);
 
   assert.deepEqual(result, { action: "next", data: {} });
+  assert.equal(ran, false);
+  assert.equal(domain.claims.length, 0);
+});
+
+test("an unresumed abort on a failed predecessor stops before a replacement claim", async () => {
+  const { runWithTaskExecutionAttempt } = await subject();
+  const domain = fakeDomain();
+  domain.attempts.push({
+    attemptId: "attempt-1",
+    resultId: "result-1",
+    attemptNumber: 1,
+    state: "settled",
+    outcome: "failed",
+    nextStage: "route",
+    coordinationDispatchId: 40,
+    workerId: "worker-1",
+    milestoneLeaseToken: 7,
+  });
+  let ran = false;
+
+  const result = await runWithTaskExecutionAttempt(input(), async () => {
+    ran = true;
+    return { action: "next", data: {} };
+  }, {
+    ...domain.deps,
+    readTaskRecoveryRoute() {
+      return { recoveryActionId: "recovery-action-1", recoveryOwner: "agent", action: "abort" };
+    },
+  });
+
+  assert.deepEqual(result, {
+    action: "break",
+    reason: TASK_RECOVERY_ABORT_REASON,
+  });
   assert.equal(ran, false);
   assert.equal(domain.claims.length, 0);
 });
