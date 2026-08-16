@@ -111,7 +111,7 @@ describe("verification-gate: discovery", () => {
     assert.deepStrictEqual(result.commands, [
       "npm run typecheck",
       "npm run lint",
-      "npm run test",
+      "npm test",
     ]);
     assert.equal(result.source, "package-json");
   });
@@ -169,7 +169,7 @@ describe("verification-gate: discovery", () => {
     assert.equal(result.source, "task-plan");
   });
 
-  test("package.json with only test script → returns only npm run test", () => {
+  test("package.json with only test script → returns only npm test", () => {
     writeFileSync(
       join(tmp, "package.json"),
       JSON.stringify({
@@ -181,7 +181,103 @@ describe("verification-gate: discovery", () => {
       }),
     );
     const result = discoverCommands({ cwd: tmp });
-    assert.deepStrictEqual(result.commands, ["npm run test"]);
+    assert.deepStrictEqual(result.commands, ["npm test"]);
+    assert.equal(result.source, "package-json");
+  });
+
+  test("pnpm-lock.yaml present → uses pnpm commands", () => {
+    writeFileSync(
+      join(tmp, "package.json"),
+      JSON.stringify({
+        scripts: {
+          typecheck: "tsc --noEmit",
+          lint: "eslint .",
+          test: "vitest",
+        },
+      }),
+    );
+    writeFileSync(join(tmp, "pnpm-lock.yaml"), "lockfileVersion: 9.0");
+    const result = discoverCommands({ cwd: tmp });
+    assert.deepStrictEqual(result.commands, [
+      "pnpm typecheck",
+      "pnpm lint",
+      "pnpm test",
+    ]);
+    assert.equal(result.source, "package-json");
+  });
+
+  test("yarn.lock present → uses yarn commands", () => {
+    writeFileSync(
+      join(tmp, "package.json"),
+      JSON.stringify({
+        scripts: {
+          typecheck: "tsc --noEmit",
+          lint: "eslint .",
+          test: "vitest",
+        },
+      }),
+    );
+    writeFileSync(join(tmp, "yarn.lock"), "# yarn lockfile v1");
+    const result = discoverCommands({ cwd: tmp });
+    assert.deepStrictEqual(result.commands, [
+      "yarn typecheck",
+      "yarn lint",
+      "yarn test",
+    ]);
+    assert.equal(result.source, "package-json");
+  });
+
+  test("bun.lockb present → uses bun commands", () => {
+    writeFileSync(
+      join(tmp, "package.json"),
+      JSON.stringify({
+        scripts: {
+          typecheck: "tsc --noEmit",
+          test: "bun test",
+        },
+      }),
+    );
+    writeFileSync(join(tmp, "bun.lockb"), "binary");
+    const result = discoverCommands({ cwd: tmp });
+    assert.deepStrictEqual(result.commands, [
+      "bun run typecheck",
+      "bun run test",
+    ]);
+    assert.equal(result.source, "package-json");
+  });
+
+  test("packageManager field in package.json → uses specified manager", () => {
+    writeFileSync(
+      join(tmp, "package.json"),
+      JSON.stringify({
+        packageManager: "pnpm@9.12.2",
+        scripts: {
+          typecheck: "tsc --noEmit",
+          lint: "eslint .",
+        },
+      }),
+    );
+    const result = discoverCommands({ cwd: tmp });
+    assert.deepStrictEqual(result.commands, [
+      "pnpm typecheck",
+      "pnpm lint",
+    ]);
+    assert.equal(result.source, "package-json");
+  });
+
+  test("lock file takes precedence over packageManager field", () => {
+    writeFileSync(
+      join(tmp, "package.json"),
+      JSON.stringify({
+        packageManager: "npm@10.0.0",  // says npm
+        scripts: {
+          typecheck: "tsc --noEmit",
+        },
+      }),
+    );
+    writeFileSync(join(tmp, "pnpm-lock.yaml"), "lockfileVersion: 9.0");  // but has pnpm lock
+    const result = discoverCommands({ cwd: tmp });
+    assert.deepStrictEqual(result.commands, ["pnpm typecheck"]);
     assert.equal(result.source, "package-json");
   });
 
@@ -228,7 +324,7 @@ describe("verification-gate: discovery", () => {
     });
     // Prose should be rejected, so it falls through to package.json
     assert.equal(result.source, "package-json");
-    assert.deepStrictEqual(result.commands, ["npm run test"]);
+    assert.deepStrictEqual(result.commands, ["npm test"]);
   });
 
   test("non-ASCII prose taskPlanVerify is rejected, falls through to package.json", () => {
@@ -243,7 +339,7 @@ describe("verification-gate: discovery", () => {
     });
     // Non-ASCII prose should be rejected, so it falls through to package.json
     assert.equal(result.source, "package-json");
-    assert.deepStrictEqual(result.commands, ["npm run test"]);
+    assert.deepStrictEqual(result.commands, ["npm test"]);
   });
 
   test("prose taskPlanVerify with no fallback checks → source task-plan-prose", () => {
@@ -716,8 +812,8 @@ test("gate execution uses cwd for spawnSync", () => {
     });
 
     assert.equal(result.checks.length, 2);
-    assert.equal(result.checks[0].command, "[frontend] npm run test");
-    assert.equal(result.checks[1].command, "[backend] npm run test");
+    assert.equal(result.checks[0].command, "[frontend] npm test");
+    assert.equal(result.checks[1].command, "[backend] npm test");
     assert.equal(result.discoverySource, "package-json");
   });
 });
