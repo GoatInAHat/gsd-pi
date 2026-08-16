@@ -733,11 +733,11 @@ export function convertTools(
 export function mapToolChoice(choice: string): FunctionCallingConfigMode {
 	switch (choice) {
 		case "none":
-			return "NONE";
+			return "NONE" as FunctionCallingConfigMode;
 		case "any":
-			return "ANY";
+			return "ANY" as FunctionCallingConfigMode;
 		default:
-			return "AUTO";
+			return "AUTO" as FunctionCallingConfigMode;
 	}
 }
 
