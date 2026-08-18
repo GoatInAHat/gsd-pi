@@ -1,6 +1,10 @@
 // Project/App: gsd-pi
 // File Purpose: Stage canonical Task results and publish verified legacy completion projections.
 
+import { readFile } from "node:fs/promises";
+import { join, relative } from "node:path";
+
+import { mirrorArtifactToActiveWorktreeProjection } from "./artifact-projection-mirror.js";
 import type { TaskRow } from "./db-task-slice-rows.js";
 import { executeDomainOperation } from "./db/domain-operation.js";
 import { getDb } from "./db/engine.js";
@@ -17,8 +21,7 @@ import {
   getSlice,
 } from "./gsd-db.js";
 import { renderPlanCheckboxes, renderTaskSummary } from "./markdown-renderer.js";
-import { clearPathCache, resolveTaskFile } from "./paths.js";
-import { isGsdWorktreePath, resolveWorktreeProjectRoot } from "./worktree-root.js";
+import { clearPathCache, resolveGsdPathContract, resolveTaskFile } from "./paths.js";
 import {
   closeTaskQualityGates,
   type TaskQualityGateContent,
@@ -244,9 +247,11 @@ async function renderTaskSummaryProjection(
   basePath: string,
   task: TaskCompletionIdentity,
 ): Promise<string> {
+  const contract = resolveGsdPathContract(basePath);
+
   try {
     const wroteSummary = await renderTaskSummary(
-      basePath,
+      contract.projectRoot,
       task.milestoneId,
       task.sliceId,
       task.taskId,
@@ -258,14 +263,21 @@ async function renderTaskSummaryProjection(
 
   clearPathCache();
   const summaryPath = resolveTaskFile(
-    basePath,
+    contract.projectRoot,
     task.milestoneId,
     task.sliceId,
     task.taskId,
     "SUMMARY",
   );
   if (!summaryPath) throw new Error("Task completion projection failed: summary path is missing");
-  return summaryPath;
+  const relativePath = relative(contract.projectGsd, summaryPath);
+  await mirrorArtifactToActiveWorktreeProjection(
+    basePath,
+    relativePath,
+    await readFile(summaryPath, "utf8"),
+    true,
+  );
+  return contract.worktreeGsd ? join(contract.worktreeGsd, relativePath) : summaryPath;
 }
 
 async function renderPublishedTaskCompletionProjections(
@@ -325,15 +337,6 @@ export async function stageTaskCompletion(
   let summaryPath = "";
   if (!blocked) {
     summaryPath = await renderTaskSummaryProjection(input.basePath, input.task);
-    // (#1763) A staged SUMMARY written only into the worktree-local `.gsd` is
-    // orphaned when an unmerged worktree is torn down — dual-write the
-    // canonical copy to the project root through the same projection seam.
-    if (isGsdWorktreePath(input.basePath)) {
-      const projectRoot = resolveWorktreeProjectRoot(input.basePath);
-      if (projectRoot && projectRoot !== input.basePath) {
-        await renderTaskSummaryProjection(projectRoot, input.task);
-      }
-    }
   }
   return {
     status: settlement.status,

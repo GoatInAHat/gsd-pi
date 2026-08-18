@@ -88,6 +88,7 @@ import { logError, logWarning } from "../workflow-logger.js";
 import { invalidateStateCache } from "../state.js";
 import { flushWorkflowProjections } from "../projection-flush.js";
 import { loadEffectiveGSDPreferences } from "../preferences.js";
+import { mirrorArtifactToActiveWorktreeProjection } from "../artifact-projection-mirror.js";
 import { parseProject } from "../schemas/parsers.js";
 import { autoSession, getAutoRuntimeSnapshot, isAutoActive } from "../auto-runtime-state.js";
 import { renderPlanFromDb, writeTaskSummaryProjection } from "../markdown-renderer.js";
@@ -431,30 +432,6 @@ function rebuildMilestoneSequenceSection(content: string, milestones: MilestoneS
     "",
     ...lines.slice(bodyEnd),
   ].join("\n");
-}
-
-async function mirrorArtifactToActiveWorktreeProjection(
-  basePath: string,
-  relativePath: string,
-  content: string,
-  required: boolean = false,
-): Promise<void> {
-  const contract = resolveGsdPathContract(basePath);
-  if (!contract.worktreeGsd) return;
-  if (contract.worktreeGsd === contract.projectGsd) return;
-
-  const fullPath = join(contract.worktreeGsd, relativePath);
-  try {
-    await saveFile(fullPath, content);
-    clearPathCache();
-    clearParseCache();
-    invalidateStateCache();
-  } catch (err) {
-    logWarning("tool", `gsd_summary_save worktree projection mirror failed: ${(err as Error).message}`, {
-      path: relativePath,
-    });
-    if (required) throw err;
-  }
 }
 
 export async function executeSummarySave(

@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { afterEach, test } from "node:test";
 
 import {
@@ -728,6 +728,31 @@ test("#1763: staging from a milestone worktree dual-writes the SUMMARY to the pr
     readFileSync(staged.summaryPath, "utf8"),
     "the project-root copy is byte-identical to the worktree-local render",
   );
+});
+
+test("#1763: publication from a milestone worktree updates the project-root SUMMARY", async () => {
+  const { publishVerifiedTaskCompletion, stageTaskCompletion } = await subject();
+  const { basePath, attemptId } = createFixture();
+  const staged = await stageTaskCompletion(stageInput(basePath));
+  const stagedContent = readFileSync(staged.summaryPath, "utf8");
+  const worktreePath = join(basePath, ".gsd-worktrees", "M001");
+  mkdirSync(worktreePath, { recursive: true });
+  recordPassingHostVerdict(worktreePath, attemptId);
+
+  const published = await publishVerifiedTaskCompletion(publishInput(worktreePath, attemptId));
+
+  assert.equal(
+    readFileSync(staged.summaryPath, "utf8"),
+    readFileSync(published.summaryPath, "utf8"),
+    "the project-root copy is updated to the verified publication",
+  );
+  assert.notEqual(readFileSync(staged.summaryPath, "utf8"), stagedContent);
+  assert.equal(
+    relative(join(basePath, ".gsd"), staged.summaryPath),
+    relative(join(worktreePath, ".gsd"), published.summaryPath),
+    "the worktree mirrors the canonical artifact path",
+  );
+  assert.equal(count("artifacts"), 1, "publication updates one canonical artifact row");
 });
 
 test("#1677: inside a worktree the classifier falls back to the project-root copy", async () => {
