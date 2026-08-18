@@ -12,12 +12,15 @@ import { mergeMilestoneToMain } from "../auto-worktree-merge.ts";
 import { checkCloseoutConsistencyGate } from "../closeout-consistency-gate.ts";
 import {
   closeDatabase,
+  getGateResults,
   insertAssessment,
+  insertGateRow,
   insertMilestone,
   insertSlice,
   insertTask,
   openDatabase,
 } from "../gsd-db.ts";
+import type { GateId } from "../types.ts";
 
 function git(args: string[], cwd: string): string {
   return execFileSync("git", args, {
@@ -89,5 +92,45 @@ test("closeout consistency treats deferred slices as inactive", () => {
     assert.deepEqual(checkCloseoutConsistencyGate("M001"), { ok: true });
   } finally {
     closeDatabase();
+  }
+});
+
+test("closeout consistency repairs evidence-backed gates before checking remaining pending gates", () => {
+  const repo = createRepo();
+  try {
+    assert.equal(openDatabase(join(repo, ".gsd", "gsd.db")), true);
+    insertMilestone({ id: "M001", title: "Milestone One", status: "complete" });
+    insertSlice({ milestoneId: "M001", id: "S01", title: "Done", status: "complete" });
+    insertTask({ milestoneId: "M001", sliceId: "S01", id: "T01", title: "Done", status: "complete" });
+    insertAssessment({
+      path: "milestones/M001/M001-VALIDATION.md",
+      milestoneId: "M001",
+      status: "pass",
+      scope: "milestone-validation",
+      fullContent: "verdict: pass",
+    });
+    insertGateRow({ milestoneId: "M001", sliceId: "S01", gateId: "Q3", scope: "slice" });
+    insertGateRow({
+      milestoneId: "M001",
+      sliceId: "S01",
+      gateId: "UAT" as GateId,
+      scope: "slice",
+    });
+    mkdirSync(join(repo, ".gsd", "milestones", "M001", "slices", "S01"), { recursive: true });
+    writeFileSync(
+      join(repo, ".gsd", "milestones", "M001", "slices", "S01", "S01-PLAN.md"),
+      "# S01\n\n## Threat Surface\n\n- Inputs are validated.\n",
+    );
+
+    const result = checkCloseoutConsistencyGate("M001", { artifactBasePath: repo });
+
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.reason, "quality-gate-pending");
+    const q3 = getGateResults("M001", "S01").find((gate) => gate.gate_id === "Q3");
+    assert.equal(q3?.status, "complete");
+    assert.equal(q3?.verdict, "pass");
+  } finally {
+    closeDatabase();
+    if (existsSync(repo)) rmSync(repo, { recursive: true, force: true });
   }
 });
