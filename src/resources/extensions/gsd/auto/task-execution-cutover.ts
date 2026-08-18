@@ -38,6 +38,9 @@ export interface TaskExecutionCutoverInput {
 
 export interface TaskExecutionCutoverDeps {
   readLatestTaskAttempt(task: ClaimTaskAttemptInput["task"]): TaskExecutionAttemptSnapshot | null;
+  readTerminalTaskRecoveryAbort(
+    task: ClaimTaskAttemptInput["task"],
+  ): { recoveryActionId: string } | null;
   readTaskAttempt(attemptId: string): TaskExecutionAttemptSnapshot | null;
   readTaskRecoveryRoute(attemptId: string): Pick<
     TaskRecoveryRouteSnapshot,
@@ -49,16 +52,37 @@ export interface TaskExecutionCutoverDeps {
   routeTaskFailure(input: RouteFailureInput): TaskRecoveryReceipt;
 }
 
+type TaskRecoveryDecisionReceipt = Pick<
+  TaskRecoveryReceipt,
+  "status" | "action" | "recoveryActionId" | "resumeAuthorized"
+>;
+
+function readTerminalAbortDecision(
+  input: TaskExecutionCutoverInput,
+  deps: TaskExecutionCutoverDeps,
+): TaskRecoveryDecisionReceipt | null {
+  const terminal = deps.readTerminalTaskRecoveryAbort(parseTaskIdentity(input.unitId));
+  if (!terminal) return null;
+  return {
+    status: "replayed",
+    action: "abort",
+    recoveryActionId: terminal.recoveryActionId,
+    resumeAuthorized: false,
+  };
+}
+
 function routeStoredTechnicalFailure(
   input: TaskExecutionCutoverInput,
   attempt: TaskExecutionAttemptSnapshot,
   verdict: TaskTechnicalVerdictSnapshot,
   deps: TaskExecutionCutoverDeps,
-): TaskRecoveryReceipt {
+): TaskRecoveryDecisionReceipt {
   if (!attempt.resultId) throw new Error("Host verification Attempt Result is missing");
   if (verdict.verdict === "pass") {
     throw new Error("Task recovery cannot route a passing Technical Verdict");
   }
+  const terminal = readTerminalAbortDecision(input, deps);
+  if (terminal) return terminal;
   return deps.routeTaskFailure({
     invocation: internalExecutionInvocation(`internal:auto:attempt.route:${attempt.resultId}`),
     attemptId: attempt.attemptId,
@@ -179,7 +203,7 @@ function interruptStaleAttempt(
   predecessor: TaskExecutionAttemptSnapshot,
   identity: ReturnType<typeof requireTaskClaimIdentity>,
   deps: TaskExecutionCutoverDeps,
-): TaskRecoveryReceipt {
+): TaskRecoveryDecisionReceipt {
   if (identity.milestoneLeaseToken < predecessor.milestoneLeaseToken) {
     // A strictly older token means the running Attempt belongs to a newer
     // session; this stale session must not settle it, only refuse.
@@ -273,7 +297,7 @@ function settleRunningAttempt(
   summary: string,
   deps: TaskExecutionCutoverDeps,
   error: unknown = new Error(summary),
-): TaskRecoveryReceipt {
+): TaskRecoveryDecisionReceipt {
   const attempt = deps.readTaskAttempt(attemptId);
   let resultId = attempt?.resultId;
   const recovery = attempt?.resultRecovery ?? taskRecoveryClassification(
@@ -353,7 +377,9 @@ function routeTaskFailure(
   summary: string,
   recovery: TaskResultRecoveryClassification,
   deps: TaskExecutionCutoverDeps,
-): TaskRecoveryReceipt {
+): TaskRecoveryDecisionReceipt {
+  const terminal = readTerminalAbortDecision(input, deps);
+  if (terminal) return terminal;
   return deps.routeTaskFailure({
     invocation: internalExecutionInvocation(`internal:auto:attempt.route:${resultId}`),
     attemptId,
@@ -385,7 +411,7 @@ function taskRecoveryAbortResult(recoveryActionId: string): UnitPhaseResult {
 }
 
 function applyRecoveryDecision(
-  recovery: TaskRecoveryReceipt,
+  recovery: TaskRecoveryDecisionReceipt,
 ): UnitPhaseResult {
   switch (recovery.action) {
     case "retry":

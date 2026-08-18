@@ -144,6 +144,7 @@ import { publishVerifiedTaskCompletion } from "../task-completion-compatibility-
 import { readTaskTechnicalVerdict } from "../task-verification-domain-operation.js";
 import {
   readTaskRecoveryRoute,
+  readTerminalTaskRecoveryAbort,
   recordFailureAndSelectRecovery,
 } from "../task-recovery-domain-operation.js";
 import { verifyExpectedArtifact } from "../artifact-verification.js";
@@ -211,6 +212,7 @@ const ORCHESTRATION_MISSING_REASON =
 const TASK_EXECUTION_CUTOVER_DEPS = {
   claimTaskAttempt,
   readLatestTaskAttempt,
+  readTerminalTaskRecoveryAbort,
   readTaskAttempt,
   readTaskRecoveryRoute,
   readTaskTechnicalVerdict,

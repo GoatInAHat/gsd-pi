@@ -37,6 +37,7 @@ import {
 } from "../task-verification-domain-operation.js";
 import { publishVerifiedTaskCompletion } from "../task-completion-compatibility-adapter.js";
 import { captureVerificationSourceSnapshot } from "../verification-source-integrity.js";
+import { readTerminalTaskRecoveryAbort } from "../artifact-verification.js";
 
 // The stuck-state resume key must ride along with every terminal abort break so an
 // operator can call gsd_task_recovery_resume without querying the database by hand.
@@ -82,6 +83,7 @@ interface CutoverInput {
 
 interface CutoverDeps {
   readLatestTaskAttempt(task: TaskIdentity): AttemptSnapshot | null;
+  readTerminalTaskRecoveryAbort(task: TaskIdentity): { recoveryActionId: string } | null;
   readTaskAttempt(attemptId: string): AttemptSnapshot | null;
   readTaskRecoveryRoute(attemptId: string): {
     recoveryActionId: string;
@@ -259,6 +261,9 @@ function fakeDomain() {
       // later settlements must not mutate what a caller already saw.
       return attempt ? { ...attempt } : null;
     },
+    readTerminalTaskRecoveryAbort() {
+      return null;
+    },
     readTaskAttempt(attemptId) {
       calls.push({ name: "read-attempt", value: attemptId });
       const attempt = attempts.find((candidate) => candidate.attemptId === attemptId);
@@ -432,6 +437,9 @@ function insertClaimedDispatch(attemptNumber: number): number {
 function canonicalDeps(): CutoverDeps {
   return {
     readLatestTaskAttempt,
+    readTerminalTaskRecoveryAbort(task) {
+      return readTerminalTaskRecoveryAbort(task.milestoneId, task.sliceId, task.taskId);
+    },
     readTaskAttempt,
     readTaskRecoveryRoute,
     readTaskTechnicalVerdict,
@@ -1093,6 +1101,86 @@ test("a newly routed failed predecessor redispatches before its lineage-linked r
   assert.equal(resumed.action, "next");
   assert.equal(runs, 1);
   assert.equal(domain.claims[0].retryOfAttemptId, "attempt-1");
+});
+
+test("a historical terminal abort stops failed-result routing before its idempotency key is reused", async () => {
+  const { runWithTaskExecutionAttempt } = await subject();
+  const domain = fakeDomain();
+  domain.attempts.push({
+    attemptId: "attempt-2",
+    resultId: "result-stale-route",
+    attemptNumber: 2,
+    state: "settled",
+    outcome: "failed",
+    nextStage: "route",
+    coordinationDispatchId: 42,
+    workerId: "worker-1",
+    milestoneLeaseToken: 7,
+  });
+
+  const result = await runWithTaskExecutionAttempt(input(), async () => ({
+    action: "next",
+    data: {},
+  }), {
+    ...domain.deps,
+    readTaskRecoveryRoute: () => null,
+    readTerminalTaskRecoveryAbort: () => ({ recoveryActionId: "historical-abort" }),
+    routeTaskFailure() {
+      throw new Error("attempt.route must not be dispatched");
+    },
+  });
+
+  assert.deepEqual(result, {
+    action: "break",
+    reason:
+      "task-recovery-abort (recoveryActionId: historical-abort; resume with gsd_task_recovery_resume)",
+  });
+  assert.equal(domain.claims.length, 0);
+});
+
+test("a historical terminal abort stops stored-verdict routing before its idempotency key is reused", async () => {
+  const { runWithTaskExecutionAttempt } = await subject();
+  const domain = fakeDomain();
+  domain.attempts.push({
+    attemptId: "attempt-2",
+    resultId: "result-stale-route",
+    attemptNumber: 2,
+    state: "settled",
+    outcome: "succeeded",
+    nextStage: "route",
+    coordinationDispatchId: 42,
+    workerId: "worker-1",
+    milestoneLeaseToken: 7,
+  });
+
+  const result = await runWithTaskExecutionAttempt(input(), async () => ({
+    action: "next",
+    data: {},
+  }), {
+    ...domain.deps,
+    readTaskRecoveryRoute: () => null,
+    readTaskTechnicalVerdict: () => ({
+      attemptId: "attempt-2",
+      verdictId: "verdict-1",
+      evidenceId: "evidence-1",
+      verdict: "fail",
+      testedSourceRevision: "revision-1",
+      nextStage: "route",
+      operationId: "verdict-operation-1",
+      resultingRevision: 5,
+    }),
+    readTerminalTaskRecoveryAbort: () => ({ recoveryActionId: "historical-abort" }),
+    routeTaskFailure() {
+      throw new Error("attempt.route must not be dispatched");
+    },
+  });
+
+  assert.deepEqual(result, {
+    action: "break",
+    reason:
+      "task-recovery-abort (recoveryActionId: historical-abort; resume with gsd_task_recovery_resume)",
+  });
+  assert.equal(domain.claims.length, 0);
 });
 
 test("a succeeded predecessor awaiting verification resumes verification without executing again", async () => {

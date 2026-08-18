@@ -426,7 +426,7 @@ test("Pi canonical and alias reopen calls converge without replaying projection 
   assert.equal(row(`SELECT status FROM tasks WHERE id = 'T01'`).status, "pending");
 });
 
-test("a canonical blocker submission records a failed Result and routes instead of awaiting verification", async () => {
+test("a canonical blocker submission records a failed Result for recovery without routing early", async () => {
   const basePath = createBase();
   const attemptId = claimCanonicalAttempt(basePath);
 
@@ -447,6 +447,15 @@ test("a canonical blocker submission records a failed Result and routes instead 
     outcome: "failed",
     failure_class: "blocker-discovered",
   });
+  assert.equal(
+    row(`
+      SELECT COUNT(*) AS count
+      FROM workflow_operations
+      WHERE operation_type = 'attempt.route'
+    `).count,
+    0,
+    "blocker staging must leave recovery routing to the cutover boundary",
+  );
 });
 
 test("canonical escalation fails closed until the durable adapter can persist it", async () => {

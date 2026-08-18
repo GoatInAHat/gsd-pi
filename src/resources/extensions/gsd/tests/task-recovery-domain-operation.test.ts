@@ -1448,6 +1448,32 @@ test("a terminal abort on a superseded Attempt stops dispatch and resumes (#1754
   // resume predicate accepts it instead of throwing (#1754 residual).
   const terminal = readTerminalTaskRecoveryAbort("M001", "S01", "T01");
   assert.equal(terminal?.recoveryActionId, aborted.recoveryActionId);
+
+  // Legacy databases can retain the immutable failure/action history after
+  // the lifecycle Attempt is no longer reachable. The guard must start from
+  // that durable recovery history rather than enumerating current Attempts.
+  db().exec(`
+    PRAGMA foreign_keys = OFF;
+    SAVEPOINT unreachable_aborted_attempt;
+  `);
+  try {
+    db().exec("DROP TRIGGER trg_workflow_attempt_delete;");
+    db().prepare(`
+      DELETE FROM workflow_execution_attempts
+      WHERE attempt_id = :attempt_id
+    `).run({ ":attempt_id": secondClaim.attemptId });
+    assert.equal(
+      readTerminalTaskRecoveryAbort("M001", "S01", "T01")?.recoveryActionId,
+      aborted.recoveryActionId,
+    );
+  } finally {
+    db().exec(`
+      ROLLBACK TO unreachable_aborted_attempt;
+      RELEASE unreachable_aborted_attempt;
+      PRAGMA foreign_keys = ON;
+    `);
+  }
+
   const resumed = resumeTaskRecovery({
     invocation: invocation("recovery/superseded/resume"),
     recoveryActionId: aborted.recoveryActionId,

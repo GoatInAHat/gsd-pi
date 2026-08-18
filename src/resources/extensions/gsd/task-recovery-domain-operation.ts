@@ -737,6 +737,39 @@ export function readTaskRecoveryRoute(attemptId: string): TaskRecoveryRouteSnaps
   };
 }
 
+/** Find an unresumed agent-owned abort anywhere in a Task's recovery history. */
+export function readTerminalTaskRecoveryAbort(
+  task: Pick<TaskScope, "milestoneId" | "sliceId" | "taskId">,
+): { recoveryActionId: string } | null {
+  const stored = getDb().prepare(`
+    SELECT observation.attempt_id, action.recovery_action_id
+    FROM workflow_failure_observations observation
+    JOIN workflow_item_lifecycles lifecycle
+      ON lifecycle.lifecycle_id = observation.lifecycle_id
+     AND lifecycle.project_id = observation.project_id
+    JOIN workflow_recovery_actions action
+      ON action.failure_observation_id = observation.failure_observation_id
+     AND action.lifecycle_id = observation.lifecycle_id
+     AND action.project_id = observation.project_id
+    WHERE lifecycle.item_kind = 'task'
+      AND lifecycle.milestone_id = :milestone_id
+      AND lifecycle.slice_id = :slice_id
+      AND lifecycle.task_id = :task_id
+      AND observation.recovery_owner = 'agent'
+      AND action.action = 'abort'
+    ORDER BY action.project_revision DESC
+  `).all({
+    ":milestone_id": task.milestoneId,
+    ":slice_id": task.sliceId,
+    ":task_id": task.taskId,
+  }) as Array<Record<string, unknown>>;
+  for (const row of stored) {
+    if (isTaskRecoveryResumeAuthorized(String(row["attempt_id"]))) continue;
+    return { recoveryActionId: String(row["recovery_action_id"]) };
+  }
+  return null;
+}
+
 export function readTaskRecoveryBlocker(attemptId: string): TaskRecoveryBlockerSnapshot | null {
   return readTaskRecoveryRoute(attemptId)?.blocker ?? null;
 }

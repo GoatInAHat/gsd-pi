@@ -44,10 +44,10 @@ import { resolveCanonicalMilestoneRoot } from "./worktree-manager.js";
 import { resolveWorktreeProjectRoot } from "./worktree-root.js";
 import { loadAllCaptures, loadPendingCaptures } from "./captures.js";
 import { proveMilestoneCloseout } from "./milestone-closeout-proof.js";
-import { readLatestTaskAttempt, readTaskAttemptIds } from "./task-execution-domain-operation.js";
+import { readLatestTaskAttempt } from "./task-execution-domain-operation.js";
 import {
   readPendingTaskRecoveryContext,
-  readTaskRecoveryRoute,
+  readTerminalTaskRecoveryAbort as readTerminalTaskRecoveryAbortFromHistory,
 } from "./task-recovery-domain-operation.js";
 import { readMilestoneValidationVerdict } from "./milestone-validation-verdict.js";
 
@@ -86,13 +86,7 @@ export function readTerminalTaskRecoveryAbort(
   sliceId: string,
   taskId: string,
 ): { recoveryActionId: string } | null {
-  for (const attemptId of readTaskAttemptIds({ milestoneId, sliceId, taskId })) {
-    const route = readTaskRecoveryRoute(attemptId);
-    if (!route || route.recoveryOwner !== "agent") continue;
-    if (route.action !== "abort" || route.resumeAuthorized) continue;
-    return { recoveryActionId: route.recoveryActionId };
-  }
-  return null;
+  return readTerminalTaskRecoveryAbortFromHistory({ milestoneId, sliceId, taskId });
 }
 
 /**
