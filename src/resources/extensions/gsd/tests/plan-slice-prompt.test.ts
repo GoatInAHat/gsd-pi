@@ -83,6 +83,8 @@ test("plan-slice prompt: DB-backed tool names survive template substitution", ()
   assert.ok(result.includes("gsd_plan_slice"), "gsd_plan_slice should appear in rendered prompt");
   assert.ok(result.includes("gsd_plan_task"), "gsd_plan_task should appear in rendered prompt");
   assert.ok(result.includes("gsd_decision_save"), "structural decisions should use DB-backed decision tool");
+  assert.ok(result.includes("host tool `capture_thought`"), "planner should use the native capture tool name");
+  assert.doesNotMatch(result, /\bgsd_capture_thought\b/, "planner should not request the unavailable prefixed host tool");
   assert.ok(result.includes("canonical write path"), "canonical write path language should survive substitution");
   assert.doesNotMatch(result, /append them to `.gsd\/DECISIONS\.md`/);
 });
@@ -92,6 +94,7 @@ test("plan-slice prompt: compact planning gates survive template substitution", 
   assert.ok(result.includes("planning-dispatch"), "planning-dispatch policy should remain visible");
   assert.ok(result.includes("Bias toward \"roadmap is fine.\""), "roadmap reassessment brake should remain visible");
   assert.ok(result.includes("Self-audit before finishing"), "self-audit gate should remain visible");
+  assert.ok(result.includes("use `gsd_exec` or `gsd_exec_search`"), "self-verification should stay within scoped tools");
   assert.ok(result.includes("Quality gates: non-trivial slices/tasks include specific Q3-Q7 coverage where applicable."));
   assert.ok(result.includes("Use the inlined Output Template sections already present in this prompt."));
   assert.ok(result.includes("Do not read template files from disk."));
