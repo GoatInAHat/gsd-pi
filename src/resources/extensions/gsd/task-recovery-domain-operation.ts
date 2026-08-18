@@ -601,7 +601,9 @@ function loadTaskRecoveryReceipt(
 
 function requireResumableAbortScope(recoveryActionId: string): FailedAttemptScope {
   const stored = getDb().prepare(`
-    SELECT observation.attempt_id, observation.result_id
+    SELECT lifecycle.lifecycle_id, lifecycle.milestone_id, lifecycle.slice_id,
+           lifecycle.task_id, observation.attempt_id, observation.result_id,
+           checkpoint.kernel_checkpoint_id, observation.boundary_stage
     FROM workflow_recovery_actions action
     JOIN workflow_failure_observations observation
       ON observation.project_id = action.project_id
@@ -619,6 +621,11 @@ function requireResumableAbortScope(recoveryActionId: string): FailedAttemptScop
     JOIN workflow_item_lifecycles lifecycle
       ON lifecycle.project_id = attempt.project_id
      AND lifecycle.lifecycle_id = attempt.lifecycle_id
+    JOIN workflow_kernel_checkpoints checkpoint
+      ON checkpoint.project_id = attempt.project_id
+     AND checkpoint.lifecycle_id = attempt.lifecycle_id
+     AND checkpoint.attempt_id = attempt.attempt_id
+     AND checkpoint.next_stage = 'route'
     WHERE action.recovery_action_id = :recovery_action_id
       AND action.action = 'abort'
       AND action.blocker_id IS NULL
@@ -640,7 +647,16 @@ function requireResumableAbortScope(recoveryActionId: string): FailedAttemptScop
       )
   `).get({ ":recovery_action_id": recoveryActionId }) as Record<string, unknown> | undefined;
   if (!stored) throw new Error("Task recovery resume requires the current agent-owned abort");
-  return loadRoutedFailureScope(String(stored["attempt_id"]), String(stored["result_id"]));
+  return {
+    lifecycleId: String(stored["lifecycle_id"]),
+    milestoneId: String(stored["milestone_id"]),
+    sliceId: String(stored["slice_id"]),
+    taskId: String(stored["task_id"]),
+    attemptId: String(stored["attempt_id"]),
+    resultId: String(stored["result_id"]),
+    kernelCheckpointId: String(stored["kernel_checkpoint_id"]),
+    boundaryStage: String(stored["boundary_stage"]) as "execute" | "verify",
+  };
 }
 
 function loadTaskRecoveryResumeReceipt(

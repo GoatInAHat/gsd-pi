@@ -41,6 +41,7 @@ import { buildExecuteTaskPrompt, buildTaskRecoveryReplanPrompt } from "../auto-p
 import { buildCustomEngineIterationData } from "../auto/workflow-custom-engine-iteration.ts";
 import { handleReplanTask } from "../tools/replan-task.ts";
 import { resolveDispatch } from "../auto-dispatch.ts";
+import { refreshRecoveryDbForArtifact } from "../auto-recovery.ts";
 import { verifyExpectedArtifact, readTerminalTaskRecoveryAbort } from "../artifact-verification.ts";
 
 const tempDirs = new Set<string>();
@@ -1438,6 +1439,58 @@ test("a terminal abort on a superseded Attempt stops dispatch and resumes (#1754
     ":project_revision": secondOperation.settle_project_revision,
     ":authority_epoch": secondOperation.settle_authority_epoch,
   });
+  db().prepare(`
+    INSERT INTO workflow_attempt_results (
+      result_id, project_id, lifecycle_id, attempt_id, outcome,
+      failure_class, summary, output_json, created_at,
+      operation_id, project_revision, authority_epoch
+    ) VALUES (
+      'result-superseding', :project_id, :lifecycle_id, 'attempt-superseding',
+      'succeeded', 'none', 'Executor succeeded', '{}', '2026-07-13T00:04:00.000Z',
+      :operation_id, :project_revision, :authority_epoch
+    )
+  `).run({
+    ":project_id": secondOperation.project_id,
+    ":lifecycle_id": firstFailure.lifecycleId,
+    ":operation_id": secondOperation.settle_operation_id,
+    ":project_revision": secondOperation.settle_project_revision,
+    ":authority_epoch": secondOperation.settle_authority_epoch,
+  });
+  const checkpointHead = row(`
+    SELECT kernel_checkpoint_id, sequence
+    FROM workflow_kernel_checkpoints checkpoint
+    WHERE lifecycle_id = :lifecycle_id
+      AND NOT EXISTS (
+        SELECT 1 FROM workflow_kernel_checkpoints successor
+        WHERE successor.previous_kernel_checkpoint_id = checkpoint.kernel_checkpoint_id
+      )
+  `, { ":lifecycle_id": firstFailure.lifecycleId });
+  db().prepare(`
+    INSERT INTO workflow_kernel_checkpoints (
+      kernel_checkpoint_id, project_id, lifecycle_id, attempt_id,
+      next_stage, sequence, previous_kernel_checkpoint_id, created_at,
+      operation_id, project_revision, authority_epoch
+    ) VALUES
+      (
+        'checkpoint-superseding-execute', :project_id, :lifecycle_id, 'attempt-superseding',
+        'execute', :execute_sequence, :previous_checkpoint_id, '2026-07-13T00:03:00.000Z',
+        :operation_id, :project_revision, :authority_epoch
+      ),
+      (
+        'checkpoint-superseding-verify', :project_id, :lifecycle_id, 'attempt-superseding',
+        'verify', :verify_sequence, 'checkpoint-superseding-execute', '2026-07-13T00:04:00.000Z',
+        :operation_id, :project_revision, :authority_epoch
+      )
+  `).run({
+    ":project_id": secondOperation.project_id,
+    ":lifecycle_id": firstFailure.lifecycleId,
+    ":execute_sequence": Number(checkpointHead.sequence) + 1,
+    ":verify_sequence": Number(checkpointHead.sequence) + 2,
+    ":previous_checkpoint_id": checkpointHead.kernel_checkpoint_id,
+    ":operation_id": secondOperation.settle_operation_id,
+    ":project_revision": secondOperation.settle_project_revision,
+    ":authority_epoch": secondOperation.settle_authority_epoch,
+  });
   assert.equal(
     row("SELECT attempt_id AS id FROM workflow_execution_attempts ORDER BY attempt_number DESC LIMIT 1").id,
     "attempt-superseding",
@@ -1448,6 +1501,13 @@ test("a terminal abort on a superseded Attempt stops dispatch and resumes (#1754
   // resume predicate accepts it instead of throwing (#1754 residual).
   const terminal = readTerminalTaskRecoveryAbort("M001", "S01", "T01");
   assert.equal(terminal?.recoveryActionId, aborted.recoveryActionId);
+  const recovery = refreshRecoveryDbForArtifact(
+    "execute-task",
+    "M001/S01/T01",
+    firstFailure.basePath,
+  );
+  assert.equal(recovery.ok, false);
+  if (!recovery.ok) assert.equal(recovery.reason, "execute-task-recovery-aborted");
   const resumed = resumeTaskRecovery({
     invocation: invocation("recovery/superseded/resume"),
     recoveryActionId: aborted.recoveryActionId,
