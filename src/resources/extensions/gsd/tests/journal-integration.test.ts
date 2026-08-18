@@ -219,6 +219,7 @@ function makeSession() {
     unitLifetimeDispatches: new Map<string, number>(),
     unitRecoveryCount: new Map<string, number>(),
     verificationRetryCount: new Map<string, number>(),
+    verificationRetryFailureHashes: new Map<string, string>(),
     zeroToolRetryCount: new Map<string, number>(),
     gitService: null,
     autoStartTime: Date.now(),
@@ -1028,6 +1029,61 @@ test("runFinalize pauses and emits unit-end when pre-verification times out", as
   assert.equal((endEvents[0].data as any).status, "timed-out-finalize");
   assert.equal((endEvents[0].data as any).artifactVerified, false);
   assert.equal((endEvents[0].data as any).finalizeStage, "pre");
+});
+
+test("runFinalize journals an actionable task completion blocker before repair retry", async (t) => {
+  const capture = createEventCapture();
+  const s = makeSession();
+  t.after(() => rmSync(s.basePath, { recursive: true, force: true }));
+  s.setCurrentUnit({
+    type: "execute-task",
+    id: "M001/S01/T01",
+    startedAt: Date.now(),
+  });
+  s.pendingVerificationRetry = {
+    unitId: "M001/S01/T01",
+    failureContext: [
+      "EXECUTION_EVIDENCE_MISSING: expected task-scoped evidence for M001/S01/T01.",
+      "Re-run verification for M001/S01/T01 and retry gsd_task_complete.",
+    ].join(" "),
+    attempt: 1,
+  };
+  const deps = makeMockDeps(capture, {
+    postUnitPreVerification: async () => "retry",
+  });
+  const ic = makeIC(deps, { s });
+  const iterData: IterationData = {
+    unitType: "execute-task",
+    unitId: "M001/S01/T01",
+    prompt: "complete the task",
+    finalPrompt: "complete the task",
+    pauseAfterUatDispatch: false,
+    state: {
+      phase: "executing",
+      activeMilestone: { id: "M001" },
+      activeSlice: { id: "S01" },
+      registry: [],
+      blockers: [],
+    } as any,
+    mid: "M001",
+    midTitle: "Test",
+    isRetry: false,
+    previousTier: undefined,
+  };
+
+  const result = await runFinalize(ic, iterData, { consecutiveFinalizeTimeouts: 0 });
+
+  assert.equal(result.action, "continue");
+  const retryEvents = capture.events.filter(
+    (event) => event.eventType === "artifact-verification-retry",
+  );
+  assert.equal(retryEvents.length, 1);
+  assert.equal((retryEvents[0].data as any).unitId, "M001/S01/T01");
+  assert.match(
+    String((retryEvents[0].data as any).failureContext),
+    /EXECUTION_EVIDENCE_MISSING.*M001\/S01\/T01/,
+  );
+  assert.equal(s.pendingVerificationRetryDispatch?.unitId, "M001/S01/T01");
 });
 
 test("transient session-failed cancellations pause instead of hard-stopping", async () => {

@@ -12,6 +12,7 @@ import {
   getSliceStatusSummary,
   getSliceTaskCounts,
   getTask,
+  getVerificationEvidence,
   insertMilestone,
   insertAssessment,
   insertGateRun,
@@ -868,7 +869,18 @@ export async function executeTaskComplete(
   }
   try {
     const coerced = { ...params };
-    const verificationEvidence = normalizeVerificationEvidence(params.verificationEvidence);
+    const inlineVerificationEvidence = normalizeVerificationEvidence(params.verificationEvidence);
+    const recordedTaskEvidence = inlineVerificationEvidence.length === 0
+      ? getVerificationEvidence(params.milestoneId, params.sliceId, params.taskId).map((evidence) => ({
+          command: evidence.command,
+          exitCode: evidence.exit_code,
+          verdict: evidence.verdict,
+          durationMs: evidence.duration_ms,
+        }))
+      : [];
+    const verificationEvidence = inlineVerificationEvidence.length > 0
+      ? inlineVerificationEvidence
+      : recordedTaskEvidence;
     coerced.verificationEvidence = verificationEvidence;
 
     const verification = typeof params.verification === "string" ? params.verification.trim() : "";
@@ -908,12 +920,24 @@ export async function executeTaskComplete(
             },
           };
         }
+        const expectedUnitId = `${params.milestoneId}/${params.sliceId}/${params.taskId}`;
+        const repairAction =
+          `Re-run the required verification for ${expectedUnitId}, then retry gsd_task_complete with verificationEvidence from that task-scoped run.`;
         return {
           content: [{
             type: "text",
-            text: "Error completing task: verification is required unless verificationEvidence is provided or blockerDiscovered is true.",
+            text: [
+              `EXECUTION_EVIDENCE_MISSING: task completion requires verification evidence for ${expectedUnitId}.`,
+              `Slice-scoped evidence for ${params.milestoneId}/${params.sliceId} does not satisfy task completion.`,
+              repairAction,
+            ].join(" "),
           }],
-          details: { operation: "complete_task", error: "verification_required" },
+          details: {
+            operation: "complete_task",
+            error: "EXECUTION_EVIDENCE_MISSING",
+            expectedUnitId,
+            repairAction,
+          },
           isError: true,
         };
       }

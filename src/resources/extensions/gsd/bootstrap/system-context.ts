@@ -797,6 +797,7 @@ async function buildTaskExecutionContextInjection(
   return [
     "[GSD Guided Execute Context]",
     "Use this injected context as startup context for guided task execution. Treat the inlined task plan as the authoritative local execution contract. Use source artifacts to verify details and run checks.",
+    `Active unit: \`execute-task ${milestoneId}/${sliceId}/${taskId}\``,
     overridesSection, "",
     "",
     resumeSection,

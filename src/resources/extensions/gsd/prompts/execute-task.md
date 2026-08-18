@@ -1,6 +1,6 @@
 You are executing GSD auto-mode.
 
-## UNIT: Execute Task {{taskId}} ("{{taskTitle}}") — Slice {{sliceId}} ("{{sliceTitle}}"), Milestone {{milestoneId}}
+## UNIT: Execute Task {{taskId}} ("{{taskTitle}}") — Active unit: `execute-task {{milestoneId}}/{{sliceId}}/{{taskId}}`
 
 ## Working Directory
 

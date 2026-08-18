@@ -450,13 +450,22 @@ test("executeTaskComplete coerces string verificationEvidence entries", async ()
   }
 });
 
-test("executeTaskComplete derives missing verification from evidence", async () => {
+test("task-scoped verification evidence permits executeTaskComplete", async () => {
   const base = makeTmpBase();
   try {
     openTestDb(base);
     const planDir = join(base, ".gsd", "milestones", "M001", "slices", "S01");
     mkdirSync(planDir, { recursive: true });
     writeFileSync(join(planDir, "S01-PLAN.md"), "# S01\n\n- [ ] **T01: Demo** `est:5m`\n");
+    const db = _getAdapter();
+    assert.ok(db, "DB should be open");
+    db!.exec("PRAGMA foreign_keys = OFF");
+    db!.prepare(
+      `INSERT INTO verification_evidence
+        (task_id, slice_id, milestone_id, command, exit_code, verdict, duration_ms, created_at)
+       VALUES ('T01', 'S01', 'M001', 'npm test', 0, 'pass', 1234, :created_at)`,
+    ).run({ ":created_at": new Date().toISOString() });
+    db!.exec("PRAGMA foreign_keys = ON");
 
     const result = await inProjectDir(base, () => executeTaskComplete({
       milestoneId: "M001",
@@ -464,14 +473,9 @@ test("executeTaskComplete derives missing verification from evidence", async () 
       taskId: "T01",
       oneLiner: "Completed task",
       narrative: "Did the work",
-      verificationEvidence: [
-        { command: "npm test", exitCode: 0, verdict: "pass", durationMs: 1234 },
-      ],
     }, base));
 
     assert.equal(result.details.operation, "complete_task");
-    const db = _getAdapter();
-    assert.ok(db, "DB should be open");
     const row = db!.prepare(
       "SELECT verification_result FROM tasks WHERE milestone_id = ? AND slice_id = ? AND id = ?",
     ).get("M001", "S01", "T01") as Record<string, unknown> | undefined;
@@ -653,10 +657,20 @@ test("executeTaskComplete surfaces stale readable status and duplicate repair me
   assert.equal(existsSync(roadmapPath), true, "same-task retry must repair the readable roadmap");
 });
 
-test("executeTaskComplete returns a tool error when verification cannot be derived", async () => {
+test("slice-scoped verification evidence does not satisfy executeTaskComplete", async () => {
   const base = makeTmpBase();
   try {
     openTestDb(base);
+    const db = _getAdapter();
+    assert.ok(db, "DB should be open");
+    db!.exec("PRAGMA foreign_keys = OFF");
+    db!.prepare(
+      `INSERT INTO verification_evidence
+        (task_id, slice_id, milestone_id, command, exit_code, verdict, duration_ms, created_at)
+       VALUES ('', 'S01', 'M001', 'npm test', 0, 'pass', 1234, :created_at)`,
+    ).run({ ":created_at": new Date().toISOString() });
+    db!.exec("PRAGMA foreign_keys = ON");
+
     const result = await inProjectDir(base, () => executeTaskComplete({
       milestoneId: "M001",
       sliceId: "S01",
@@ -666,7 +680,14 @@ test("executeTaskComplete returns a tool error when verification cannot be deriv
     }, base));
 
     assert.equal(result.isError, true);
-    assert.match(String(result.content[0]?.text), /verification is required/);
+    assert.equal(result.details.error, "EXECUTION_EVIDENCE_MISSING");
+    assert.equal(result.details.expectedUnitId, "M001/S01/T01");
+    assert.match(String(result.details.repairAction), /re-run.*M001\/S01\/T01/i);
+    assert.match(String(result.content[0]?.text), /slice-scoped evidence.*M001\/S01.*does not satisfy/i);
+    const sliceEvidence = db!.prepare(
+      "SELECT task_id FROM verification_evidence WHERE milestone_id = ? AND slice_id = ?",
+    ).all("M001", "S01") as Array<Record<string, unknown>>;
+    assert.deepEqual(sliceEvidence.map((row) => row["task_id"]), [""]);
   } finally {
     closeDatabase();
     cleanup(base);

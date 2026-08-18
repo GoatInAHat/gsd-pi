@@ -85,6 +85,11 @@ describe("guided-flow → auto-prompts consolidation (#5183)", () => {
     assert.ok(prompt.includes(SID), "must mention slice id");
     assert.ok(prompt.includes(TID), "must mention task id");
     assert.ok(prompt.includes(T_TITLE), "must mention task title");
+    assert.match(
+      prompt,
+      /Active unit: `execute-task M001\/S01\/T01`/,
+      "must advertise the task-scoped unit used by verification evidence",
+    );
     assert.ok(
       prompt.includes("gsd_task_complete"),
       "must instruct calling the canonical gsd_task_complete tool",

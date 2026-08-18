@@ -13,6 +13,7 @@ import {
   clearToolInvocationError,
   getAutoRuntimeSnapshot,
   recordAutoToolSurfaceSnapshot,
+  recordToolInvocationError,
 } from "../auto-runtime-state.ts";
 import {
   readUnitHarnessAbort,
@@ -100,6 +101,25 @@ test("clearToolInvocationError clears stale tool error state for active auto ses
 
   assert.equal(autoSession.lastToolInvocationError, null);
   autoSession.reset();
+});
+
+test("clearToolInvocationError retains a completion transition blocker until task completion succeeds", (t) => {
+  autoSession.reset();
+  t.after(() => autoSession.reset());
+  autoSession.active = true;
+  recordToolInvocationError(
+    "gsd_task_complete",
+    "EXECUTION_EVIDENCE_MISSING: record verification evidence for M001/S01/T01",
+  );
+
+  recordToolInvocationError("read", "Validation failed for tool read");
+  clearToolInvocationError("read");
+
+  assert.match(autoSession.lastToolInvocationError ?? "", /EXECUTION_EVIDENCE_MISSING/);
+
+  clearToolInvocationError("gsd_task_complete");
+
+  assert.equal(autoSession.lastToolInvocationError, null);
 });
 
 test("clearToolInvocationError clears stale tool error even when a harness abort is durable", () => {

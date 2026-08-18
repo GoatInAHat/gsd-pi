@@ -94,7 +94,11 @@ import { writeTurnGitTransaction } from "./uok/gitops.js";
 import { isClosedStatus } from "./status-guards.js";
 import { detectAbandonMilestone } from "./abandon-detect.js";
 import { getPendingGate } from "./bootstrap/write-gate.js";
-import { isDeterministicPolicyError, isToolUnavailableError } from "./auto-tool-tracking.js";
+import {
+  isCompletionTransitionBlocker,
+  isDeterministicPolicyError,
+  isToolUnavailableError,
+} from "./auto-tool-tracking.js";
 import { formatConnectedStepStack, formatPostUnitStatusCard } from "./auto-status-message.js";
 import {
   clearProjectResearchInflightMarker,
@@ -2274,7 +2278,57 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
       // root artifact write. If a premature write hits the write gate in the
       // same turn, the user wait is the meaningful state; pause instead of
       // writing a placeholder over PROJECT/REQUIREMENTS.
-      if (!triggerArtifactVerified && s.currentUnit.type === "execute-task" && isDbAvailable()) {
+      if (
+        !triggerArtifactVerified &&
+        s.currentUnit.type === "execute-task" &&
+        s.lastToolInvocationError &&
+        isCompletionTransitionBlocker(s.lastToolInvocationError)
+      ) {
+        const retryKey = verificationRetryKey(s.currentUnit.type, s.currentUnit.id);
+        const attempt = (s.verificationRetryCount.get(retryKey) ?? 0) + 1;
+        const failureContext = s.lastToolInvocationError;
+        s.lastToolInvocationError = null;
+        if (attempt > MAX_ARTIFACT_VERIFICATION_RETRIES) {
+          s.pendingVerificationRetry = null;
+          s.exhaustedVerificationUnits.add(retryKey);
+          saveCustomVerifyRetryCounts(s, {
+            logFailure: err => debugLog("postUnit", {
+              phase: "save-verify-retries-failed",
+              error: err instanceof Error ? err.message : String(err),
+            }),
+          });
+          ctx.ui.notify(
+            `${failureContext} Pausing auto-mode after ${MAX_ARTIFACT_VERIFICATION_RETRIES} repair retries.`,
+            "error",
+          );
+          await pauseAuto(ctx, pi);
+          return "dispatched";
+        }
+        s.verificationRetryCount.set(retryKey, attempt);
+        saveCustomVerifyRetryCounts(s, {
+          logFailure: err => debugLog("postUnit", {
+            phase: "save-verify-retries-failed",
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        });
+        s.pendingVerificationRetry = {
+          unitId: s.currentUnit.id,
+          failureContext,
+          attempt,
+        };
+        debugLog("postUnit", {
+          phase: "task-completion-transition-blocked",
+          unitType: s.currentUnit.type,
+          unitId: s.currentUnit.id,
+          attempt,
+          blocker: failureContext,
+        });
+        ctx.ui.notify(
+          `${failureContext} Routing repair retry ${attempt}/${MAX_ARTIFACT_VERIFICATION_RETRIES} for ${s.currentUnit.id}.`,
+          "warning",
+        );
+        return "retry";
+      } else if (!triggerArtifactVerified && s.currentUnit.type === "execute-task" && isDbAvailable()) {
         const retryKey = verificationRetryKey(s.currentUnit.type, s.currentUnit.id);
         if (s.pendingVerificationRetry?.unitId === s.currentUnit.id) {
           s.pendingVerificationRetry = null;

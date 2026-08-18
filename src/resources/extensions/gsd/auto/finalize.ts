@@ -215,6 +215,7 @@ export async function runFinalize(
           unitType: preUnitSnapshot?.type,
           unitId: retryInfo?.unitId,
           attempt: retryInfo?.attempt,
+          failureContext: retryInfo?.failureContext,
         },
       });
       const retryPolicyResult = await applyVerificationRetryPolicy(

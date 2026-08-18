@@ -46,6 +46,7 @@ describe("#2883: tool invocation error tracking on AutoSession", () => {
 
 import {
   isDeterministicPolicyError,
+  isCompletionTransitionBlocker,
   isPendingUserApprovalGateError,
   isScheduleWakeupContinuationError,
   isToolInvocationError,
@@ -62,6 +63,15 @@ import {
 import { BLOCKED_WRITE_ERROR } from "../write-intercept.ts";
 
 describe("#2883: isToolInvocationError classification", () => {
+  test("detects task completion evidence transition blockers", () => {
+    assert.equal(
+      isCompletionTransitionBlocker(
+        "gsd_task_complete: EXECUTION_EVIDENCE_MISSING for M001/S01/T01",
+      ),
+      true,
+    );
+  });
+
   test("detects JSON validation failure pattern", () => {
     assert.equal(
       isToolInvocationError("Validation failed for tool gsd_complete_slice: Expected ',' or '}' in JSON"),

@@ -143,6 +143,11 @@ const SCHEDULE_WAKEUP_CONTINUATION_ERROR = "`prompt` is required when `stop` is 
  * (bounded) instead of breaking the loop.
  */
 const TOOL_UNAVAILABLE_ERROR_RE = new RegExp(`No such tool available|${TOOL_SURFACE_NOT_READY}`, "i");
+const COMPLETION_TRANSITION_BLOCKER_RE = /\bEXECUTION_EVIDENCE_MISSING\b/;
+
+export function isCompletionTransitionBlocker(errorMsg: string): boolean {
+  return COMPLETION_TRANSITION_BLOCKER_RE.test(errorMsg);
+}
 
 /**
  * Returns true if the error message indicates a deterministic invocation or
@@ -165,6 +170,7 @@ export function isScheduleWakeupContinuationError(toolName: string, errorMsg: st
 
 function shouldRecordToolInvocationError(toolName: string, errorMsg: string): boolean {
   return isScheduleWakeupContinuationError(toolName, errorMsg)
+    || isCompletionTransitionBlocker(errorMsg)
     || isToolInvocationError(errorMsg)
     || isQueuedUserMessageSkip(errorMsg);
 }
@@ -179,6 +185,10 @@ function isRecordedScheduleWakeupContinuationError(recordedError: string | null)
   );
 }
 
+function isRecordedCompletionTransitionBlocker(recordedError: string | null): boolean {
+  return recordedError !== null && isCompletionTransitionBlocker(recordedError);
+}
+
 export function updateToolInvocationError(
   recordedError: string | null,
   toolName: string,
@@ -189,22 +199,32 @@ export function updateToolInvocationError(
     isRecordedScheduleWakeupContinuationError(recordedError)
     && !isScheduleWakeupContinuationError(toolName, errorMsg)
   ) return recordedError;
+  if (
+    isRecordedCompletionTransitionBlocker(recordedError)
+    && !isCompletionTransitionBlocker(errorMsg)
+  ) return recordedError;
 
   return `${toolName}: ${errorMsg}`;
 }
 
 /**
- * A failed continuation must survive successful diagnostic/read calls in the
- * same turn. Only a later successful ScheduleWakeup proves the continuation
- * was armed; all other invocation errors retain their existing clear-on-success
- * behavior.
+ * A failed continuation or completion transition must survive successful
+ * diagnostic/read calls in the same turn. Only the corresponding successful
+ * retry proves the blocked action was repaired; all other invocation errors
+ * retain their existing clear-on-success behavior.
  */
 export function shouldClearToolInvocationErrorAfterSuccess(
   recordedError: string | null,
   successfulToolName?: string,
 ): boolean {
-  return !isRecordedScheduleWakeupContinuationError(recordedError)
-    || stripMcpToolPrefix(successfulToolName ?? "") === SCHEDULE_WAKEUP_TOOL_NAME;
+  const successfulTool = stripMcpToolPrefix(successfulToolName ?? "");
+  if (isRecordedScheduleWakeupContinuationError(recordedError)) {
+    return successfulTool === SCHEDULE_WAKEUP_TOOL_NAME;
+  }
+  if (isRecordedCompletionTransitionBlocker(recordedError)) {
+    return successfulTool === "gsd_task_complete" || successfulTool === "gsd_complete_task";
+  }
+  return true;
 }
 
 /**

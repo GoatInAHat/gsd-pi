@@ -3,7 +3,11 @@ import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
-import { postUnitPreVerification, type PostUnitContext } from "../auto-post-unit.ts";
+import {
+  MAX_ARTIFACT_VERIFICATION_RETRIES,
+  postUnitPreVerification,
+  type PostUnitContext,
+} from "../auto-post-unit.ts";
 import { AutoSession } from "../auto/session.ts";
 import {
   closeDatabase,
@@ -14,7 +18,11 @@ import {
 } from "../gsd-db.ts";
 import { cleanup, makeTempRepo } from "./test-utils.ts";
 
-function createTaskContext(basePath: string, pauseCalls: string[]): PostUnitContext {
+function createTaskContext(
+  basePath: string,
+  pauseCalls: string[],
+  notifications: string[] = [],
+): PostUnitContext {
   const session = new AutoSession();
   session.active = true;
   session.basePath = basePath;
@@ -26,7 +34,7 @@ function createTaskContext(basePath: string, pauseCalls: string[]): PostUnitCont
 
   return {
     s: session,
-    ctx: { ui: { notify: () => {} } } as unknown as PostUnitContext["ctx"],
+    ctx: { ui: { notify: (message: string) => notifications.push(message) } } as unknown as PostUnitContext["ctx"],
     pi: {} as PostUnitContext["pi"],
     buildSnapshotOpts: () => ({}),
     lockBase: () => basePath,
@@ -118,4 +126,58 @@ test("DB-backed execute-task deterministic errors cannot write an artifact place
   assert.equal(pctx.s.pendingVerificationRetry, null);
   assert.equal(pctx.s.lastToolInvocationError, null);
   assert.deepEqual(pauseCalls, []);
+});
+
+test("DB-backed execute-task evidence blocker is visible and routes a repair retry", async (t) => {
+  const basePath = scaffoldDbBackedTask();
+  t.after(() => {
+    closeDatabase();
+    cleanup(basePath);
+  });
+  const pauseCalls: string[] = [];
+  const notifications: string[] = [];
+  const pctx = createTaskContext(basePath, pauseCalls, notifications);
+  pctx.s.lastToolInvocationError = [
+    "gsd_task_complete: EXECUTION_EVIDENCE_MISSING:",
+    "expected task-scoped evidence for M001/S01/T01.",
+    "Re-run verification for M001/S01/T01 and retry gsd_task_complete.",
+  ].join(" ");
+
+  const result = await postUnitPreVerification(pctx, {
+    skipSettleDelay: true,
+    skipWorktreeSync: true,
+  });
+
+  assert.equal(result, "retry");
+  assert.equal(pctx.s.pendingVerificationRetry?.unitId, "M001/S01/T01");
+  assert.match(pctx.s.pendingVerificationRetry?.failureContext ?? "", /EXECUTION_EVIDENCE_MISSING/);
+  assert.match(notifications.join("\n"), /M001\/S01\/T01/);
+  assert.deepEqual(pauseCalls, []);
+});
+
+test("DB-backed execute-task evidence repair pauses after the retry limit", async (t) => {
+  const basePath = scaffoldDbBackedTask();
+  t.after(() => {
+    closeDatabase();
+    cleanup(basePath);
+  });
+  const pauseCalls: string[] = [];
+  const notifications: string[] = [];
+  const pctx = createTaskContext(basePath, pauseCalls, notifications);
+  pctx.s.verificationRetryCount.set(
+    "execute-task:M001/S01/T01",
+    MAX_ARTIFACT_VERIFICATION_RETRIES,
+  );
+  pctx.s.lastToolInvocationError =
+    "gsd_task_complete: EXECUTION_EVIDENCE_MISSING for M001/S01/T01";
+
+  const result = await postUnitPreVerification(pctx, {
+    skipSettleDelay: true,
+    skipWorktreeSync: true,
+  });
+
+  assert.equal(result, "dispatched");
+  assert.equal(pctx.s.pendingVerificationRetry, null);
+  assert.match(notifications.join("\n"), /Pausing auto-mode after 3 repair retries/);
+  assert.deepEqual(pauseCalls, ["pause"]);
 });

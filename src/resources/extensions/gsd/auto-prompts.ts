@@ -4204,6 +4204,7 @@ export async function buildReactiveExecutePrompt(
     const taskSummaryPath = `${relSlicePath(base, mid, sid)}/tasks/${tid}-SUMMARY.md`;
     const taskPrompt = [
       `## UNIT: Execute Task ${tid} ("${tTitle}")`,
+      `Active unit: \`execute-task ${mid}/${sid}/${tid}\``,
       "",
       "## Working Directory",
       "",
