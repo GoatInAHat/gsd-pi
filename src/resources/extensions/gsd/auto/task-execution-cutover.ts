@@ -408,6 +408,15 @@ function applyRecoveryDecision(
   }
 }
 
+function isNewlyRecordedBlocker(
+  attempt: TaskExecutionAttemptSnapshot | null,
+): boolean {
+  return attempt?.state === "settled" &&
+    attempt.outcome === "failed" &&
+    attempt.nextStage === "route" &&
+    attempt.resultFailureClass === "blocker-discovered";
+}
+
 function reconcileNext(
   input: TaskExecutionCutoverInput,
   attemptId: string,
@@ -422,6 +431,7 @@ function reconcileNext(
   if (attempt?.state === "settled") {
     input.markCanonicalDispatchSettled();
     if ((attempt.outcome === "failed" || attempt.outcome === "interrupted") && attempt.nextStage === "route") {
+      if (isNewlyRecordedBlocker(attempt)) return result;
       if (!attempt.resultId) throw new Error("Task recovery requires the settled Attempt Result identity");
       const summary = attempt.resultSummary ?? "Task executor recorded a failed Result";
       return applyRecoveryDecision(routeTaskFailure(
@@ -547,6 +557,10 @@ export async function runWithTaskExecutionAttempt(
         ? predecessor.attemptId
         : undefined);
     if (!attemptId) throw error;
+    if (isNewlyRecordedBlocker(deps.readTaskAttempt(attemptId))) {
+      input.markCanonicalDispatchSettled();
+      return { action: "next", data: {} };
+    }
     return applyRecoveryDecision(
       settleRunningAttempt(input, attemptId, "executor-error", summary, deps, error),
     );
@@ -558,6 +572,11 @@ export async function runWithTaskExecutionAttempt(
 
   if (result.action === "next") {
     return reconcileNext(input, claim.attemptId, result, deps);
+  }
+
+  if (isNewlyRecordedBlocker(deps.readTaskAttempt(claim.attemptId))) {
+    input.markCanonicalDispatchSettled();
+    return result;
   }
 
   const recovery = settleRunningAttempt(
