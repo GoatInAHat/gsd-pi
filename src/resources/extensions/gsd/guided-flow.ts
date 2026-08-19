@@ -116,6 +116,7 @@ import {
 } from "./pending-auto-start.js";
 import { clearGuidedUnitContext, setGuidedUnitContext } from "./guided-unit-context.js";
 import { checkAutoStartAfterDiscuss, scheduleAutoStartAfterIdle } from "./discussion-handoff.js";
+import { resolveSubagentRoleForProvider } from "./subagent-role-resolver.js";
 export {
   maybeHandleEmptyIntentTurn,
   maybeHandleReadyPhraseWithoutFiles,
@@ -2697,6 +2698,7 @@ export async function showSmartEntry(
         milestoneId,
         sliceId,
         sliceTitle,
+        scoutAgentType: resolveSubagentRoleForProvider("scout", ctx.model?.provider),
         inlinedTemplates: researchTemplates,
         skillActivation: buildSkillActivationBlock({
           base: basePath,
