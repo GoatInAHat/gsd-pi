@@ -198,7 +198,7 @@ test("validateFileChanges excludes the configured in-repo GSD state directory", 
   assert.deepEqual(audit.actualFiles, ["src/app.ts"]);
 });
 
-test("validateFileChanges does not treat pre-unit HEAD as this unit's changeset when no commit was created", (t) => {
+test("validateFileChanges does not treat pre-closeout HEAD as this unit's changeset when no commit was created", (t) => {
   const base = mkdtempSync(join(tmpdir(), "gsd-file-change-validator-"));
   t.after(() => rmSync(base, { recursive: true, force: true }));
 
@@ -210,16 +210,16 @@ test("validateFileChanges does not treat pre-unit HEAD as this unit's changeset 
   writeFileSync(join(base, "main.rs"), "fn main() {}\n");
   git(base, "add", ".");
   git(base, "commit", "-m", "previous rust refactor");
-  const preUnitHead = git(base, "rev-parse", "HEAD");
+  const headBeforeCloseout = git(base, "rev-parse", "HEAD");
 
   const stale = validateFileChanges(base, ["docs/plan.md"], []);
   assert.ok(stale, "audit should be produced for stale HEAD");
   assert.ok(
     stale.unexpectedFiles.includes("lib.rs") && stale.unexpectedFiles.includes("main.rs"),
-    "without preUnitHead, previous commit files are treated as this unit's changeset",
+    "without a closeout boundary, previous commit files are treated as this unit's changeset",
   );
 
-  const audit = validateFileChanges(base, ["docs/plan.md"], [], [], { preUnitHead });
+  const audit = validateFileChanges(base, ["docs/plan.md"], [], [], { headBeforeCloseout });
   assert.ok(audit, "audit should be produced when the unit created no commit");
   assert.deepEqual(audit.actualFiles, [], "no-commit units have an empty change set");
   assert.deepEqual(audit.unexpectedFiles, [], "stale HEAD files must not be unexpected");
@@ -229,10 +229,16 @@ test("validateFileChanges does not treat pre-unit HEAD as this unit's changeset 
   git(base, "add", ".");
   git(base, "commit", "-m", "task planning artifacts");
 
-  const committed = validateFileChanges(base, ["docs/plan.md"], [], [], { preUnitHead });
+  const committed = validateFileChanges(base, ["docs/plan.md"], [], [], { headBeforeCloseout });
   assert.ok(committed, "audit should be produced after the unit commit");
   assert.deepEqual(committed.actualFiles, ["docs/plan.md"]);
   assert.deepEqual(committed.unexpectedFiles, [], "this unit's files remain expected");
+
+  assert.equal(
+    validateFileChanges(base, ["docs/plan.md"], [], [], { headBeforeCloseout: null }),
+    null,
+    "an unknown commit boundary must skip validation instead of auditing HEAD",
+  );
 });
 
 test("GSD-managed .gitignore edit swept into a task commit is not flagged", (t) => {

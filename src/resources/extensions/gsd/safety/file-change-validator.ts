@@ -9,7 +9,7 @@
  * (Bug #4385 — git diff HEAD~1 failed on initial commits).
  *
  * When the unit created no commit, HEAD is still the previous unit's changeset.
- * Callers must pass `preUnitHead` so that case returns an empty change set
+ * Callers must pass `headBeforeCloseout` so that case returns an empty change set
  * instead of auditing stale HEAD (#1431).
  *
  * Copyright (c) 2026 Jeremy McSpadden <jeremy@fluxlabs.net>
@@ -44,12 +44,13 @@ export interface FileChangeAudit {
 
 export interface FileChangeAuditOptions {
   /**
-   * HEAD SHA recorded before this unit's commit.
+   * HEAD SHA recorded immediately before the unit's closeout commit.
    * When current HEAD still equals this SHA, the unit created no commit —
    * return an empty change set instead of auditing the previous commit (#1431).
-   * Omit or pass null when the baseline is unknown; then HEAD is audited as before.
+   * Pass null when the baseline is unknown to skip the audit. Omit only for
+   * legacy callers that intentionally audit the current HEAD commit.
    */
-  preUnitHead?: string | null;
+  headBeforeCloseout?: string | null;
 }
 
 // ─── Public API ─────────────────────────────────────────────────────────────
@@ -89,7 +90,7 @@ export function validateFileChanges(
   if (allExpected.size === 0) return null;
 
   // Get actual changed files from last commit
-  const actualFiles = getChangedFilesFromLastCommit(basePath, options?.preUnitHead);
+  const actualFiles = getChangedFilesFromLastCommit(basePath, options?.headBeforeCloseout);
   if (!actualFiles) return null;
 
   const configuredProjectsDir = process.env.GSD_STATE_DIR
@@ -156,9 +157,7 @@ export function validateFileChanges(
 
 // ─── Internals ──────────────────────────────────────────────────────────────
 
-/**
- * Current committed HEAD SHA, or null when HEAD is missing/unborn.
- */
+/** Current committed HEAD SHA, or null when HEAD is missing/unborn. */
 export function readCommittedHeadSha(basePath: string): string | null {
   try {
     const sha = execFileSync(
@@ -174,12 +173,13 @@ export function readCommittedHeadSha(basePath: string): string | null {
 
 function getChangedFilesFromLastCommit(
   basePath: string,
-  preUnitHead?: string | null,
+  headBeforeCloseout?: string | null,
 ): string[] | null {
   try {
-    if (preUnitHead) {
+    if (headBeforeCloseout === null) return null;
+    if (headBeforeCloseout) {
       const head = readCommittedHeadSha(basePath);
-      if (!head || head === preUnitHead) return [];
+      if (!head || head === headBeforeCloseout) return [];
     }
     const result = execFileSync(
       "git",

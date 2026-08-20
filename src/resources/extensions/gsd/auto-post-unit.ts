@@ -819,15 +819,17 @@ function runExecuteTaskFileChangeSafety(
   s: AutoSession,
   ctx: ExtensionContext,
   fileChangeAllowlist: string[],
-  preUnitHead: string | null,
+  headBeforeCloseout: string | null,
 ): void {
   if (s.currentUnit?.type !== "execute-task") return;
   const { milestone: sMid, slice: sSid, task: sTid } = parseUnitId(s.currentUnit.id);
   if (!sMid || !sSid || !sTid) return;
+
   try {
     const sliceTaskRows = isDbAvailable()
       ? getSliceTasks(sMid, sSid).filter((t) => isClosedStatus(t.status) || t.id === sTid)
       : [];
+
     if (sliceTaskRows.length > 0) {
       const expectedOutput = getPlannedKeyFiles(
         sliceTaskRows.map((taskRow) => ({
@@ -836,16 +838,15 @@ function runExecuteTaskFileChangeSafety(
         })),
       );
       const plannedFiles = getPlannedKeyFiles(
-        sliceTaskRows.map((taskRow) => ({
-          files: taskRow.files,
-        })),
+        sliceTaskRows.map((taskRow) => ({ files: taskRow.files })),
       );
       reportFileChangeWarnings(
         ctx,
-        validateFileChanges(s.basePath, expectedOutput, plannedFiles, fileChangeAllowlist, { preUnitHead }),
+        validateFileChanges(s.basePath, expectedOutput, plannedFiles, fileChangeAllowlist, { headBeforeCloseout }),
       );
       return;
     }
+
     const taskRow = getTask(sMid, sSid, sTid);
     if (!taskRow) return;
     reportFileChangeWarnings(
@@ -855,7 +856,7 @@ function runExecuteTaskFileChangeSafety(
         taskRow.expected_output ?? [],
         taskRow.files ?? [],
         fileChangeAllowlist,
-        { preUnitHead },
+        { headBeforeCloseout },
       ),
     );
   } catch (e) {
@@ -2644,7 +2645,7 @@ export async function postUnitPostVerification(pctx: PostUnitContext): Promise<"
 
   if (s.currentUnit) {
     if (shouldDeferCloseoutGitAction(s.currentUnit.type)) {
-      const preUnitHead = readCommittedHeadSha(s.basePath);
+      const headBeforeCloseout = readCommittedHeadSha(s.basePath);
       const gitActionResult = await runCloseoutGitAction(pctx, s.currentUnit, { softFailure: true });
       if (gitActionResult === "dispatched") {
         return "stopped";
@@ -2671,7 +2672,7 @@ export async function postUnitPostVerification(pctx: PostUnitContext): Promise<"
             safetyConfig.file_change_allowlist,
             (prefs?.git as { manage_gitignore?: boolean } | undefined)?.manage_gitignore,
           );
-          runExecuteTaskFileChangeSafety(s, ctx, fileChangeAllowlist, preUnitHead);
+          runExecuteTaskFileChangeSafety(s, ctx, fileChangeAllowlist, headBeforeCloseout);
         }
       } catch (e) {
         debugLog("postUnit", { phase: "safety-file-change", error: String(e) });
