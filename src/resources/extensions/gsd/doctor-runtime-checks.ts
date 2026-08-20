@@ -1,4 +1,5 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { removeDirectoryVerified } from "./verified-rmdir.js";
 import { basename, dirname, join } from "node:path";
 
 import type { DoctorIssue, DoctorIssueCode } from "./doctor-types.js";
@@ -196,10 +197,9 @@ export async function checkRuntimeHealth(
             fixable: true,
           });
           if (shouldFix("stranded_lock_directory")) {
-            try {
-              rmSync(lockDir, { recursive: true, force: true });
+            if (removeDirectoryVerified(lockDir)) {
               fixesApplied.push(`removed stranded lock directory ${lockDir}`);
-            } catch {
+            } else {
               fixesApplied.push(`failed to remove stranded lock directory ${lockDir}`);
             }
           }

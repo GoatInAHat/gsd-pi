@@ -17,12 +17,13 @@
  */
 
 import { createRequire } from "node:module";
-import { existsSync, readFileSync, readdirSync, mkdirSync, unlinkSync, rmSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, mkdirSync, unlinkSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { gsdRoot, normalizeRealPath } from "./paths.js";
 import { atomicWriteSync } from "./atomic-write.js";
 import { markWorkerStoppingByPid } from "./db/auto-workers.js";
 import { logWarning } from "./workflow-logger.js";
+import { removeDirectoryVerified } from "./verified-rmdir.js";
 
 const _require = createRequire(import.meta.url);
 
@@ -161,7 +162,7 @@ export function cleanupStrayLockFiles(basePath: string): void {
           try {
             const stat = statSync(fullPath);
             if (stat.isDirectory()) {
-              rmSync(fullPath, { recursive: true, force: true });
+              removeDirectoryVerified(fullPath);
             }
           } catch { /* best-effort */ }
         }
@@ -197,7 +198,7 @@ function ensureExitHandler(_gsdDir: string): void {
       } catch { /* best-effort */ }
       try {
         const lockDir = join(dir + ".lock");
-        if (ownsRegisteredLock && existsSync(lockDir)) rmSync(lockDir, { recursive: true, force: true });
+        if (ownsRegisteredLock && existsSync(lockDir)) removeDirectoryVerified(lockDir);
       } catch { /* best-effort */ }
     }
   });
@@ -323,7 +324,7 @@ export function acquireSessionLock(basePath: string): SessionLockResult {
     if (deadPid) markWorkerStoppingByPid(normalizeRealPath(basePath), deadPid);
     const isOrphan = !existingData || !!deadPid;
     if (isOrphan) {
-      try { rmSync(lockDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+      try { removeDirectoryVerified(lockDir); } catch { /* best-effort */ }
       try { if (existsSync(lp)) unlinkSync(lp); } catch { /* best-effort */ }
     }
   }
@@ -365,7 +366,7 @@ export function acquireSessionLock(basePath: string): SessionLockResult {
     if (!existingData || (existingPid && !isPidAlive(existingPid))) {
       try {
         const lockDir = join(lockTarget + ".lock");
-        if (existsSync(lockDir)) rmSync(lockDir, { recursive: true, force: true });
+        if (existsSync(lockDir)) removeDirectoryVerified(lockDir);
         if (existsSync(lp)) unlinkSync(lp);
 
         // Retry acquisition after cleanup
@@ -389,9 +390,12 @@ export function acquireSessionLock(basePath: string): SessionLockResult {
 
     // #3218: Provide actionable workaround when lock recovery fails
     const lockDirPath = lockTarget + ".lock";
+    const stuckDir = existsSync(lockDirPath);
     const reason = existingPid
       ? `Another auto-mode session (PID ${existingPid}) appears to be running.\nRun \`/gsd stop\` for graceful shutdown, or choose "Force start" from \`/gsd auto\` to terminate it.`
-      : `Another auto-mode session lock is stuck on this project.\nRun: rm -rf "${lockDirPath}" && rm -f "${lp}"`;
+      : stuckDir
+        ? `Another auto-mode session lock is stuck on this project.\nAutomatic removal of "${lockDirPath}" failed. On Windows, recursive delete can silently no-op when the path contains non-ASCII characters — move the project to an ASCII-only path or delete the directory from a shell:\n  rmdir /s /q "${lockDirPath}" && del "${lp}"`
+        : `Another auto-mode session lock is stuck on this project.\nRun: rm -rf "${lockDirPath}" && rm -f "${lp}"`;
 
     return { acquired: false, reason, existingPid };
   }
@@ -558,14 +562,14 @@ export function releaseSessionLock(basePath: string): void {
   const lockTarget = effectiveLockTarget(gsdDir);
   try {
     const lockDir = join(lockTarget + ".lock");
-    if (ownsPrimaryLock && existsSync(lockDir)) rmSync(lockDir, { recursive: true, force: true });
+    if (ownsPrimaryLock && existsSync(lockDir)) removeDirectoryVerified(lockDir);
   } catch {
     // Non-fatal
   }
   // Also clean the per-milestone parallel directory itself if it exists
   if (ownsPrimaryLock && lockTarget !== gsdDir) {
     try {
-      if (existsSync(lockTarget)) rmSync(lockTarget, { recursive: true, force: true });
+      if (existsSync(lockTarget)) removeDirectoryVerified(lockTarget);
     } catch {
       // Non-fatal
     }
@@ -581,7 +585,7 @@ export function releaseSessionLock(basePath: string): void {
     } catch { /* best-effort */ }
     try {
       const lockDir = join(dir + ".lock");
-      if (ownsRegisteredLock && existsSync(lockDir)) rmSync(lockDir, { recursive: true, force: true });
+      if (ownsRegisteredLock && existsSync(lockDir)) removeDirectoryVerified(lockDir);
     } catch { /* best-effort */ }
   }
   _lockDirRegistry.clear();
@@ -635,8 +639,7 @@ export function removeStaleSessionLock(basePath: string): boolean {
   let removed = false;
   if (existsSync(lockDir)) {
     try {
-      rmSync(lockDir, { recursive: true, force: true });
-      removed = true;
+      removed = removeDirectoryVerified(lockDir);
     } catch {
       /* best-effort */
     }

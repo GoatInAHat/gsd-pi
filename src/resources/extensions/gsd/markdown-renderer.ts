@@ -10,7 +10,7 @@
 // parseRoadmap(), parsePlan(), parseSummary() in files.ts.
 
 import { readFileSync, existsSync, mkdirSync, statSync } from "node:fs";
-import { createProjectionDirectorySync, removeProjectionFileSync } from "./atomic-write.js";
+import { createProjectionDirectorySync, relocatePhaseDirToCanonical, removeProjectionFileSync } from "./atomic-write.js";
 import { logWarning } from "./workflow-logger.js";
 import { isClosedStatus, isHiddenFromRoadmap, toStatus } from "./status-guards.js";
 import { isCanonicalStagedTaskSummaryState } from "./task-summary-projection-policy.js";
@@ -719,6 +719,9 @@ export async function renderRoadmapFromDb(
     return { skipped: "unplanned-milestone" };
   }
 
+  if (milestone.title) {
+    relocatePhaseDirToCanonical(basePath, milestoneId, milestone.title);
+  }
   const absPath = targetMilestoneFile(basePath, milestoneId, "ROADMAP", milestone.title);
   const artifactPath = toArtifactPath(absPath, basePath);
   const content = renderRoadmapMarkdown(milestone, slices);

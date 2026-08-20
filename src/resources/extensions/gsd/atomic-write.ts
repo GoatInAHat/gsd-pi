@@ -15,6 +15,15 @@ import {
 } from "./managed-projection-history.js";
 import { classifyGsdLogicalPath } from "./projection-path-policy.js";
 import { preserveManagedProjectionBeforeMutation } from "./projection-mutation-guard.js";
+import { LAYOUT_SEGMENTS } from "./layout-policy.js";
+import {
+  canonicalPhaseDirName,
+  clearPathCache,
+  gsdProjectionRoot,
+  isLegacyMilestonesLayout,
+  legacyMilestonesDir,
+  resolveMilestonePath,
+} from "./paths.js";
 export { removeLegacyProjectionTreeSync };
 
 const TRANSIENT_LOCK_ERROR_CODES = new Set(["EBUSY", "EPERM", "EACCES"]);
@@ -615,4 +624,38 @@ export function createProjectionDirectorySync(directoryPath: string): void {
       mkdirSync(directoryPath, { recursive: true });
     }
   });
+}
+
+/**
+ * Rename an existing same-milestone phase directory to the title-derived
+ * canonical name. Discuss/plan title changes otherwise leave files under the
+ * old slug while writers and the artifacts table point at the new one (#1526).
+ */
+export function relocatePhaseDirToCanonical(
+  basePath: string,
+  milestoneId: string,
+  title?: string,
+): string {
+  const dest = join(
+    gsdProjectionRoot(basePath),
+    LAYOUT_SEGMENTS.level1,
+    canonicalPhaseDirName(milestoneId, title),
+  );
+  const existing = resolveMilestonePath(basePath, milestoneId);
+  if (!existing) return dest;
+  const legacyBase = legacyMilestonesDir(basePath);
+  const isLegacy = existing.startsWith(legacyBase + "/") || existing.startsWith(legacyBase + "\\")
+    || isLegacyMilestonesLayout(basePath);
+  if (isLegacy) return existing;
+  const existingName = existing.split(/[/\\]/).pop()!;
+  const destName = dest.split(/[/\\]/).pop()!;
+  if (existingName === destName) return existing;
+  if (existsSync(dest)) return dest;
+  try {
+    renameSync(existing, dest);
+    clearPathCache();
+    return dest;
+  } catch {
+    return existing;
+  }
 }
