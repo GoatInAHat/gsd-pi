@@ -52,7 +52,12 @@ export interface VerificationSourceDriftDiagnosis {
   autoCommitDetected: boolean;
 }
 
-const SOURCE_PATHSPEC = ["--", ".", ":(exclude).gsd/**"];
+const SOURCE_PATHSPEC = [
+  "--",
+  ".",
+  ":(exclude).gsd/**",
+  ":(exclude)receipts/**",
+];
 
 /**
  * Git pathspecs match tracked path names, not symlink targets. In a GSD-managed

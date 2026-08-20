@@ -255,3 +255,23 @@ test("a .gsd symlink resolving to the repository parent still produces a source 
 
   assert.notEqual(after.aggregateRevision, before.aggregateRevision);
 });
+
+test("source snapshot ignores tracked receipts/** bookkeeping (#1819)", () => {
+  const cwd = createRepository("receipts-exclude");
+  writeFileSync(join(cwd, "src.ts"), "export {}\n");
+  git(cwd, ["add", "src.ts"]);
+  git(cwd, ["commit", "-m", "src"]);
+  const before = capture([{ id: "root", cwd }]);
+
+  mkdirSync(join(cwd, "receipts"), { recursive: true });
+  writeFileSync(join(cwd, "receipts", "receipts.jsonl"), "{\"call\":1}\n");
+  git(cwd, ["add", "receipts/receipts.jsonl"]);
+  git(cwd, ["commit", "-m", "receipts"]);
+
+  const after = capture([{ id: "root", cwd }]);
+  assert.equal(
+    after.aggregateRevision,
+    before.aggregateRevision,
+    "tracked receipts must not move the source hash",
+  );
+});
