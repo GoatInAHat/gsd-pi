@@ -51,6 +51,7 @@ import {
 } from "./paths.js";
 import { saveFile, clearParseCache, registerCacheClearCallback } from "./files.js";
 import { parseProjectionRoadmap } from "./schemas/parsers.js";
+import { stripIdPrefix } from "./strip-id-prefix.js";
 import { invalidateStateCache } from "./state.js";
 import { clearPathCache, milestonesDir, legacyMilestonesDir, isLegacyMilestonesLayout, resolveMilestonePath, relSliceFile, canonicalPhaseDirName } from "./paths.js";
 import { readCompatMarker, writeCompatMarker, computeProjectionSha, deriveCompatProjectionKey } from "./compat/compat-marker.js";
@@ -328,8 +329,9 @@ async function writeAndStore(
 
 function renderRoadmapMarkdown(milestone: MilestoneRow, slices: SliceRow[]): string {
   const lines: string[] = [];
+  const displayTitle = stripIdPrefix(milestone.title || milestone.id, milestone.id);
 
-  lines.push(`# ${milestone.id}: ${milestone.title || milestone.id}`);
+  lines.push(`# ${milestone.id}: ${displayTitle}`);
   lines.push("");
   lines.push(milestone.vision ? `**Vision:** ${milestone.vision}` : "**Vision:**");
   lines.push("");
