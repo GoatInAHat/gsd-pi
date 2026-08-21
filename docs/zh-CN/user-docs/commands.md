@@ -94,7 +94,7 @@
 | `/gsd reset-slice` | 完整安全语义见英文 [Lifecycle safety](../../user-docs/commands.md#lifecycle-safety) |
 | `/gsd park` | Park 一个 milestone，不删除，只跳过 |
 | `/gsd unpark` | 重新激活一个已 park 的 milestone |
-| Discard milestone | 在 `/gsd` 向导的 “Milestone actions” → “Discard” 中可用；已有规范 lifecycle 历史的 milestone 不能 discard，必须改用 park |
+| `/gsd discard <id>` | 确认后永久删除一个 milestone，无需进入 `/gsd` 智能入口流程；已有规范 lifecycle 历史的 milestone 不能 discard，必须改用 park |
 
 ## 额外的 Prompt 驱动 Workflows
 

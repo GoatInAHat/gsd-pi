@@ -234,6 +234,7 @@ Quick reference — see [references/commands.md](references/commands.md) for the
 | `next` | Run one unit |
 | `query` | Instant JSON snapshot — state, next dispatch, costs (no LLM) |
 | `new-milestone` | Create milestone from spec |
+| `discard-milestone <ids...> --orphan-only` | Discard DB-only milestone reservations after bounded preflight |
 | `queue` | Queue/reorder milestones |
 | `history` | View execution history |
 | `stop` / `pause` | Control auto-mode |

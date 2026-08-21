@@ -119,8 +119,8 @@ After writing the file, GSD attempts to open it in a browser using the local pla
 | `/gsd reset-slice` | Reopen the full terminal slice and every terminal task in one guarded database operation, preserve prior execution history, then refresh readable status |
 | `/gsd park` | Park a milestone — skip without deleting |
 | `/gsd unpark` | Reactivate a parked milestone |
+| `/gsd discard <id>` | Permanently discard one milestone after confirmation, without entering the smart-entry flow |
 | `/gsd rethink` | Conversational project reorganization — reorder, park, discard unadopted work, or add milestones |
-| Discard milestone | Available via `/gsd` wizard → "Milestone actions" → "Discard"; milestones with adopted canonical lifecycle history must be parked instead |
 
 Milestone and slice titles created during planning must not contain forward slash (`/`), en dash, or em dash characters. GSD reserves those characters as state-document delimiters, so `plan-milestone` rejects titles that include them.
 
@@ -439,6 +439,9 @@ gsd headless next
 # Instant JSON snapshot — no LLM, ~50ms
 gsd headless query
 
+# Atomically discard DB-only milestone reservations after fail-closed preflight
+gsd headless discard-milestone M015 --orphan-only
+
 # With timeout for CI
 gsd headless --timeout 600000 auto
 
@@ -474,6 +477,8 @@ echo "Build a CLI tool" | gsd headless new-milestone --context -
 In JSON output summaries, headless can also return `status: "no-work-deterministic"` for repeatable no-progress tails (for example select → input → cancelled). This status exits with code `1` and suppresses automatic restart loops.
 
 Any `/gsd` subcommand works as a positional argument — `gsd headless status`, `gsd headless doctor`, `gsd headless dispatch execute`, etc.
+
+`gsd headless discard-milestone <ids...> --orphan-only` is a direct, no-LLM mutation route for abandoned milestone reservations. It preflights every ID before deleting any, refuses milestones with canonical children or references, planning artifacts, worktrees, branches, leases/workers, or disk projections, deletes the set in one transaction, and emits structured before/after JSON. Use `/gsd discard <milestone-id>` for an interactive, confirmed selective discard.
 
 ### `gsd headless recover`
 

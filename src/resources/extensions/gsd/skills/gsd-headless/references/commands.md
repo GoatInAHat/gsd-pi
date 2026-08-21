@@ -13,6 +13,7 @@ Session startup flags such as `--model ID` and `--thinking LEVEL` can be supplie
 | `stop` | Stop auto-mode gracefully |
 | `pause` | Pause auto-mode (preserves state, resumable) |
 | `new-milestone` | Create milestone from specification (requires `--context`) |
+| `discard-milestone <ids...> --orphan-only` | Atomically discard reservation-only DB rows after fail-closed preflight |
 | `dispatch <phase>` | Force-dispatch: research, plan, execute, complete, reassess, uat, replan |
 | `discuss` | Start guided milestone/slice discussion |
 

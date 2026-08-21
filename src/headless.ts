@@ -410,6 +410,16 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
     }
   }
 
+  // Bounded canonical mutation for abandoned DB-only milestone reservations.
+  // This bypasses the RPC/smart-entry bootstrap path so it cannot materialize
+  // projections before attempting the selective orphan-only deletion.
+  if (options.command === 'discard-milestone') {
+    const { handleDiscardMilestone } = await import('./headless-discard-milestone.js')
+    const handled = await handleDiscardMilestone(process.cwd(), options.commandArgs)
+    process.stdout.write(`${JSON.stringify(handled.result, null, 2)}\n`)
+    process.exit(handled.exitCode)
+  }
+
   // Recover: apply a verified legacy import and assess or execute its recovery
   // action, with no RPC child needed. This is the one mutating headless
   // subcommand, for CI and automation without an interactive TTY-bound runtime.

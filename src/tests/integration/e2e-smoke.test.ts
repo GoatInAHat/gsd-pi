@@ -26,6 +26,11 @@ import {
   runGsd,
   stripAnsi,
 } from "./cli-process.ts";
+import {
+  closeDatabase,
+  insertMilestone,
+  openDatabase,
+} from "../../resources/extensions/gsd/gsd-db.ts";
 
 ensureBuiltLoader();
 
@@ -475,6 +480,33 @@ test("gsd headless query returns JSON from the built CLI", async (t) => {
 
   const snapshot = JSON.parse(result.stdout);
   assert.equal(typeof snapshot.state?.phase, "string", "query output should include state.phase");
+});
+
+test("gsd headless discard-milestone executes the bounded route in the built CLI", async (t) => {
+  const tmpDir = createTempGitRepo("gsd-e2e-discard-orphan-");
+  t.after(() => {
+    try { closeDatabase(); } catch { /* already closed */ }
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+  mkdirSync(join(tmpDir, ".gsd", "milestones"), { recursive: true });
+  openDatabase(join(tmpDir, ".gsd", "gsd.db"));
+  insertMilestone({ id: "M001", status: "queued" });
+  closeDatabase();
+
+  const result = await runGsd(
+    ["headless", "discard-milestone", "M001", "--orphan-only"],
+    30_000,
+    {},
+    tmpDir,
+  );
+
+  assert.ok(!result.timedOut, "process should not hang");
+  assert.strictEqual(result.code, 0, `expected exit 0, got ${result.code}: ${result.stderr}`);
+  assertNoCrashMarkers(stripAnsi(result.stdout + result.stderr));
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.ok, true);
+  assert.deepEqual(output.discardedIds, ["M001"]);
+  assert.equal(output.after?.canonicalQueryVerified, true);
 });
 
 test("gsd --mode rpc --bare is not rejected at startup (headless --bare forwarding argv)", async () => {
