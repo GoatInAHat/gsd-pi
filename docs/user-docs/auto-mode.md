@@ -174,7 +174,7 @@ context_mode:
   enabled: false
 ```
 
-You can also tune sandbox behavior with `context_mode.exec_timeout_ms`, `context_mode.exec_stdout_cap_bytes`, `context_mode.exec_digest_chars`, and `context_mode.exec_env_allowlist`.
+You can also tune sandbox behavior with `context_mode.exec_timeout_ms`, `context_mode.exec_stdout_cap_bytes`, `context_mode.exec_digest_chars`, and `context_mode.exec_env_allowlist`. `context_mode.exec_timeout_ms` overrides the timeout for each `gsd_exec` call; when it is unset, `gsd_exec` inherits `verification_timeout_ms`, which defaults to `120000` ms.
 
 ### Git Isolation
 
