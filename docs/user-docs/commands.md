@@ -119,6 +119,7 @@ After writing the file, GSD attempts to open it in a browser using the local pla
 | `/gsd reset-slice` | Reopen the full terminal slice and every terminal task in one guarded database operation, preserve prior execution history, then refresh readable status |
 | `/gsd park` | Park a milestone — skip without deleting |
 | `/gsd unpark` | Reactivate a parked milestone |
+| `/gsd discard <milestone-id>` | Confirm and permanently discard one milestone without entering the smart-entry flow |
 | `/gsd rethink` | Conversational project reorganization — reorder, park, discard unadopted work, or add milestones |
 | Discard milestone | Available via `/gsd` wizard → "Milestone actions" → "Discard"; milestones with adopted canonical lifecycle history must be parked instead |
 
@@ -474,6 +475,17 @@ echo "Build a CLI tool" | gsd headless new-milestone --context -
 In JSON output summaries, headless can also return `status: "no-work-deterministic"` for repeatable no-progress tails (for example select → input → cancelled). This status exits with code `1` and suppresses automatic restart loops.
 
 Any `/gsd` subcommand works as a positional argument — `gsd headless status`, `gsd headless doctor`, `gsd headless dispatch execute`, etc.
+
+### `gsd headless discard-milestone`
+
+Deletes one or more DB-only orphan milestone reservations without starting an RPC session or running projection reconciliation. The mandatory `--orphan-only` guard preflights the complete set and refuses if any target has hierarchy or artifact rows, planning content, a disk projection, queue/dependency references, a worktree or milestone branch, or an active lease/dispatch/worker. No target is deleted unless every target passes; successful deletion occurs in one transaction.
+
+```bash
+gsd headless discard-milestone M015 --orphan-only
+gsd headless discard-milestone M015 M016 --orphan-only
+```
+
+The command always writes one structured JSON object with `before` and `after` snapshots. Exit `0` means every requested row was removed and the canonical post-delete query found none; exit `1` is a refusal or error.
 
 ### `gsd headless recover`
 

@@ -410,6 +410,14 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
     }
   }
 
+  // Selective DB-only orphan cleanup: direct one-shot path with no RPC child,
+  // extension bootstrap, or projection reconciliation.
+  if (options.command === 'discard-milestone') {
+    const { handleDiscardMilestone } = await import('./headless-discard-milestone.js')
+    const result = await handleDiscardMilestone(process.cwd(), options.commandArgs)
+    process.exit(result.exitCode)
+  }
+
   // Recover: apply a verified legacy import and assess or execute its recovery
   // action, with no RPC child needed. This is the one mutating headless
   // subcommand, for CI and automation without an interactive TTY-bound runtime.
