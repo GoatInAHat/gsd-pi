@@ -439,6 +439,9 @@ gsd headless next
 # Instant JSON snapshot — no LLM, ~50ms
 gsd headless query
 
+# Delete one or more DB-only milestone reservations
+gsd headless discard-milestone M014 M015 --orphan-only
+
 # With timeout for CI
 gsd headless --timeout 600000 auto
 
@@ -474,6 +477,16 @@ echo "Build a CLI tool" | gsd headless new-milestone --context -
 In JSON output summaries, headless can also return `status: "no-work-deterministic"` for repeatable no-progress tails (for example select → input → cancelled). This status exits with code `1` and suppresses automatic restart loops.
 
 Any `/gsd` subcommand works as a positional argument — `gsd headless status`, `gsd headless doctor`, `gsd headless dispatch execute`, etc.
+
+### `gsd headless discard-milestone`
+
+Deletes one or more orphaned milestone reservations without starting an RPC session or running markdown reconciliation. The required `--orphan-only` guard refuses the entire set unless every ID has a canonical milestone row and no slices, tasks, artifacts, planning payload, milestone directory, queue reference, dependent milestone, lease, active worker, worktree, or milestone branch. All IDs are preflighted before a single transaction deletes the set. Success and refusal both emit structured JSON with `before` and `after` snapshots.
+
+```bash
+gsd headless discard-milestone M014 M015 --orphan-only
+```
+
+For a general interactive discard, use `/gsd discard M014`; it asks for confirmation and calls the normal milestone discard operation directly.
 
 ### `gsd headless recover`
 

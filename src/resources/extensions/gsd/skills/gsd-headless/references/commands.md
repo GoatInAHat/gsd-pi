@@ -21,6 +21,7 @@ Session startup flags such as `--model ID` and `--thinking LEVEL` can be supplie
 | Command | Description |
 |---------|-------------|
 | `query` | **Instant JSON snapshot** — state, next dispatch, parallel costs. No LLM, ~50ms. Recommended for orchestrators. |
+| `discard-milestone <ids...> --orphan-only` | Delete DB-only orphan reservations atomically after fail-closed preflight; emits before/after JSON. |
 | `status` | Progress dashboard (TUI overlay — useful interactively, not for parsing) |
 | `visualize` | Workflow visualizer (deps, metrics, timeline) |
 | `history` | Execution history (supports --cost, --phase, --model, limit) |
@@ -34,6 +35,7 @@ Session startup flags such as `--model ID` and `--thinking LEVEL` can be supplie
 | `undo` | Revert last completed unit (--force flag) |
 | `steer <desc>` | Hard-steer plan documents during execution |
 | `queue` | Queue and reorder future milestones |
+| `discard <milestone-id>` | Confirm and permanently discard one milestone through the direct slash-command route |
 | `capture` | Fire-and-forget thought capture |
 | `triage` | Manually trigger triage of pending captures |
 

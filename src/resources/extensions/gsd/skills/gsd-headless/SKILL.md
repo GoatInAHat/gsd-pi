@@ -92,6 +92,14 @@ gsd headless dispatch research|plan|execute|complete|reassess|uat|replan
 
 Force-route to a specific phase, bypassing normal state-machine routing.
 
+### 6. Discard DB-Only Milestone Reservations
+
+```bash
+gsd headless discard-milestone M014 M015 --orphan-only
+```
+
+This direct route does not start an RPC child or run markdown reconciliation. It preflights every ID, refuses the whole set on any non-orphan surface, deletes the set in one transaction, and emits structured `before`/`after` JSON.
+
 ## Orchestrator Patterns
 
 ### Poll-and-React Loop

@@ -1402,6 +1402,29 @@ export function deleteMilestone(milestoneId: string): void {
   });
 }
 
+/**
+ * Delete only the canonical milestone rows for a preflighted reservation set.
+ * Callers own the orphan checks; this typed writer keeps the set deletion in
+ * one transaction and refuses adopted lifecycle history.
+ */
+export function deleteMilestoneReservationRows(milestoneIds: readonly string[]): number {
+  if (!getDbOrNull()!) throw new GSDError(GSD_STALE_STATE, "gsd-db: No database open");
+  if (milestoneIds.length === 0) return 0;
+  return transaction(() => {
+    assertNoAdoptedLifecycleHistory("deleteMilestoneReservationRows", [...milestoneIds]);
+    const params: Record<string, string> = {};
+    const placeholders = milestoneIds.map((milestoneId, index) => {
+      const key = `:mid_${index}`;
+      params[key] = milestoneId;
+      return key;
+    });
+    const result = getDbOrNull()!.prepare(
+      `DELETE FROM milestones WHERE id IN (${placeholders.join(", ")})`,
+    ).run(params) as { changes?: number };
+    return Number(result.changes ?? 0);
+  });
+}
+
 export function updateSliceFields(milestoneId: string, sliceId: string, fields: {
   title?: string;
   risk?: string;

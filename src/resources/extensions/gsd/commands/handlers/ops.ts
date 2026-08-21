@@ -20,6 +20,10 @@ import { handlePrBranch } from "../../commands-pr-branch.js";
 import { currentDirectoryRoot, projectRoot } from "../context.js";
 import { findUnmergedCompletedMilestones } from "../../unmerged-milestone-guard.js";
 import { runMergeMilestoneBlocker } from "../../closeout-wizard.js";
+import { ensureDbOpen } from "../../bootstrap/dynamic-tools.js";
+import { discardMilestone } from "../../milestone-actions.js";
+import { MILESTONE_ID_RE } from "../../milestone-ids.js";
+import { getMilestone } from "../../gsd-db.js";
 
 async function handleCompletedMilestoneRecovery(
   phase: string,
@@ -63,6 +67,46 @@ export async function handleOpsCommand(trimmed: string, ctx: ExtensionCommandCon
   const aliasPhase = directDispatchAlias.get(trimmed);
   if (aliasPhase) {
     await dispatchDirectPhase(ctx, pi, aliasPhase, projectRoot());
+    return true;
+  }
+
+  if (trimmed === "discard" || trimmed.startsWith("discard ")) {
+    const args = trimmed.replace(/^discard\s*/, "").trim().split(/\s+/).filter(Boolean);
+    if (args.length !== 1 || !MILESTONE_ID_RE.test(args[0]!)) {
+      ctx.ui.notify("Usage: /gsd discard <milestone-id>  Example: /gsd discard M001", "warning");
+      return true;
+    }
+    const milestoneId = args[0]!;
+    const basePath = projectRoot();
+    if (!await ensureDbOpen(basePath)) {
+      ctx.ui.notify(`Could not discard ${milestoneId} — canonical database is unavailable.`, "warning");
+      return true;
+    }
+    if (typeof ctx.ui.confirm !== "function") {
+      ctx.ui.notify(`Could not discard ${milestoneId} — interactive confirmation is unavailable.`, "warning");
+      return true;
+    }
+    const confirmed = await ctx.ui.confirm(
+      `Discard ${milestoneId}?`,
+      `This permanently deletes ${milestoneId} and all of its milestone data. This cannot be undone.`,
+    );
+    if (!confirmed) {
+      ctx.ui.notify(`Discard ${milestoneId} cancelled. No changes made.`, "info");
+      return true;
+    }
+    try {
+      const discarded = discardMilestone(basePath, milestoneId);
+      if (!discarded) {
+        ctx.ui.notify(`Could not discard ${milestoneId} — milestone not found.`, "warning");
+      } else if (getMilestone(milestoneId) !== null) {
+        ctx.ui.notify(`Could not fully discard ${milestoneId} — canonical database row remains.`, "warning");
+      } else {
+        ctx.ui.notify(`Discarded ${milestoneId}.`, "info");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.ui.notify(`Could not discard ${milestoneId}: ${message}`, "warning");
+    }
     return true;
   }
 
