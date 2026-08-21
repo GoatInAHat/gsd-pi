@@ -27,6 +27,7 @@ import { handlePlanTask as handlePlanTaskWithInvocation } from '../tools/plan-ta
 import { internalPlanningInvocation } from '../planning-invocation.ts';
 import { parseProjectionPlan as parsePlan } from '../schemas/parsers.ts';
 import { deriveState, invalidateStateCache } from '../state.ts';
+import { _setManagedProjectionWriteFaultForTest } from '../managed-projection-history.ts';
 
 function handlePlanSlice(
   params: Parameters<typeof handlePlanSliceWithInvocation>[0],
@@ -716,6 +717,72 @@ test('handlePlanSlice accepts metadata-only payloads without deleting existing t
   } finally {
     cleanup(base);
   }
+});
+
+test('handlePlanSlice retries a transient projection lock during metadata-only refresh', async (t) => {
+  const base = makeTmpBase();
+  t.after(() => cleanup(base));
+  t.after(() => _setManagedProjectionWriteFaultForTest(null));
+  openDatabase(join(base, '.gsd', 'gsd.db'));
+  seedParentSlice();
+
+  const first = await handlePlanSlice(validParams(), base);
+  assert.ok(!('error' in first), `unexpected error: ${'error' in first ? first.error : ''}`);
+
+  let transientFailures = 0;
+  _setManagedProjectionWriteFaultForTest((logicalPath) => {
+    if (logicalPath !== 'phases/01-test/01-02-PLAN.md' || transientFailures > 0) return;
+    transientFailures++;
+    throw new Error('projection root operation failed: sharing violation (os error 32)');
+  });
+
+  const result = await handlePlanSlice({
+    milestoneId: 'M001',
+    sliceId: 'S02',
+    goal: 'Refresh metadata through a transient Windows projection lock.',
+  }, base);
+
+  assert.equal(transientFailures, 1, 'fixture must fault the existing PLAN publish');
+  assert.ok(!('error' in result), `unexpected error: ${'error' in result ? result.error : ''}`);
+  assert.match(
+    readFileSync(join(base, '.gsd', 'phases', '01-test', '01-02-PLAN.md'), 'utf-8'),
+    /Refresh metadata through a transient Windows projection lock\./,
+  );
+  assert.deepEqual(getSliceTasks('M001', 'S02').map((task) => task.id), ['T01', 'T02']);
+});
+
+test('handlePlanSlice bounds persistent projection lock retries and reports the publish target', async (t) => {
+  const base = makeTmpBase();
+  t.after(() => cleanup(base));
+  t.after(() => _setManagedProjectionWriteFaultForTest(null));
+  openDatabase(join(base, '.gsd', 'gsd.db'));
+  seedParentSlice();
+
+  const first = await handlePlanSlice(validParams(), base);
+  assert.ok(!('error' in first), `unexpected error: ${'error' in first ? first.error : ''}`);
+
+  let transientFailures = 0;
+  _setManagedProjectionWriteFaultForTest((logicalPath) => {
+    if (logicalPath !== 'phases/01-test/01-02-PLAN.md') return;
+    transientFailures++;
+    throw new Error(
+      'projection root operation failed: transient projection root sharing violation during rename ' +
+      '(source: C:\\repo\\.gsd\\phases\\01-test\\.gsd-tmp; target: C:\\repo\\.gsd\\phases\\01-test\\01-02-PLAN.md) ' +
+      '(os error 32)',
+    );
+  });
+
+  const result = await handlePlanSlice({
+    milestoneId: 'M001',
+    sliceId: 'S02',
+    goal: 'Keep the canonical update when projection retries exhaust.',
+  }, base);
+
+  assert.ok('error' in result);
+  assert.equal(transientFailures, 5);
+  assert.match(result.error, /managed projection publish to .*01-02-PLAN\.md failed after 5 attempts/);
+  assert.match(result.error, /rename.*target: C:\\repo\\\.gsd\\phases\\01-test\\01-02-PLAN\.md/);
+  assert.equal(getSlice('M001', 'S02')?.goal, 'Keep the canonical update when projection retries exhaust.');
 });
 
 test('handlePlanSlice metadata-only on a fresh sketch slice keeps is_sketch set and renders no PLAN.md (#1027)', async () => {

@@ -12,13 +12,15 @@ import {
   createManagedProjectionDirectorySync,
   removeLegacyProjectionTreeSync,
   retainManagedProjectionMutation,
+  type ManagedProjectionMutation,
 } from "./managed-projection-history.js";
 import { classifyGsdLogicalPath } from "./projection-path-policy.js";
 import { preserveManagedProjectionBeforeMutation } from "./projection-mutation-guard.js";
+import { isTransientProjectionLockError } from "./projection-root-errors.js";
 export { removeLegacyProjectionTreeSync };
 
 const TRANSIENT_LOCK_ERROR_CODES = new Set(["EBUSY", "EPERM", "EACCES"]);
-const MAX_RENAME_ATTEMPTS = 5;
+const MAX_ATOMIC_WRITE_ATTEMPTS = 5;
 const SYNC_SLEEP_BUFFER = new SharedArrayBuffer(4);
 const SYNC_SLEEP_VIEW = new Int32Array(SYNC_SLEEP_BUFFER);
 
@@ -139,7 +141,7 @@ export async function atomicWriteAsyncWithOps(
   let lastError: unknown = null;
   let attempts = 0;
 
-  for (attempts = 1; attempts <= MAX_RENAME_ATTEMPTS; attempts++) {
+  for (attempts = 1; attempts <= MAX_ATOMIC_WRITE_ATTEMPTS; attempts++) {
     try {
       await ops.rename(tmpPath, filePath);
       // Persist the directory entry created by the rename.
@@ -147,7 +149,7 @@ export async function atomicWriteAsyncWithOps(
       return;
     } catch (error) {
       lastError = error;
-      if (!isTransientLockError(error) || attempts === MAX_RENAME_ATTEMPTS) {
+      if (!isTransientLockError(error) || attempts === MAX_ATOMIC_WRITE_ATTEMPTS) {
         break;
       }
       await ops.sleep(computeRetryDelayMs(attempts));
@@ -175,7 +177,7 @@ export function atomicWriteSyncWithOps(
   let lastError: unknown = null;
   let attempts = 0;
 
-  for (attempts = 1; attempts <= MAX_RENAME_ATTEMPTS; attempts++) {
+  for (attempts = 1; attempts <= MAX_ATOMIC_WRITE_ATTEMPTS; attempts++) {
     try {
       ops.rename(tmpPath, filePath);
       // Persist the directory entry created by the rename.
@@ -183,7 +185,7 @@ export function atomicWriteSyncWithOps(
       return;
     } catch (error) {
       lastError = error;
-      if (!isTransientLockError(error) || attempts === MAX_RENAME_ATTEMPTS) {
+      if (!isTransientLockError(error) || attempts === MAX_ATOMIC_WRITE_ATTEMPTS) {
         break;
       }
       ops.sleep(computeRetryDelayMs(attempts));
@@ -301,22 +303,36 @@ export function atomicWriteBufferSync(filePath: string, content: Buffer): void {
  */
 export async function atomicWriteAsync(filePath: string, content: string, encoding: BufferEncoding = "utf-8"): Promise<void> {
   return withProjectionMutation(filePath, async () => {
-    preserveManagedProjectionBeforeMutation(filePath, Buffer.from(content, encoding));
-    const mutation = beginManagedProjectionMutation(filePath, "write", content, encoding);
-    let managedApplyStarted = false;
-    try {
-      managedMutationBoundaryForTest?.("before-write", filePath);
-      managedApplyStarted = mutation !== null;
-      if (!applyManagedProjectionMutation(mutation)) {
-        await atomicWriteAsyncWithOps(filePath, content, encoding, DEFAULT_ASYNC_OPS);
+    for (let attempt = 1; attempt <= MAX_ATOMIC_WRITE_ATTEMPTS; attempt++) {
+      let mutation: ManagedProjectionMutation | null = null;
+      let managedApplyStarted = false;
+      try {
+        preserveManagedProjectionBeforeMutation(filePath, Buffer.from(content, encoding));
+        mutation = beginManagedProjectionMutation(filePath, "write", content, encoding);
+        managedMutationBoundaryForTest?.("before-write", filePath);
+        managedApplyStarted = mutation !== null;
+        if (!applyManagedProjectionMutation(mutation)) {
+          await atomicWriteAsyncWithOps(filePath, content, encoding, DEFAULT_ASYNC_OPS);
+        }
+        managedMutationBoundaryForTest?.("after-write", filePath);
+        commitManagedProjectionMutation(mutation);
+        return;
+      } catch (error) {
+        if (managedApplyStarted) retainManagedProjectionMutation(mutation);
+        else abortManagedProjectionMutation(mutation);
+        // The plain-filesystem fallback already performs its own bounded
+        // rename retries. Reopen/replay only a native managed mutation.
+        if (mutation === null || !isTransientProjectionLockError(error)) throw error;
+        if (attempt === MAX_ATOMIC_WRITE_ATTEMPTS) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(
+            `managed projection publish to ${filePath} failed after ${attempt} attempts: ${message}`,
+            { cause: error },
+          );
+        }
+        await delay(computeRetryDelayMs(attempt));
       }
-      managedMutationBoundaryForTest?.("after-write", filePath);
-    } catch (error) {
-      if (managedApplyStarted) retainManagedProjectionMutation(mutation);
-      else abortManagedProjectionMutation(mutation);
-      throw error;
     }
-    commitManagedProjectionMutation(mutation);
   });
 }
 
