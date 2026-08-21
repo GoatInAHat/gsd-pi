@@ -1158,7 +1158,7 @@ test("advance() routes a lost-lock error through recovery and journals an outcom
 
 test("projection lock classification survives the paused result boundary", () => {
   const nativeError = new Error("native projection root identity locking failed", {
-    cause: new Error("The process cannot access the file (os error 32)"),
+    cause: new Error("projection root operation failed: The process cannot access the file (os error 32)"),
   });
 
   const result = classifyAutoAdvanceFailure({ error: nativeError });
