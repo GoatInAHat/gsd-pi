@@ -8,7 +8,7 @@
 | `/gsd next` | Explicit step mode (same as `/gsd`) |
 | `/gsd auto` | Autonomous mode — research, plan, execute, commit, repeat |
 | `/gsd auto --resume-wedge <id>` | Acknowledge the named liveness wedge and re-enter auto mode after applying its sanctioned recovery |
-| `/gsd quick` | Execute a quick task with GSD guarantees (atomic commits, state tracking) without full planning overhead |
+| `/gsd quick [--discuss] [--research] [--validate] [--full] <task>` | Execute a quick task with GSD guarantees; optionally add discussion, research, plan checking, and post-execution verification (`--full` enables all three stages) |
 | `/gsd do <text>` | Route freeform text to the right GSD command |
 | `/gsd stop` | Stop auto mode gracefully |
 | `/gsd pause` | Pause auto-mode (preserves state, `/gsd auto` to resume) |
@@ -53,6 +53,8 @@
 | `/gsd help` | Categorized command reference with descriptions for all GSD subcommands |
 
 `/gsd discuss` supports optional direct targets: `/gsd discuss M014`, `/gsd discuss M014/S03`, `/gsd discuss --milestone M014`, and `/gsd discuss --slice M014/S03`.
+
+Quick-task right-sizing flags are composable. Use `--discuss` to surface design choices before planning, `--research` to investigate approaches first, and `--validate` to add plan checking and independent post-execution verification. Passing all three is equivalent to `--full`; passing none preserves the lightweight quick-task flow.
 
 ## Visual Briefs
 
