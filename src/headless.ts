@@ -419,6 +419,15 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
     process.exit(result.exitCode)
   }
 
+  // Bounded canonical deletion for DB-only milestone reservations. This path
+  // deliberately bypasses the RPC/bootstrap flow so preflight cannot create a
+  // projection for the reservation it is about to inspect.
+  if (options.command === 'discard-milestone') {
+    const { handleDiscardMilestone } = await import('./headless-discard-milestone.js')
+    const result = await handleDiscardMilestone(process.cwd(), options.commandArgs)
+    process.exit(result.exitCode)
+  }
+
   // Doctor: read-only health check, no RPC child needed (#4904 live-regression).
   // The interactive `/gsd doctor` command lives in the GSD extension; this CLI
   // path lets non-interactive callers (CI, recovery scripts, the live-regression
