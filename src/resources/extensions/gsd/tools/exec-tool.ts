@@ -25,13 +25,18 @@ export interface ExecToolParams {
 
 export interface ExecToolDeps {
   baseDir: string;
-  preferences: { context_mode?: ContextModeConfig } | null;
+  preferences: ExecToolPreferences | null;
   /** Optional override for testing. */
   run?: (req: ExecSandboxRequest, opts: ExecSandboxOptions) => Promise<ExecSandboxResult>;
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
   generateId?: () => string;
   signal?: AbortSignal;
+}
+
+interface ExecToolPreferences {
+  context_mode?: ContextModeConfig;
+  verification_timeout_ms?: number;
 }
 
 export type UatExecIntent =
@@ -74,9 +79,10 @@ const UAT_EXEC_INTENT_ALIASES: Record<string, UatExecIntent> = {
 
 export function buildExecOptions(
   baseDir: string,
-  cfg: ContextModeConfig | undefined,
+  preferences: ExecToolPreferences | null | undefined,
   extras?: Pick<ExecSandboxOptions, "env" | "now" | "generateId" | "signal">,
 ): ExecSandboxOptions {
+  const cfg = preferences?.context_mode;
   const allowlist = Array.isArray(cfg?.exec_env_allowlist) ? cfg!.exec_env_allowlist! : EXEC_DEFAULTS.envAllowlist;
   const stdoutCap = clampNumber(
     cfg?.exec_stdout_cap_bytes,
@@ -84,9 +90,15 @@ export function buildExecOptions(
     4_096,
     16_777_216,
   );
+  const verificationTimeout = clampNumber(
+    preferences?.verification_timeout_ms,
+    EXEC_DEFAULTS.defaultTimeoutMs,
+    1_000,
+    EXEC_DEFAULTS.clampTimeoutMs,
+  );
   const defaultTimeout = clampNumber(
     cfg?.exec_timeout_ms,
-    EXEC_DEFAULTS.defaultTimeoutMs,
+    verificationTimeout,
     1_000,
     EXEC_DEFAULTS.clampTimeoutMs,
   );
@@ -209,7 +221,7 @@ export async function executeGsdExec(
 
   const opts = buildExecOptions(
     deps.baseDir,
-    deps.preferences?.context_mode,
+    deps.preferences,
     { env: deps.env, now: deps.now, generateId: deps.generateId, signal: deps.signal },
   );
   const run = deps.run ?? runExecSandbox;

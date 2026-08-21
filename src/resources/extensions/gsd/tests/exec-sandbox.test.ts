@@ -490,12 +490,31 @@ test('isContextModeEnabled: defaults to true; only explicit false disables', () 
   assert.equal(isContextModeEnabled({ context_mode: { enabled: false } }), false);
 });
 
+test('buildExecOptions: defaults to verification timeout and honors exec override', () => {
+  const defaulted = buildExecOptions('/tmp/base', null);
+  assert.equal(defaulted.default_timeout_ms, 120_000);
+
+  const inherited = buildExecOptions('/tmp/base', {
+    verification_timeout_ms: 345_678,
+    context_mode: { enabled: true },
+  });
+  assert.equal(inherited.default_timeout_ms, 345_678);
+
+  const overridden = buildExecOptions('/tmp/base', {
+    verification_timeout_ms: 345_678,
+    context_mode: { enabled: true, exec_timeout_ms: 234_567 },
+  });
+  assert.equal(overridden.default_timeout_ms, 234_567);
+});
+
 test('buildExecOptions: clamps out-of-range values to safe defaults', () => {
   const opts = buildExecOptions('/tmp/base', {
-    enabled: true,
-    exec_timeout_ms: 999_999_999,
-    exec_stdout_cap_bytes: 1,
-    exec_digest_chars: -20,
+    context_mode: {
+      enabled: true,
+      exec_timeout_ms: 999_999_999,
+      exec_stdout_cap_bytes: 1,
+      exec_digest_chars: -20,
+    },
   });
   assert.equal(opts.default_timeout_ms, EXEC_DEFAULTS.clampTimeoutMs, 'timeout clamped to upper bound');
   assert.equal(opts.stdout_cap_bytes, 4_096, 'stdout cap clamped to floor');
