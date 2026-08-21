@@ -419,6 +419,15 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
     process.exit(result.exitCode)
   }
 
+  // Discard DB-only milestone reservations without starting the interactive
+  // extension runtime (and therefore without its reconciliation preamble).
+  if (options.command === 'discard-milestone') {
+    const { handleDiscardMilestone } = await import('./headless-discard-milestone.js')
+    const result = await handleDiscardMilestone(process.cwd(), options.commandArgs)
+    process.stdout.write(`${JSON.stringify(result.payload, null, 2)}\n`)
+    process.exit(result.exitCode)
+  }
+
   // Doctor: read-only health check, no RPC child needed (#4904 live-regression).
   // The interactive `/gsd doctor` command lives in the GSD extension; this CLI
   // path lets non-interactive callers (CI, recovery scripts, the live-regression

@@ -84,7 +84,15 @@ gsd headless query | jq '.next'
 gsd headless query | jq '.cost.total'
 ```
 
-### 5. Dispatch Specific Phase
+### 5. Discard Orphaned Reservations
+
+```bash
+gsd headless discard-milestone M001 M002 --orphan-only
+```
+
+This refuses unless every requested ID is a DB-only reservation with no workflow, artifact, dependency, queue, worktree, branch, lease, or worker state. All IDs are preflighted before the set is deleted transactionally.
+
+### 6. Dispatch Specific Phase
 
 ```bash
 gsd headless dispatch research|plan|execute|complete|reassess|uat|replan
