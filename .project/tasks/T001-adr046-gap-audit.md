@@ -3,9 +3,9 @@ id: T001
 title: Re-run removal gates and write the ADR-046 completion gap audit
 wave: 1
 deps: []            # task ids whose output or landed effect this task needs
-status: in-progress # orchestrator-owned: pending | in-progress | done | failed | blocked
+status: done        # orchestrator-owned: pending | in-progress | done | failed | blocked
 agent: build_T001   # orchestrator-owned: set at dispatch
-commit: null        # orchestrator-owned: exact task commit SHA
+commit: a89c363d68ddd6f6c65c153dbcd34ecff278c060 # orchestrator-owned: exact task commit SHA
 base: 20dbb856c7a1cdcee3cc5864eae7090fc88d26dc # orchestrator-owned: clean layer SHA for isolated Verify
 worktree: /Users/jeremymcspadden/orca/workspaces/gsd-pi/path-fixes.gsd-path/task/T001 # orchestrator-owned: isolated task worktree while active
 task_branch: gsd-path-task/T001 # orchestrator-owned: gsd-path-task/<id> while parallel; null when serial
@@ -145,3 +145,4 @@ node scripts/legacy-state-path-proof.mjs && node scripts/workflow-authority-base
      review verdicts, fixes. -->
 - 2026-08-22 — created by planner
 - 2026-08-22 — coder: re-ran all three gates at HEAD `20dbb856` — all PASS (`legacy-state-path-proof` PASS; `workflow-authority-baseline` PASS 4/4; `lifecycle-shadow-no-cutover-gate` PASS 7/7 structural + 11/11 behavioral). Established honest unit-suite baseline: `build:native:test` → `build:core` → `test:compile` → copied `native/addon/*.node` into `dist-test/native/addon/` (CI parity, ci.yml:226-228 — without it the compiled suite resolves the stale published engine binary and the 23 fault-injection tests fail) → `test:unit:compiled` = 14461 passed, 2 failed, 28 skipped; failures exactly the two vetoed ones (`prompt golden fixtures meet Phase 2 reduction gate`, `runReadCli handles global flags before read`). One transient isolation flake (`complete different-key contention rejects one stale writer without residue`) passed standalone (6/6) and did not recur on the confirming re-run; recorded in the audit. Wrote `docs/dev/ADR-046-completion-gap-audit.md` covering all step-8 legs, all ten invariants, the deletion blocker (2026-10-02/2026-10-07), the (a)–(e) re-check trigger, M9/M10/M11 deferrals, and both gate dispositions. Verify: PASS (`VERIFY OK`). Diff contains only the audit file.
+- 2026-08-22 — orchestrator: isolated Verify rerun PASS (all three gates green; 8/8 contract strings present). Landed as a89c363d68ddd6f6c65c153dbcd34ecff278c060.
