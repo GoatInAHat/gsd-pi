@@ -3,12 +3,12 @@ id: T002
 title: Fix cutover-contradicting doc drift (CONTEXT.md, GSD_ALLOW_MARKDOWN_DERIVE_FALLBACK, legacy-layout skill rows)
 wave: 1
 deps: []            # task ids whose output or landed effect this task needs
-status: pending     # orchestrator-owned: pending | in-progress | done | failed | blocked
-agent: null         # orchestrator-owned: set at dispatch
+status: in-progress # orchestrator-owned: pending | in-progress | done | failed | blocked
+agent: build_T002   # orchestrator-owned: set at dispatch
 commit: null        # orchestrator-owned: exact task commit SHA
-base: null          # orchestrator-owned: clean layer SHA for isolated Verify
-worktree: null      # orchestrator-owned: isolated task worktree while active
-task_branch: null   # orchestrator-owned: gsd-path-task/<id> while parallel; null when serial
+base: 20dbb856c7a1cdcee3cc5864eae7090fc88d26dc # orchestrator-owned: clean layer SHA for isolated Verify
+worktree: /Users/jeremymcspadden/orca/workspaces/gsd-pi/path-fixes.gsd-path/task/T002 # orchestrator-owned: isolated task worktree while active
+task_branch: gsd-path-task/T002 # orchestrator-owned: gsd-path-task/<id> while parallel; null when serial
 files:              # every file this task may touch — dispatch checks overlap
   - CONTEXT.md
   - gitbook/reference/environment-variables.md
