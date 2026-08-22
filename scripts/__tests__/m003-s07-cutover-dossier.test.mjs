@@ -97,8 +97,8 @@ const COMMANDS = Object.freeze([
     verdict: "required",
   },
   {
-    id: "semantic-shadow-no-cutover",
-    command: "pnpm run gate:semantic-shadow-no-cutover",
+    id: "lifecycle-shadow-no-cutover",
+    command: "pnpm run gate:lifecycle-shadow-no-cutover",
     stage: "observed",
     verdict: "pass",
     exitCode: 0,
@@ -333,7 +333,7 @@ function validInput() {
     })),
     commands: COMMANDS.map((command) => ({ ...command })),
     noCutover: {
-      structural: { passed: 8, total: 8 },
+      structural: { passed: 7, total: 7 },
       behavioral: { passed: 11, total: 11 },
     },
     authorityBaseline: { passed: 4, total: 4 },

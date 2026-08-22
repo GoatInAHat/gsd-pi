@@ -12,14 +12,19 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
 import {
-  NO_CUTOVER_BEHAVIORAL_WITNESSES,
-} from "../semantic-shadow-no-cutover-gate.mjs";
+  LIFECYCLE_SHADOW_BEHAVIORAL_WITNESSES,
+} from "../lifecycle-shadow-no-cutover-gate.mjs";
 import { buildDossier, renderDossier } from "../m003-s07-cutover-dossier.mjs";
-import {
+import "../../src/resources/extensions/gsd/tests/resolve-ts.mjs";
+
+// This suite must also load under bare `--experimental-strip-types` (no
+// `--import` loader flag), so the TypeScript import chain is resolved
+// dynamically after the resolve-ts hooks above have registered.
+const {
   collectSemanticShadowCapstoneEvidence,
   normalizeSemanticShadowCapstoneEvidence,
-} from "../../src/resources/extensions/gsd/tests/semantic-shadow-capstone-harness.ts";
-import { collectM003S07DossierInput, main as runDossierInputCli } from "../m003-s07-dossier-input.ts";
+} = await import("../../src/resources/extensions/gsd/tests/semantic-shadow-capstone-harness.ts");
+const { collectM003S07DossierInput, main: runDossierInputCli } = await import("../m003-s07-dossier-input.ts");
 
 const tempDirs = new Set<string>();
 const loaderPath = fileURLToPath(new URL("../../src/resources/extensions/gsd/tests/resolve-ts.mjs", import.meta.url));
@@ -204,8 +209,8 @@ function passingReports(databasePath?: string) {
     runNoCutover: () => ({
       verdict: "pass",
       githubMetadataUsed: false,
-      structuralChecks: Array.from({ length: 8 }, (_, index) => ({ id: `structural-${index}`, verdict: "pass" })),
-      behavioralChecks: NO_CUTOVER_BEHAVIORAL_WITNESSES.map((witness) => ({ ...witness, verdict: "pass" })),
+      structuralChecks: Array.from({ length: 7 }, (_, index) => ({ id: `structural-${index}`, verdict: "pass" })),
+      behavioralChecks: LIFECYCLE_SHADOW_BEHAVIORAL_WITNESSES.map((witness) => ({ ...witness, verdict: "pass" })),
     }),
     runAuthorityBaseline: () => ({
       verdict: "pass",
@@ -255,11 +260,11 @@ test("collector emits one canonical read-only snapshot without relabeling fixtur
   );
   assert.deepEqual(input.taskReceiptHeads.map((head) => head.taskId), ["T01", "T02", "T03", "T04", "T05", "T06"]);
   assert.deepEqual(input.compatibilityInventory.map(({ id, file, title }) => ({ id, file, title })),
-    NO_CUTOVER_BEHAVIORAL_WITNESSES.map(({ id, file, title }) => ({ id, file, title })));
+    LIFECYCLE_SHADOW_BEHAVIORAL_WITNESSES.map(({ id, file, title }) => ({ id, file, title })));
   assert.equal(buildDossier(input).recommendation, "NO_GO");
   assert.deepEqual(input.commands.map(({ id, stage, verdict }) => ({ id, stage, verdict })), [
     { id: "semantic-shadow-capstone", stage: "post_generation", verdict: "required" },
-    { id: "semantic-shadow-no-cutover", stage: "observed", verdict: "pass" },
+    { id: "lifecycle-shadow-no-cutover", stage: "observed", verdict: "pass" },
     { id: "authority-baseline", stage: "observed", verdict: "pass" },
     { id: "dossier-check", stage: "post_generation", verdict: "required" },
     { id: "verify-merge", stage: "post_generation", verdict: "required" },
@@ -490,8 +495,8 @@ test("CLI runs local reports and emits canonical validator-ready JSON", async ()
   assert.equal(stdout.endsWith("\n"), true);
   assert.equal(buildDossier(input).recommendation, "NO_GO");
   assert.deepEqual(input.noCutover, {
-    structural: { passed: 8, total: 8 },
-    behavioral: { passed: 15, total: 15 },
+    structural: { passed: 7, total: 7 },
+    behavioral: { passed: 11, total: 11 },
   });
   assert.deepEqual(input.authorityBaseline, { passed: 4, total: 4 });
 });

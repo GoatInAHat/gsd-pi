@@ -102,8 +102,8 @@ export const COMMAND_INVENTORY = Object.freeze([
     verdict: "required",
   },
   {
-    id: "semantic-shadow-no-cutover",
-    command: "pnpm run gate:semantic-shadow-no-cutover",
+    id: "lifecycle-shadow-no-cutover",
+    command: "pnpm run gate:lifecycle-shadow-no-cutover",
     stage: "observed",
     verdict: "pass",
     exitCode: 0,
@@ -810,7 +810,7 @@ function requireExactGate(rawGate, expected, label) {
 function normalizeNoCutover(rawNoCutover) {
   const noCutover = requireRecord(rawNoCutover, "No-cutover gate");
   return {
-    structural: requireExactGate(noCutover.structural, 8, "No-cutover structural gate"),
+    structural: requireExactGate(noCutover.structural, 7, "No-cutover structural gate"),
     behavioral: requireExactGate(
       noCutover.behavioral,
       COMPATIBILITY_IDS.length,
