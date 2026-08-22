@@ -133,7 +133,7 @@ context_mode:
   enabled: false
 ```
 
-You can also tune sandbox behavior with `context_mode.exec_timeout_ms`, `context_mode.exec_stdout_cap_bytes`, `context_mode.exec_digest_chars`, and `context_mode.exec_env_allowlist`. `context_mode.exec_timeout_ms` overrides the timeout for each `gsd_exec` call; when it is unset, `gsd_exec` inherits `verification_timeout_ms`, which defaults to `120000` ms.
+You can also tune sandbox behavior with `context_mode.exec_timeout_ms`, `context_mode.exec_stdout_cap_bytes`, `context_mode.exec_digest_chars`, and `context_mode.exec_env_allowlist`. `context_mode.exec_timeout_ms` overrides the timeout for each `gsd_exec` call. When it is unset, verification-oriented workloads such as builds, tests, linting, type checks, and verification commands inherit `verification_timeout_ms` (default: `120000` ms); other `gsd_exec` calls use the sandbox's `30000` ms default.
 
 ## Runtime Tool Policy
 
