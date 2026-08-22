@@ -100,7 +100,7 @@ under the keep ruling and must not be "corrected" away.
 ## Verify
 
 ```bash
-! grep -rn 'GSD_ALLOW_MARKDOWN_DERIVE_FALLBACK' gitbook/ && ! grep -q 'do not describe current runtime authority until the relevant cutover' CONTEXT.md && grep -qi 'lifecycle read authority' CONTEXT.md && ! { grep -h '\.gsd/milestones' src/resources/skills/decompose-into-slices/SKILL.md src/resources/skills/handoff/SKILL.md src/resources/skills/write-milestone-brief/SKILL.md | grep -iv legacy | grep -q .; } && git diff --name-only HEAD | grep -vE '^(CONTEXT.md|gitbook/reference/environment-variables.md|gitbook/core-concepts/auto-mode.md|src/resources/skills/decompose-into-slices/SKILL.md|src/resources/skills/handoff/SKILL.md|src/resources/skills/write-milestone-brief/SKILL.md)$' | (! grep .)
+! grep -rn 'GSD_ALLOW_MARKDOWN_DERIVE_FALLBACK' gitbook/ && ! grep -q 'do not describe current runtime authority until the relevant cutover' CONTEXT.md && grep -qi 'lifecycle read authority' CONTEXT.md && ! { grep -h '\.gsd/milestones' src/resources/skills/decompose-into-slices/SKILL.md src/resources/skills/handoff/SKILL.md src/resources/skills/write-milestone-brief/SKILL.md | grep -iv legacy | grep -q .; } && git diff --name-only HEAD | grep -vE '^(CONTEXT.md|gitbook/reference/environment-variables.md|gitbook/core-concepts/auto-mode.md|src/resources/skills/decompose-into-slices/SKILL.md|src/resources/skills/handoff/SKILL.md|src/resources/skills/write-milestone-brief/SKILL.md|\.project/tasks/T002-cutover-doc-drift\.md)$' | (! grep .)
 ```
 
 ## Log
@@ -110,3 +110,4 @@ under the keep ruling and must not be "corrected" away.
      review verdicts, fixes. -->
 - 2026-08-22 — created by planner
 - 2026-08-22 — plan-defect repair (orchestrator): removed backticks around two .gsd/milestones/ prose mentions in Approach — the brief linter extracted them as path tokens missing at the layer base; the string names a legacy layout, not a repo path. No contract change.
+- 2026-08-22 — plan-defect repair (orchestrator): Verify's final git-diff clause whitelisted only the six product files, so the role-mandated append-only Log edit to this task file made the orchestrator's authoritative rerun fail. Added the task file to the whitelist; product-path strictness unchanged.
