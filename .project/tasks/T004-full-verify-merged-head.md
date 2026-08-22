@@ -95,3 +95,12 @@ pnpm run build:native:test && pnpm run build:core && pnpm run typecheck:extensio
      readings: <candidates>` for contract ambiguity), orchestrator answers,
      review verdicts, fixes. -->
 - 2026-08-22 — created by planner
+- 2026-08-22 — T004 full verify at merged HEAD a752a16d4 (base 60b8e40c5). All six criteria satisfied; Verify exit 0.
+  - Recipe run in CI-parity order: `build:native:test` (ok, gsd_engine.dev.node, 49.9s) → `build:core` (ok) → `typecheck:extensions` (ok) → `test:compile` (ok, 8029 files) → mirrored `native/addon/*.node` into `dist-test/native/addon/` (ci.yml:226-228 parity) → `test:unit:compiled` with `GSD_NATIVE_PREFER_LOCAL=1`.
+  - Unit suite: **14462 passed, 1 failed, 28 skipped**. Only failure: `runReadCli handles global flags before read` (pre-existing, INTENT-vetoed). `prompt golden fixtures meet Phase 2 reduction gate` PASSED this run; failure set minus the two named pre-existing = ∅. No unexpected red.
+  - Gates at merged HEAD: `legacy-state-path-proof.mjs` PASS; `workflow-authority-baseline.mjs` PASS (4/4); `lifecycle-shadow-no-cutover-gate.mjs` PASS (7/7 structural, 11/11 behavioral).
+  - Dossier tests at merged HEAD: `m003-s07-dossier-input.test.ts` + `m003-s07-cutover-dossier.test.mjs` — 78 pass, 0 fail.
+  - Artifacts: `docs/dev/ADR-046-completion-gap-audit.md` present with all 8 contract markers; `gitbook/` has zero `GSD_ALLOW_MARKDOWN_DERIVE_FALLBACK`; CONTEXT.md carries `lifecycle read authority` (line 11).
+  - Veto sweep: `git diff --name-only e210e12a...HEAD -- . ':!.project'` = exactly 12 files, all within the T001/T002/T003 `files` lists (CONTEXT.md, ADR-046 audit, cutover-dossier.json, 2 gitbook pages, 3 bundled SKILL.md, 2 dossier scripts, 2 dossier tests). No legacy import/export deletion, no packages/db, no prompt-golden/read-cli-args edits, no gate or legacy:cleanup retirement. Veto-clean.
+  - Full Verify command re-run verbatim end-to-end on quiet machine: VERIFY_EXIT=0.
+  - Note: an earlier parallel attempt (gates run concurrently with the unit suite) showed `fault-boundary-matrix` ETIMEDOUT (60s spawn timeout under CPU contention) and one cascading dossier-test failure; both re-ran green sequentially on the quiet machine. Environmental load flake, not product red; no files changed in response.
