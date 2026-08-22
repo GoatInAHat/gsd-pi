@@ -69,7 +69,7 @@ Iterate on feedback until the user approves the breakdown. Do not proceed to Ste
 
 ## Step 5: Write the roadmap
 
-Once approved, write or update `M###-ROADMAP.md` matching the template exactly. Critical format (parsers depend on it):
+Once approved, write or update `NN-ROADMAP.md` (flat-phase phase-level file name, e.g. `01-ROADMAP.md`) matching the template exactly. Critical format (parsers depend on it):
 
 ```markdown
 - [ ] **S01: Title** `risk:high` `depends:[]`
@@ -80,7 +80,7 @@ Once approved, write or update `M###-ROADMAP.md` matching the template exactly. 
 
 Fill the rest of the template: Vision, Success Criteria, Key Risks, Proof Strategy, Verification Classes, Definition of Done, Requirement Coverage, Horizontal Checklist (omit entirely for trivial milestones), and the Boundary Map (`S01 → S02` produces/consumes blocks — be specific, name real APIs/types/invariants).
 
-Use `write` to the path `.gsd/milestones/<MID>/<MID>-ROADMAP.md`. Do not edit checkboxes by hand during normal execution — the `gsd_*` tools own state.
+Use `write` to the flat-phase path `.gsd/phases/NN-slug/NN-ROADMAP.md` (the phase directory named for the milestone, e.g. `.gsd/phases/01-first-milestone/01-ROADMAP.md`). The legacy pre-flat-phase layout used `.gsd/milestones/<MID>/<MID>-ROADMAP.md`; only write there when working on a legacy-layout project. Do not edit checkboxes by hand during normal execution — the `gsd_*` tools own state.
 
 ## Step 6: Optionally file as GitHub issues
 
@@ -108,7 +108,7 @@ If the user explicitly asks (and only if — outward actions need confirmation),
 <or "None - can start immediately">
 
 ---
-From milestone brief at `.gsd/milestones/<MID>/<MID>-CONTEXT.md`.
+From milestone brief at `.gsd/phases/NN-slug/NN-CONTEXT.md` (flat-phase layout).
 ```
 
 Do NOT close or modify any parent issue.

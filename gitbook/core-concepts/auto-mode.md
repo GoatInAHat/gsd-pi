@@ -50,9 +50,9 @@ resume contracts are maintained in the authoritative
 
 In worktree mode, the project-root database remains authoritative. Project-root
 and worktree markdown projections are diagnostics, not state to sync back.
-Runtime state derivation does not silently rebuild from markdown when the
-database is unavailable. The legacy markdown fallback is only enabled with
-`GSD_ALLOW_MARKDOWN_DERIVE_FALLBACK=1` for tests and explicit recovery work.
+The database is authoritative: runtime state derivation never rebuilds from
+markdown when the database is unavailable, and there is no markdown-derive
+fallback switch.
 
 ## Deep Planning Mode
 

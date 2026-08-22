@@ -5,9 +5,12 @@
 ### Accepted ADR-046 vocabulary
 
 These terms describe the accepted database-authoritative lifecycle contract in
-[ADR-046](docs/dev/ADR-046-database-authoritative-workflow-lifecycle.md). They
-do not describe current runtime authority until the relevant cutover has
-completed.
+[ADR-046](docs/dev/ADR-046-database-authoritative-workflow-lifecycle.md).
+Workflow state authority has cut over to this contract: `state.ts` derives
+runtime state from the database only, and markdown is never a live-path
+fallback. Canonical lifecycle read authority for the deferred lifecycle
+surfaces has NOT cut over and remains legacy under the still-in-force D005
+decision.
 
 - **Project**: the complete body of work a user wants GSD to guide from discovery through delivery.
 - **Milestone**: a durable, resumable stage of a Project, including discovery, research, planning, or delivery work.

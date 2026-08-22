@@ -49,7 +49,7 @@ This shrinks what `continue.md` has to carry.
 
 ## Step 3: Write continue.md
 
-Create `.gsd/milestones/<MID>/slices/<SID>/continue.md` with the following shape. Keep it tight — one screenful max.
+Create the slice CONTINUE file at the flat-phase path `.gsd/phases/NN-slug/NN-MM-CONTINUE.md` (phase number, then plan number, e.g. `.gsd/phases/01-first-milestone/01-02-CONTINUE.md`). The legacy pre-flat-phase layout used `.gsd/milestones/<MID>/slices/<SID>/continue.md`; only write there on a legacy-layout project. Use the following shape. Keep it tight — one screenful max.
 
 ```markdown
 # Continue — S02 / T03

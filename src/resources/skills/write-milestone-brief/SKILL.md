@@ -69,7 +69,7 @@ Populate `M###-CONTEXT.md` using the template. Key sections:
 
 ## Step 5: Write it
 
-Use the `write` tool to create or overwrite `.gsd/milestones/<MID>/<MID>-CONTEXT.md`. Do not ask for approval of the file contents before writing — the user will see the rendered file and can edit directly.
+Use the `write` tool to create or overwrite the flat-phase brief at `.gsd/phases/NN-slug/NN-CONTEXT.md` (the phase directory named for the milestone, e.g. `.gsd/phases/01-first-milestone/01-CONTEXT.md`). The legacy pre-flat-phase layout used `.gsd/milestones/<MID>/<MID>-CONTEXT.md`; only write there on a legacy-layout project. Do not ask for approval of the file contents before writing — the user will see the rendered file and can edit directly.
 
 Then append a one-line summary to `.gsd/DECISIONS.md` for any genuinely hard-to-reverse architectural decision: `- YYYY-MM-DD [MID]: <decision> — <one-line rationale>`.
 
@@ -77,7 +77,7 @@ Then append a one-line summary to `.gsd/DECISIONS.md` for any genuinely hard-to-
 
 After writing, offer the user (do not auto-execute):
 
-1. **Proceed to planning** — run `/gsd dispatch plan` to generate `M###-ROADMAP.md` from this brief.
+1. **Proceed to planning** — run `/gsd dispatch plan` to generate `NN-ROADMAP.md` from this brief.
 2. **File as GitHub issue** — use the active GitHub issue-write tool if one is available, using its exact active tool name. Requires explicit "yes" per the outward-action rule. Use the PRD template below for the body.
 3. **Iterate on the brief** — if something feels wrong, run `grill-me` to stress-test before moving on.
 
@@ -96,7 +96,7 @@ After writing, offer the user (do not auto-execute):
 <cover all aspects; be exhaustive>
 
 ## Architectural Decisions
-<list of decisions with rationale — copy from M###-CONTEXT.md>
+<list of decisions with rationale — copy from NN-CONTEXT.md>
 
 ## Testing Strategy
 <what a good test looks like here: external behavior only, which modules get tested, prior art>
@@ -108,7 +108,7 @@ After writing, offer the user (do not auto-execute):
 <any extra context>
 
 ---
-See `.gsd/milestones/<MID>/<MID>-CONTEXT.md` for the full brief.
+See `.gsd/phases/NN-slug/NN-CONTEXT.md` for the full brief.
 ```
 
 </process>
