@@ -10,7 +10,7 @@ Updated: 2026-08-22
 
 | Wave | Goal | Tasks | Done | Review |
 |------|------|-------|------|--------|
-| 1 | risk burn-down: gate re-runs + gap audit, doc-drift fixes, dossier repair | 3 | 0/3 | — |
+| 1 | risk burn-down: gate re-runs + gap audit, doc-drift fixes, dossier repair | 3 | 1/3 | — |
 | 2 | merged-state verification (full verify:pr-class + veto sweep) | 1 | 0/1 | — |
 
 ## In flight
