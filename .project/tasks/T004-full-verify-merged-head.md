@@ -3,9 +3,9 @@ id: T004
 title: Full verify:pr-class run and veto sweep at merged HEAD
 wave: 2
 deps: [T001, T002, T003]   # landed effects this task validates at merged HEAD
-status: in-progress # orchestrator-owned: pending | in-progress | done | failed | blocked
+status: done         # orchestrator-owned: pending | in-progress | done | failed | blocked
 agent: build_T004   # orchestrator-owned: set at dispatch
-commit: null        # orchestrator-owned: exact task commit SHA
+commit: 3ac062a1385d7d9e50dd36d7e6005979648fe0cc # orchestrator-owned: exact task commit SHA
 base: 60b8e40c505a5961aedccb3c306bac89eaec3ef7 # orchestrator-owned: clean layer SHA for isolated Verify
 worktree: /Users/jeremymcspadden/orca/workspaces/gsd-pi/path-fixes # orchestrator-owned: isolated task worktree while active (serial round: primary worktree on the bound branch)
 task_branch: null   # orchestrator-owned: gsd-path-task/<id> while parallel; null when serial
@@ -104,3 +104,4 @@ pnpm run build:native:test && pnpm run build:core && pnpm run typecheck:extensio
   - Veto sweep: `git diff --name-only e210e12a...HEAD -- . ':!.project'` = exactly 12 files, all within the T001/T002/T003 `files` lists (CONTEXT.md, ADR-046 audit, cutover-dossier.json, 2 gitbook pages, 3 bundled SKILL.md, 2 dossier scripts, 2 dossier tests). No legacy import/export deletion, no packages/db, no prompt-golden/read-cli-args edits, no gate or legacy:cleanup retirement. Veto-clean.
   - Full Verify command re-run verbatim end-to-end on quiet machine: VERIFY_EXIT=0.
   - Note: an earlier parallel attempt (gates run concurrently with the unit suite) showed `fault-boundary-matrix` ETIMEDOUT (60s spawn timeout under CPU contention) and one cascading dossier-test failure; both re-ran green sequentially on the quiet machine. Environmental load flake, not product red; no files changed in response.
+- 2026-08-22 — orchestrator: authoritative Verify rerun #1 failed on a swallowed flaky ✖ line in test:unit:compiled; leg-only rerun clean; full end-to-end rerun #2 PASS (exit 0): builds, typecheck, test:compile, all three gates, 78/78 dossier tests, doc markers, unit suite with no failures beyond the two tolerated named pre-existing ones. Landed as 3ac062a1385d7d9e50dd36d7e6005979648fe0cc (task-file Log only, by design).
