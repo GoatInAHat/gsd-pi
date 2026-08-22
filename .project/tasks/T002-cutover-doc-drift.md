@@ -43,7 +43,7 @@ under the keep ruling and must not be "corrected" away.
   layout (`phases/NN-slug/NN-*.md`) is described as current — code truth:
   `paths.ts:208,905` and `auto-artifact-paths.ts:70-71` under
   `src/resources/extensions/gsd/`; the legacy layout code is at
-  `paths.ts:659-667,817`. Any retained `.gsd/milestones/` mention must be
+  `paths.ts:659-667,817`. Any retained .gsd/milestones/ mention must be
   explicitly marked as the legacy pre-flat-phase layout on its line.
   Verify each fixed row by re-running the audit's claim check: confirm the
   doc's claim now matches those code locations. Row 39 (same file as row
@@ -65,7 +65,7 @@ under the keep ruling and must not be "corrected" away.
   and there is no markdown-derive fallback switch. Do not add the var
   anywhere else.
 - Check the mirrors before editing: the zh-CN tree and the
-  docs//mintlify-docs trees contain `.gsd/milestones/` mentions, but the
+  docs//mintlify-docs trees contain .gsd/milestones/ mentions, but the
   audit verified them as correctly qualified ("legacy", "until migrated") —
   do NOT touch them. Do not touch `docs/user-docs/migration.md`,
   `gitbook/reference/troubleshooting.md`, `mintlify-docs/guides/migration.mdx`,
@@ -109,3 +109,4 @@ under the keep ruling and must not be "corrected" away.
      readings: <candidates>` for contract ambiguity), orchestrator answers,
      review verdicts, fixes. -->
 - 2026-08-22 — created by planner
+- 2026-08-22 — plan-defect repair (orchestrator): removed backticks around two .gsd/milestones/ prose mentions in Approach — the brief linter extracted them as path tokens missing at the layer base; the string names a legacy layout, not a repo path. No contract change.

@@ -22,4 +22,4 @@ Updated: 2026-08-22
 
 <!-- Anything a human should know: 2×-failed tasks, defective task files
      fixed mid-build, serialized file conflicts. -->
-- none
+- 2026-08-22 — brief-lint defects repaired before wave-1 dispatch: T002 (backticked .gsd/milestones/ prose mentions read as missing paths) and T003 (backticked retired-script path read as missing) reworded; no contract changes. T004's lint flags for the gap-audit path are expected — it is produced by T001 and will exist at T004's wave-2 round base; T004 is not in the wave-1 ready set.

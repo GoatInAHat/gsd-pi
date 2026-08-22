@@ -21,7 +21,7 @@ files:              # every file this task may touch — dispatch checks overlap
 
 ## Context
 
-`scripts/semantic-shadow-no-cutover-gate.mjs` was retired in the v1 milestone
+`semantic-shadow-no-cutover-gate.mjs` (formerly under scripts/) was retired in the v1 milestone
 (superseded by `scripts/lifecycle-shadow-no-cutover-gate.mjs`), but the
 M003/S07 dossier tooling still references it: `scripts/m003-s07-dossier-input.ts:18-21`
 imports `runSemanticShadowNoCutoverGate` from the deleted module (used at
@@ -98,3 +98,4 @@ live landmine that crashes the dossier tooling.
      readings: <candidates>` for contract ambiguity), orchestrator answers,
      review verdicts, fixes. -->
 - 2026-08-22 — created by planner
+- 2026-08-22 — plan-defect repair (orchestrator): reworded the Context reference to the retired gate script (`semantic-shadow-no-cutover-gate.mjs`, formerly under scripts/) — the brief linter extracted the backticked full path as a token missing at the layer base; the file's absence is the point of the repair. No contract change.
