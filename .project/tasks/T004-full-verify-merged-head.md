@@ -3,11 +3,11 @@ id: T004
 title: Full verify:pr-class run and veto sweep at merged HEAD
 wave: 2
 deps: [T001, T002, T003]   # landed effects this task validates at merged HEAD
-status: pending     # orchestrator-owned: pending | in-progress | done | failed | blocked
-agent: null         # orchestrator-owned: set at dispatch
+status: in-progress # orchestrator-owned: pending | in-progress | done | failed | blocked
+agent: build_T004   # orchestrator-owned: set at dispatch
 commit: null        # orchestrator-owned: exact task commit SHA
-base: null          # orchestrator-owned: clean layer SHA for isolated Verify
-worktree: null      # orchestrator-owned: isolated task worktree while active
+base: 60b8e40c505a5961aedccb3c306bac89eaec3ef7 # orchestrator-owned: clean layer SHA for isolated Verify
+worktree: /Users/jeremymcspadden/orca/workspaces/gsd-pi/path-fixes # orchestrator-owned: isolated task worktree while active (serial round: primary worktree on the bound branch)
 task_branch: null   # orchestrator-owned: gsd-path-task/<id> while parallel; null when serial
 files:              # every file this task may touch — dispatch checks overlap
   # none — verification only; this task edits no repo files
