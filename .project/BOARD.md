@@ -3,7 +3,7 @@
 <!-- Maintained by the /gsd-path-build orchestrator. Human-readable summary;
      task-file frontmatter is the source of truth on any disagreement. -->
 
-Current wave: 1 of 2
+Current wave: 2 of 2
 Updated: 2026-08-22
 
 ## Waves
@@ -11,7 +11,7 @@ Updated: 2026-08-22
 | Wave | Goal | Tasks | Done | Review |
 |------|------|-------|------|--------|
 | 1 | risk burn-down: gate re-runs + gap audit, doc-drift fixes, dossier repair | 3 | 3/3 | pass, 1 cycle (wave-1.cycle1.md) |
-| 2 | merged-state verification (full verify:pr-class + veto sweep) | 1 | 0/1 | — |
+| 2 | merged-state verification (full verify:pr-class + veto sweep) | 1 | 1/1 | pass, 1 cycle (wave-2.cycle1.md, verify-only) |
 
 ## In flight
 
