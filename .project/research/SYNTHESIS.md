@@ -1,314 +1,129 @@
 # Synthesis
 
-<!-- Written by the synthesizer role. The planner treats Decisions as settled. -->
+<!-- Written by the decider role. The planner treats Decisions as settled. -->
 
-Milestone: state-DB cutover in gsd-pi — flip project state to DB-authoritative with
-files as pure projections, prove the legacy filesystem-state path is unused, delete it.
+## Settled
+
+- Compatibility window — does NOT hold: Import Preview/Application shipped v1.12.0 (2026-08-03); 19 days elapsed vs the controlling ≥60-day leg; earliest close 2026-10-02 (ADR-literal) / 2026-10-07 (v1-milestone start) — verdict identical under both readings; "time alone is not a Removal Gate" (evidence-removal-gates.md § "window math — the 2-release leg holds under both readings; the 60-day leg fails under both"; ADR-046:253-260)
+- Ship-release counting rule — "stable release" = non-`-dev` semver with a GitHub release; count published artifacts, not CHANGELOG headings (v1.15.1 was never released) (evidence-removal-gates.md § "'stable release' is well-defined" and § "CHANGELOG [1.15.1] was never released")
+- Import-machinery telemetry thresholds — never built: zero telemetry references in `legacy-import-*.ts`, five existing counters cover other paths, no field telemetry exists at all (R1 accepted in v1) (evidence-removal-gates.md § "removal-gate telemetry exists but structurally cannot observe the legacy import path"; evidence-domain.md § "step-8 gate 'telemetry thresholds'")
+- Performance baselines for import/cutover — never built; only an unrelated auto-dispatch counter baseline exists (evidence-removal-gates.md § "fault, restore, routing-closure… performance baselines for the import/cutover path were NEVER built"; evidence-domain.md § "step-8 gate 'performance baselines'")
+- Step-8 satisfied legs — replacements landed, fault and restore gates, structural no-authority-read tests all pass with evidence at HEAD (evidence-domain.md § "step-8 gates 'replacements landed' and 'fault and restore gates' — SATISFIED" and § "step-8 gate 'structural no-authority-read tests' — SATISFIED")
+- `legacy:cleanup:proof` gives zero signal about import-deletion safety — it keys on the already-retired markdown state-read path (`_deriveStateImpl`, `parsers-legacy`, renamed `parseProjection*` parsers), not the import path (evidence-stack.md § "the `parseLegacy*` proof passed because of a completed rename")
+- `parseProjectionRoadmap`/`parseProjectionPlan` — excluded from deletion scope; load-bearing live code that survived a rename (evidence-stack.md § same finding)
+- v1 calendar waiver (2026-08-12) — covered only the markdown state-derivation deletion, NOT the import/export machinery; it does not authorize this milestone's deletion half (evidence-removal-gates.md § "the v1 milestone already waived the 60-day calendar leg once"; evidence-domain.md § "compatibility window — import/export machinery fully shipped at HEAD; the wave-4 calendar waiver did NOT cover it")
+- Deletion timing — settled by user ruling: the legacy import/export machinery is RETAINED this milestone; the milestone ships the documented blocker + re-check trigger instead (SYNTHESIS.md § User rulings, 2026-08-22)
+- Deletion blast radius (recorded for the future deletion milestone) — ~31.5k production LOC (40 `legacy-import-*` modules + 16-file `migrate/` dependent), ~38k test LOC; confined to the gsd extension plus the `src/` host shell; zero consumers in packages/, web/, vscode-extension/, MCP, or tool registries (evidence-stack.md § "the deletion surface is 40 production modules" and § "zero downstream consumers")
+- Deletion is surgery, not `git rm` — five non-import modules (`db-workspace.ts`, `db/domain-operation.ts`, `db/writers/authority-recovery.ts`, `project-authority-cutover-domain-operation.ts`, `gsd-db.ts`) hard-import the cluster, and `src/headless-recover.ts` jiti-loads two modules by filename (runtime, invisible to `tsc`) (evidence-stack.md § "core non-import modules import the legacy-import machinery" and § "the host shell outside the extension hard-depends on two legacy-import modules via runtime jiti loads")
+- Restore-backup hashing dependency — `canonicalLegacyImportJson`/`hashLegacyImportValue` live in `legacy-import-preview.ts` but are used by must-not-break `gsd db restore-backup`; any future deletion must re-home them first (evidence-stack.md § "canonicalLegacyImportJson/hashLegacyImportValue live in legacy-import-preview.ts but are general-purpose"; INTENT.md "Must not break")
+- Downgrade/version-skew — already handled loudly by refuse-newer version stamps (`SchemaTooNewError`) (evidence-pitfalls.md § "Downgrade/version-skew is already handled loudly at HEAD")
+- D005 in force — canonical lifecycle read authority remains legacy by explicit decision; retiring the shadow gate by silence is forbidden by recorded milestone governance (evidence-domain.md § "step-8 gate 'production routing closure' — only PARTIALLY satisfied" and § "disposition — retiring the shadow gate without a new explicit decision contradicts a recorded milestone ruling")
+- Invariant audit — Invariants 2, 3, 5, 8 satisfied-with-evidence; 1 and 10 not satisfied for the deferred lifecycle surfaces; 4, 6, 7, 9 partially evidenced; the M11 completion audit never ran and is untracked (evidence-domain.md § Invariants findings)
+- ADR-047/048 — operational refinements; add no removal-gate or deletion scope (evidence-domain.md § "follow-on ADRs 047/048 are operational refinements")
+- No gate is CI-enforced — removal gates run only via local `verify:pr`; evidence freshness is the last local run (evidence-removal-gates.md § "none of the removal-gate scripts are wired into CI")
+- Gate doc promises — no doc promises either gate family permanently; promises are scoped to deletion events and D005 (evidence-domain.md § "disposition — no doc promises the gates permanently")
+- Verification order — green unit suite requires `build:core` (or `build:native:test` for the fault-injection suite) → `test:compile` → `test:unit:compiled`, in the `verify:pr` order (evidence-codebase.md § "unit suite is green only in the exact order")
+- Comparable-practice baselines — minimum windows are hard floors but scheduled removals are advisory; no comparable tool retrofits telemetry at removal time; "deprecated but kept" is a legitimate terminal state; data-migration paths get categorically longer retention than API deprecations (evidence-similar.md § "Synthesis for ruling (a)", § "Synthesis for ruling (c)", K8s/Node/PEP 387/VS Code/Terraform findings)
 
 ## Decisions
 
-<!-- One block per resolved choice. -->
-### Cutover flip shape
+### Shadow gate (`lifecycle-shadow-no-cutover`) disposition
 
-- **Decision**: Read-through shadow → flip → delete (continue the current course), run as
-  a bounded expand/migrate/contract: extend evidence collection, flip read authority at
-  the filesystem-state seam, then delete the legacy path as a deliberate final step gated
-  on `legacy:cleanup:evidence` → `legacy:cleanup:gate`. The shadow/comparison/capstone
-  machinery is already built, so remaining cost is lowest here.
-- **Runner-up**: Big-bang flag flip across the 8 gate-pinned files in one commit — lost
-  because it makes every older released binary immediately unsafe to migrated projects
-  (the downgrade window, since ruled at 2 stable releases + ≥60 days, forbids that), and
-  it inverts all 16 behavioral witnesses in a single review. Per-surface strangler lost
-  harder: highest total cost, one evidence cycle per surface, and it prolongs the
-  dual-authority window toward the permanent-coexistence failure mode the repo is
-  already drifting into.
-- **Evidence**: evidence-stack.md § Strategy comparison; evidence-stack.md § A read-through
-  shadow with comparison already exists; evidence-migration.md § Expand/migrate/contract
-  (ParallelChange) is the canonical bounded dual-run window; evidence-stack.md § External
-  pattern evidence favors evidence-gated deletion over permanent coexistence
+- **Decision**: KEEP the gate unchanged — it stays in `verify:pr` with its 7 structural checks and 11 behavioral witnesses; no edits. Its recorded disposition is "kept: carries D005's invariants until the separate, explicit lifecycle read-authority cutover decision lands."
+- **Runner-up**: Retire — loses because the repo's own governance forbids it: "Gate retirement never contradicts D005 by silence," production routing closure for lifecycle surfaces is still open (9 dossier blockers), and the gate's witnesses assert the legacy-authoritative-on-disagreement behavior that is today's designed state. Retirement is legitimate only after the deferred lifecycle cutover or a new explicit D005-amending ruling.
+- **Evidence**: evidence-domain.md § "disposition — retiring the shadow gate without a new explicit decision contradicts a recorded milestone ruling"; § "step-8 gate 'production routing closure' — only PARTIALLY satisfied"; § "disposition — complete consumer inventory for both gate families"
 - **Confidence**: high
 
-### D005 standing NO-GO (T07 dossier)
+### `legacy:cleanup:*` trio disposition
 
-- **Decision**: Scope around D005, do not broadly supersede it. This milestone supersedes
-  D005 only for filesystem-state (markdown) authority: gsd-db hierarchy reads are already
-  the DB authority, files become pure projections, and the markdown fallback is deleted.
-  The canonical *lifecycle* read-authority cutover (status-response authority, the subject
-  of the T07 NO-GO with 13 named blockers including zero live observation rows) stays
-  deferred under the M003 shadow program. Record this as an explicit milestone decision
-  doc so the gate retirement never contradicts a recorded decision by silence.
-- **Runner-up**: Formally supersede D005 wholesale and flip canonical lifecycle reads too
-  — lost because INTENT.md scopes this milestone to the filesystem-state path (its scope
-  list and success criteria never mention canonical lifecycle tables), the T07 dossier
-  records zero live observation rows for lifecycle reads, and inflating scope to lifecycle
-  authority would import 13 deferred blockers into a milestone whose vetoes demand a
-  narrow blast radius.
-- **Evidence**: evidence-domain.md § A prior explicit decision (D005) still names legacy
-  hierarchy reads as authoritative; INTENT.md § Scope: in / Success criteria;
-  evidence-domain.md § The no-cutover gate protects 8 structural import-policy invariants
-- **Confidence**: medium — the filesystem-vs-lifecycle scoping reading of INTENT is
-  solid; wave 1 must map the 13 T07 blockers to confirm none of them blocks
-  filesystem-state deletion itself.
-
-### Deletion-proof strategy (the `markdownFallbackUsed` telemetry gap)
-
-- **Decision**: Re-base the deletion proof on static evidence, not on building the missing
-  runtime counter. The live derive seam already refuses markdown fallback
-  (`_deriveStateImpl` has zero production callers — a counter there can never fire), so
-  the honest proof is: (a) a static no-caller/no-importer AST proof for the legacy
-  state-read path, (b) the `parsers-legacy` importer-registry test driven to zero
-  production importers, and (c) a redesigned `legacy:cleanup:evidence` that fails closed —
-  today it fabricates an all-zero report when no telemetry file exists, so green is
-  satisfiable by construction and proves nothing. The five existing counters keep their
-  current categories; no `legacy.markdownFallbackUsed` counter is added at the dead seam.
-- **Runner-up**: Wire `legacy.markdownFallbackUsed` per the plan-of-plans claim and gate
-  deletion on observed zero usage (the Kubernetes/Chromium instrument-then-remove
-  pattern) — lost because that pattern applies to *live* deprecated paths; pitfalls
-  evidence shows the seam is unreachable in production, telemetry is per-process,
-  env-gated, clobbered across processes, and there is no field telemetry for the
-  installed base, so a new counter would produce a fabricated-feeling zero either way.
-- **Evidence**: evidence-pitfalls.md § The counter the cutover milestone actually needs
-  was never wired in code; evidence-pitfalls.md § The evidence pipeline can report "zero
-  usage" without any usage ever being measured; evidence-pitfalls.md § The live derive
-  path already refuses the markdown fallback; evidence-pitfalls.md § Assigned questions —
-  answers (Q2); evidence-domain.md § The telemetry that would prove the legacy
-  filesystem-state path is unused does not exist
+- **Decision**: Keep `legacy:cleanup:proof` as-is (it passes honestly on static analysis). Keep `legacy:cleanup:gate`/`legacy:cleanup:evidence` with a recorded reason: they remain the standing deletion blocker for five OTHER live legacy paths (workflow templates, UOK fallback, MCP aliases, component format, provider defaults — 7 production counter call sites); document that they fail closed with no telemetry producer and currently pass only by construction on a hand-generated zero file. No retirement, no re-scoping work in this milestone.
+- **Runner-up**: Retire the telemetry pair and keep only the proof — loses because it removes the only deletion gate for five still-shipping non-ADR-046 legacy subsystems and orphans `legacy-telemetry.ts`, expanding scope beyond ADR-046; re-scoping them into honest gates is new telemetry work the evidence shows was never built and this milestone is not chartered to build.
+- **Evidence**: evidence-domain.md § "disposition — the `legacy:cleanup:*` gates still guard five OTHER live legacy paths"; § "step-8 gate 'telemetry thresholds' — NOT satisfiable at HEAD"; evidence-removal-gates.md § "the legacy:cleanup gate was hardened to fail-closed"
 - **Confidence**: high
 
-### parsers-legacy consumer web (hidden readers)
+### Program scope: ADR-046 Milestones 9–11 and the lifecycle read-authority cutover
 
-- **Decision**: Treat deletion of the legacy read path as a consumer-web migration, not a
-  function deletion. Classify each of the ~16 production importers (15 in the gsd
-  extension plus `github-sync/sync.ts`) as: (a) re-point to DB-backed reads (doctor
-  fallback, drift detection, renderer merge — including `markdown-renderer.ts` reading
-  its own projections back), (b) legitimate projection-read, kept but stamped/validated
-  against DB state version, or (c) deleted with the path. The existing
-  `parsers-legacy-importers.test.ts` registry is the enforcement seam; `parsers-legacy.ts`
-  is deleted only when the registry shows zero production importers.
-- **Runner-up**: Delete `parsers-legacy.ts` and fix importers as they break — lost
-  because doctor, github-sync, reactive-graph, and the renderer would fail silently on
-  real user projects; INTENT's top risk is exactly this silent reader breakage.
-- **Evidence**: evidence-domain.md § The real in-repo legacy read paths are the ~15 live
-  `parsers-legacy.ts` consumers; evidence-pitfalls.md § Hidden readers are already in the
-  repo — `parsers-legacy.ts` has 15+ production importers, including a second extension
+- **Decision**: Do NOT absorb M9 (rollout telemetry/canary/performance gates), M11 (completion audit), or the M003 lifecycle read-authority cutover into this milestone. The gap audit (success criterion 1) records each as an explicit deferral ruling with its re-entry trigger: M9/M11 tracked as undone program work (no open issue exists — the audit notes this), and the lifecycle cutover remains gated behind its own separate explicit decision per D005. This milestone's M10 contribution is exactly the retention ruling, doc-drift, and gate-disposition work decided here.
+- **Runner-up**: Absorb the undone program work ("let research find the gaps") — loses because the lifecycle cutover is contractually a separate explicit decision (pulling it in would silently amend D005), M9/M11 are telemetry/benchmark construction this milestone has no charter or instrumentation base for, and INTENT scope centers on deletion + residual gates + doc drift.
+- **Evidence**: evidence-domain.md § "scope-growth risk CONFIRMED — the twelve-milestone program has undone Milestones 9–11"; § "step-8 gate 'production routing closure'"; § "Invariants 1 and 10 — NOT satisfied for the deferred lifecycle surfaces"; INTENT.md § Scope and Corrections
 - **Confidence**: high
 
-### Projection format contract (external readers)
+### Doc-drift remediation boundary
 
-- **Decision**: Freeze the projection format for this milestone. Files become pure,
-  read-only projections but stay byte-compatible with the pre-cutover format and
-  location; changes are additive-only (a DB state-version stamp on each projection for
-  staleness detection, per the jj working-copy pattern). `@opengsd/mcp-server` readers,
-  `packages/daemon`, and `integrations/hermes` treat STATE.md parsing and
-  PLAN/SUMMARY existence as ground truth — the projection layer is a de facto public
-  API and is documented as such.
-- **Runner-up**: Version/restructure the projection format during the cutover — lost
-  because it breaks three separately packaged reader surfaces at the same moment
-  authority flips, doubling the blast radius against INTENT's hidden-readers risk; and
-  the `.gsd → ~/.gsd/projects/<hash>/` symlink means the full reader set is unobservable
-  from the repo.
-- **Evidence**: evidence-domain.md § External/tooling readers of projected files exist in
-  three separately packaged surfaces; evidence-domain.md § Projected state physically
-  lives outside the repo behind a symlink; evidence-similar.md § Git's plumbing/porcelain
-  split; evidence-similar.md § Jujutsu treats the working copy as a recoverable
-  projection of the store
+- **Decision**: In scope for this milestone: (a) all shipped-doc claims in docs/, gitbook/, mintlify-docs/ (plus the zh-CN mirror) that contradict the completed cutover (legacy `.gsd/milestones/` layout and similar); (b) `CONTEXT.md:5-10` rewording to the split truth (state authority cut over; canonical lifecycle read authority NOT — precise wording required, not a blanket removal); (c) the `GSD_ALLOW_MARKDOWN_DERIVE_FALLBACK=1` doc rows in gitbook — the env var has no implementation, so the drift exists and is fixed regardless of other rulings. Out of scope by user ruling (2026-08-22): the remainder of the 52-row remediation queue (stays for later milestones) and the 12 external doc rows ("no ruling needed — external", confirming the v1 precedent).
+- **Runner-up**: Fix the entire 52-row queue — lost at the synthesis checkpoint: the user ruled the remainder out of scope (and INTENT had vetoed it pending that ruling); most rows are not cutover contradictions.
+- **Evidence**: evidence-pitfalls.md § "The documented markdown-fallback escape hatch GSD_ALLOW_MARKDOWN_DERIVE_FALLBACK=1 has no implementation"; evidence-domain.md § "scope-growth — CONTEXT.md still denies the completed cutover"; INTENT.md § Scope: in / Scope: out; SYNTHESIS.md § User rulings (2026-08-22)
 - **Confidence**: high
 
-### Migration and rollback design for live `~/.gsd` state
+### Dangling `semantic-shadow-no-cutover` references
 
-- **Decision**: Ride the existing machinery; build no new migration path. The flip is one
-  more versioned step in the existing `migrateSchema` chain plus the existing
-  `project-authority-cutover-domain-operation.ts` (consent tokens, authority-epoch
-  checks, persisted cutover receipts). Backup = existing verified same-directory copy
-  (`wal_checkpoint(TRUNCATE)` → `gsd.db.backup-v<N>` → ATTACH + `quick_check` + version
-  match; backup failure aborts the cutover). Idempotency key = composite of
-  schema_version row + cutover receipt + existing `GSD_IDEMPOTENCY_CONFLICT` /
-  `..._REPLAY_CONFLICT` codes; re-entry is a no-op. The atomic flip runs inside the
-  existing startup EXCLUSIVE lock window. Rollback = restore the verified backup (per
-  Flyway: backup-restore beats down-migrations for destructive changes); legacy files are
-  never deleted in the same step as the flip. Fix the known wedge pattern from
-  `migrate-external.ts`: a failed cutover must clean or own its partial destination so
-  retry is never permanently blocked.
-- **Runner-up**: A bespoke cutover migration script outside the legacy-import/authority-
-  cutover seam — lost because it would duplicate a battle-tested idempotency, backup, and
-  receipt model and create a second migration path to verify against live user data.
-- **Evidence**: evidence-stack.md § Live-data migration machinery already exists and is
-  large; evidence-migration.md § The repo already runs the canonical journaled,
-  transaction-wrapped, idempotent migration chain; evidence-migration.md § The repo's
-  pre-migration backup is a verified same-directory file copy; evidence-migration.md §
-  Migration tooling guidance prefers backup-restore over down-migrations;
-  evidence-migration.md § cutover-grade idempotency/replay machinery;
-  evidence-pitfalls.md § A failed `~/.gsd` external-state migration leaves partial output
-  that permanently blocks retry
+- **Decision**: Repair in this milestone: remove the dead import of `runSemanticShadowNoCutoverGate` from `scripts/m003-s07-dossier-input.ts` (and its test), and correct the retired-command inventory in `scripts/m003-s07-cutover-dossier.mjs:104-109`. Small, flagged in v1 review and never fixed; unreachable from verify:pr/CI so risk is minimal.
+- **Runner-up**: Defer with a note — loses on cost asymmetry: the fix is a few lines in three files and clears a known live landmine the dossier tooling crashes on.
+- **Evidence**: evidence-domain.md § "scope-growth — dangling `semantic-shadow-no-cutover` references at HEAD"
 - **Confidence**: high
 
-### Downgrade compatibility
+### Deletion go/no-go — resolved by user ruling: KEEP
 
-- **Decision**: Keep the existing loud
-  refuse-newer guard (`gsd.db schema is vN, newer than the vM this gsd-pi supports`) as
-  the floor — no silent corruption, ever. During the compatibility window, projection
-  writing stays byte-compatible so a rolled-back binary still reads its files. Stamp
-  `PRAGMA user_version` (and a fixed `application_id`) so older binaries and external
-  tools can detect DB-authored state cheaply. Ship an explicit backup-restore command.
-  **Window: two stable releases + ≥60 days, matching the ADR-046 compatibility window**
-  (user ruling 2026-08-01).
-- **Runner-up**: Promise indefinite downgrade readability via maintained dual-format
-  writes — lost because it re-creates the permanent dual-authority coexistence this
-  milestone exists to end; the npm lockfile precedent (maintain legacy fields only
-  through a bounded window) and k8s Rule #4b (one overlapping release that speaks both)
-  both bound the window rather than eliminate it.
-- **Evidence**: evidence-pitfalls.md § Downgrade after cutover fails loudly at DB open;
-  evidence-migration.md § Refuse-newer is the shipped-CLI norm for downgrade safety;
-  evidence-migration.md § SQLite ships header fields intended for format/version
-  identification; evidence-similar.md § Kubernetes mandates a version-skew window;
-  evidence-similar.md § npm evolved its lockfile format with explicit per-version
-  compatibility windows
-- **Confidence**: high (mechanism and window — user-ruled 2026-08-01)
+- **Decision**: The legacy import/export machinery is NOT deleted this milestone (user ruling, 2026-08-22: "Keep; document re-check trigger"). The milestone instead ships the "If not" branch of INTENT success criterion 3: the blocker and a concrete re-check trigger documented in the repo, homed in the gap-audit document (success criterion 1). The blocker: the compatibility window is open until earliest 2026-10-02 (ADR-literal start, v1.12.0) / 2026-10-07 (v1-milestone start, v1.13.0) — the gap audit must record both readings and state that the controlling ≥60-day leg fails under each — plus the never-built telemetry-threshold and performance-baseline legs of ADR-046 step 8. The re-check trigger must specify: (a) the window-close date disambiguation (2026-10-02 ADR-literal vs 2026-10-07 v1-milestone); (b) the evidence legs that must exist before any future deletion (import-path usage instrumentation or an explicit deprecation-warning stage, performance baselines, and re-run step-8 gates); (c) re-examination of whether any ADR-046 step-7 restore windows are still open in the field; and (d) a pointer to the four sequencing blocks below as the binding deletion plan. "Time alone is not a Removal Gate" applies at re-check.
+- **Runner-up**: Delete now on static proof (extending the v1 wave-4 calendar waiver) — lost at the synthesis checkpoint. Against it: the window fails under both readings and the v1 waiver never covered the import machinery; the telemetry/performance legs were never built and no comparable tool retrofits telemetry at removal time; active mid-window users demonstrably exist (post-1.12.0 bug tail: #1868, #1830, #1866); data-migration paths get categorically longer retention than API deprecations (K8s storage-decode rule, Terraform laddering); and "deprecated but kept" is a legitimate terminal state (PEP 387, VS Code `rootPath`).
+- **Evidence**: evidence-removal-gates.md § window math and § "removal-gate telemetry exists but structurally cannot observe the legacy import path"; evidence-pitfalls.md § "The import/recover path has a live bug tail at HEAD"; evidence-similar.md § "Synthesis for ruling (a)" and K8s/Terraform/PEP 387/VS Code findings; INTENT.md § Success criterion 3; SYNTHESIS.md § User rulings (2026-08-22)
+- **Confidence**: high
 
-### Gate retirement and invariant re-homing
+### Future deletion sequencing — utility re-homing — MOOT this milestone (user ruled keep, 2026-08-22)
 
-- **Decision**: Split-retire `gate:semantic-shadow-no-cutover`; no invariant is dropped.
-  (a) Lifecycle-shadow invariants (status-response authority, disagreement witnesses,
-  decision-boundary allowlists, validation-assessment authority) move verbatim into a
-  successor gate `gate:lifecycle-shadow-no-cutover` — D005 remains in force there.
-  (b) Filesystem-state invariants become positive post-cutover checks: a DB-authority
-  test at the derive seam, the parsers-legacy importer-registry test, and a
-  projection-fidelity check (stamped projections match DB state). (c) DB-unavailable
-  fail-closed witnesses and the never-promote-`omitted` rule keep as-is in the unit
-  tier. (d) Unadopted import/reconcile and frozen cross-mode response witnesses are
-  deleted on the ADR-046 timebox (two stable releases + ≥60 days). (e)
-  `closed-local-inputs` ports to the successor gate unchanged. Behavioral witnesses live
-  as unit-tier tests so they run under `verify:pr`'s `test:unit`; the successor gate
-  script is added to `verify:pr` (strengthening it — the veto only forbids weakening) so
-  no retired invariant vanishes silently. Tests asserting legacy-wins behavior are
-  inverted or removed per AGENTS.md.
-- **Runner-up**: Invert the gate in place into a single post-cutover gate — lost because
-  one inverted gate would mix lifecycle-shadow invariants (still pre-cutover under D005)
-  with filesystem-state invariants (now post-cutover), asserting contradictory authority
-  models in one script; the four-class disposition (flip/keep/delete-timeboxed/port)
-  needs two homes, not one.
-- **Evidence**: evidence-domain.md § Post-cutover homes divide the gate's invariants into
-  four classes; evidence-pitfalls.md § Retiring the no-cutover gate drops invariants that
-  have no successor home, and no CI runs the gates today; evidence-similar.md §
-  Kubernetes feature gates have a staged retirement where disabling a non-operational
-  gate fails loudly; evidence-stack.md § The no-cutover gate is a ready-made
-  decomposition map
-- **Confidence**: medium — the per-invariant disposition list is analysis, not an
-  existing repo decision; wave 1 validates the mapping against the gate source.
+- **Decision**: Retained as binding sequencing for the future deletion milestone. When deletion is authorized, the FIRST task extracts `canonicalLegacyImportJson`, `hashLegacyImportValue`, `isStrictLegacyImportData`, `isValidLegacyImportPreviewArtifact` (and the recovery-action/consent surface `gsd db restore-backup` uses) from `legacy-import-preview.ts`/`legacy-import-restore-assessment.ts`/`legacy-import-recovery-action.ts` into a neutral module (e.g. under `db/`), re-pointing `db/domain-operation.ts`, `db/writers/authority-recovery.ts`, `project-authority-cutover-domain-operation.ts`, `commands-maintenance.ts`, and `migrate/publication-store.ts`. Only then does module deletion begin. `restore-backup` behavior must be bit-identical after re-homing.
+- **Runner-up**: Delete-and-repair in one commit — loses because `restore-backup` is on the must-not-break list and a single-step removal couples the riskiest consumer to the largest diff.
+- **Evidence**: evidence-stack.md § "canonicalLegacyImportJson/hashLegacyImportValue live in legacy-import-preview.ts"; evidence-pitfalls.md § "Core non-legacy modules import shared utilities from legacy-import-preview.js"; INTENT.md "Must not break"
+- **Confidence**: high
 
-### Mixed-version concurrent writers during the cutover window
+### Future deletion sequencing — schema trigger carve-out — MOOT this milestone (user ruled keep, 2026-08-22)
 
-- **Decision**: Migrate only inside the startup EXCLUSIVE claim (no concurrent writer can
-  hold the DB mid-flip). Post-cutover binaries stamp schema version + authority epoch so
-  any binary new enough to check refuses loudly on skew; WAL + lease tables
-  (`unit-claims.db`, `milestone_leases` fencing) keep same-version multi-worktree writes
-  correct as today. For pre-cutover binaries that cannot check the epoch (mixed-version
-  worktrees sharing one project), rely on the existing drift-detection surface plus a
-  release-note directive to upgrade all linked worktrees together, and accept the bounded
-  residual risk for a local single-host CLI.
-- **Runner-up**: Build a cross-version coordination shim so pre-cutover binaries detect
-  cut-over projects — lost because pre-cutover released binaries cannot be patched
-  retroactively; any shim only helps future old versions, and the exposure window is the
-  user-chosen downgrade window, already bounded by that ruling.
-- **Evidence**: evidence-pitfalls.md § Concurrent-writer protection is WAL + lease tables
-  on local disk only; mixed-version worktrees during cutover are uncoordinated;
-  evidence-stack.md § Concurrent-writer safety rests on three existing mechanisms;
-  evidence-migration.md § SQLite's official backup guidance + the repo's EXCLUSIVE
-  startup lock
-- **Confidence**: low — the skew scenario is inferred, not tested ⇒ wave-1 spike: run a
-  pre-cutover binary against a cut-over project fixture and record actual behavior
-  (read-only? corrupts projections? silent divergence?) before finalizing the guard.
+- **Decision**: Retained as binding sequencing for the future deletion milestone. When deletion is authorized: leave `trg_workflow_lifecycle_transition`'s `import.forward_repair` escape hatch (and the three import receipt tables with their triggers) in place as inert historical SQL — NO v49 retirement migration. Post-deletion no code can mint `import.forward_repair`, so the carve-out can never fire; schema is additive and existing user databases keep their receipt tables untouched. Document the inert carve-out in the schema file comment. Schema-pinning tests (e.g. `gsd-recover.test.ts:188`) are updated to match.
+- **Runner-up**: Retire the carve-out via a SCHEMA_VERSION 49 migration — loses because it mutates every existing database to remove a trigger that can no longer fire: migration risk on user data for zero behavioral change, against the additive-schema convention.
+- **Evidence**: evidence-stack.md § "import-only DB schema is three receipt tables plus triggers baked into the core lifecycle-transition rule"
+- **Confidence**: medium ⇒ the future deletion milestone must verify no live code path can still mint `import.forward_repair` post-deletion before locking the no-migration call
+
+### Future deletion sequencing — user-facing seam re-pointing — MOOT this milestone (user ruled keep, 2026-08-22)
+
+- **Decision**: Retained as binding sequencing for the future deletion milestone. When deletion is authorized, the deletion ship must include, in the same change set: (a) re-point the startup drift seam in `migration-auto-check.ts:353-384` (currently tells users to run `/gsd recover`) to an honest dead-end-free message; (b) remove/re-point `/gsd recover` (commands-maintenance.ts + ops.ts registration), `/gsd migrate` (migrate/ cluster + handlers), and headless recover (`src/headless-recover.ts`, `src/headless.ts:462`, `src/tests/headless-recover.test.ts`); (c) edit the four guidance strings (`migration-auto-check.ts:383`, `flat-phase-migration.ts:38`, `doctor-engine-checks.ts:1018`, `state/derive/db-open.ts:52-54`) and their tests; (d) synchronized doc edits across `docs/user-docs/migration.md`, `gitbook/reference/commands.md`, `gitbook/reference/troubleshooting.md`, `mintlify-docs/guides/migration.mdx`, `mintlify-docs/guides/troubleshooting.mdx`, and `docs/zh-CN/user-docs/migration.md`.
+- **Runner-up**: Delete code first, fix docs/messages in a follow-up — loses because INTENT success criterion 5 forbids shipped docs contradicting code, and the pitfalls evidence shows the startup seam becomes a guided dead end the moment the code disappears.
+- **Evidence**: evidence-pitfalls.md § "A markdown-only pre-cutover project opened at HEAD…", § "/gsd recover is implemented entirely by the legacy-import-* cluster", § "/gsd migrate also depends on the legacy-import cluster", § "All three shipped doc trees plus the zh-CN mirror promise the import/migration path", § "Multiple runtime error/guidance strings point users at the import path"; evidence-stack.md § jiti-load finding
+- **Confidence**: high
+
+### Future deletion sequencing — `md-importer.ts` disposition — MOOT this milestone (user ruled keep, 2026-08-22)
+
+- **Decision**: Retained as binding sequencing for the future deletion milestone. When deletion is authorized, delete `md-importer.ts` alongside the import cluster: it is banner-quarantined test-only bypass machinery with zero production callers whose stated sanctioned alternative (the explicit Import Application) is exactly what deletion removes; keeping it would leave an unconsented markdown→DB write path as the only one in the tree.
+- **Runner-up**: Keep it quarantined — loses because its purpose is mirroring the import-path contract in tests; with the contract gone it is dead scaffolding carrying a standing "DO NOT WIRE" hazard.
+- **Evidence**: evidence-stack.md § "md-importer.ts is an explicitly quarantined test-only markdown→DB path adjacent to the deletion surface"
+- **Confidence**: medium ⇒ the future deletion milestone must enumerate its test consumers before scheduling its removal
 
 ## For the planner
 
-<!-- The shape of the build. -->
 - **Wave-1 blockers**:
-  1. Run `baseline:refactor:gate`, `baseline:refactor:phase0`, `gate:semantic-shadow-no-cutover`,
-     and `legacy:cleanup:gate` at clean HEAD — every closeout claim is 2026-05-04 vintage,
-     doc-claimed, never re-run; the whole plan assumes a green baseline that is unverified.
-  2. D005 scoping verification: map the 13 T07 deferred blockers to filesystem-state vs.
-     canonical-lifecycle — confirm none blocks filesystem-state deletion; write the
-     milestone decision doc that supersedes D005 for filesystem authority only.
-  3. Mixed-version skew spike (low-confidence decision above): pre-cutover binary vs.
-     cut-over project fixture; record observed behavior.
-  4. Authoritative parsers-legacy importer union: domain found 15, pitfalls found
-     `github-sync/sync.ts` additionally — produce the complete verified inventory with
-     per-consumer disposition (re-point / projection-read / delete).
-- **Walking skeleton**: One project, end to end: a fixture `~/.gsd` project is migrated
-  via the authority-cutover domain op inside the EXCLUSIVE claim (verified backup +
-  receipt + idempotent re-entry as no-op); `deriveState` serves the real runtime path
-  from the DB with files rendered as stamped read-only projections; one parsers-legacy
-  consumer (`markdown-renderer.ts` reading its own projections back) is re-pointed to DB
-  reads; rollback is demonstrated by restoring the verified backup; the successor gate
-  plus re-homed unit checks are green. No canonical-lifecycle changes.
+  1. Re-run the gates at build HEAD before writing the gap audit: `node scripts/legacy-state-path-proof.mjs`, `node scripts/workflow-authority-baseline.mjs`, `node scripts/lifecycle-shadow-no-cutover-gate.mjs` — no gate is CI-enforced, so evidence freshness is whatever the planner re-runs (evidence-removal-gates.md § CI finding).
+  2. Confirm the green-CI recipe at build HEAD: `build:native:test` (not just `build:core`) is required for the `migrate-safety-audit.test.ts` fault-injection suite; replicate the `verify:pr` order exactly (evidence-codebase.md § unit-suite-order finding). The 23 fault-injection tests stay untouched this milestone (no deletion), but the audit should note their build-flag dependency.
+  3. The gap audit's re-check-trigger wording is load-bearing (it is the milestone's success-criterion-3 deliverable): it must carry the 2026-10-02/2026-10-07 disambiguation, the evidence legs that must exist, the step-7 restore-window re-examination, and the pointer to the four moot sequencing blocks above — get it reviewed before closeout.
+- **Walking skeleton**: The gap-audit document (success criterion 1) written to disk marking every ADR-046 removal gate and invariant satisfied-with-evidence or carrying its explicit ruling/deferral from this synthesis — including the deletion blocker + re-check trigger — plus the two ruling-independent doc fixes (`GSD_ALLOW_MARKDOWN_DERIVE_FALLBACK` rows, `CONTEXT.md` split-truth wording). Thinnest end-to-end slice; nothing in this milestone depends on further user input.
 - **Pitfalls → tasks**:
-  - Fabricated all-zero evidence report (pitfalls § evidence pipeline) → task: redesign
-    `legacy:cleanup:evidence` to fail closed on missing telemetry and add the static
-    no-caller/no-importer proof as the state-path evidence.
-  - No field telemetry for the installed base (pitfalls § no field telemetry) → task:
-    gate deletion on static proof + fail-loud shims; document accepted residual risk in
-    the milestone decision doc; do not promise proof that cannot exist.
-  - Hidden readers, 15+ parsers-legacy importers incl. github-sync (pitfalls § hidden
-    readers) → task: per-consumer migration driving the importer registry to zero
-    production importers before `parsers-legacy.ts` deletion.
-  - Renderer reads its own projections back (domain § parsers-legacy consumers) → task:
-    re-point `markdown-renderer.ts` merge paths (lines ~1084/1118/1221) to DB reads in
-    the walking skeleton.
-  - Partial-migration destination wedge (pitfalls § failed `~/.gsd` migration) → task:
-    self-healing destination cleanup/ownership in the cutover migration so transient
-    copy errors never permanently block retry on user machines.
-  - Downgrade fails loud but with no restore path (pitfalls § downgrade story) → task:
-    ship/decide the backup-restore command per the user's downgrade-window ruling.
-  - Mixed-version worktree skew (pitfalls § concurrent writers) → wave-1 spike, then
-    task: authority-epoch stamp + loud refusal + release-note directive.
-  - Gate invariants vanish silently; no CI runs gates (pitfalls § gate retirement) →
-    task: split-retire the gate, re-home witnesses to the unit tier, wire the successor
-    gate into `verify:pr` (strengthen, never weaken).
-  - Permanent-coexistence drift (stack § external pattern evidence; migration §
-    ParallelChange) → the milestone itself is the contract phase; task: timebox the
-    ADR-046-window witnesses with explicit deletion dates/releases.
-  - Corrupt DB wedges startup; stale WAL sidecars (similar § Codex CLI failure modes) →
-    task: migration hardening — narrow corruption-error matching, quarantine-never-delete
-    backup handling, rebuild-from-projection as recovery source of last resort.
+  - `GSD_ALLOW_MARKDOWN_DERIVE_FALLBACK` documents a nonexistent escape hatch (evidence-pitfalls.md § fallback finding) → doc-drift task: fix or remove both gitbook rows.
+  - `CONTEXT.md:5-10` denies the completed cutover (evidence-domain.md § CONTEXT.md finding) → doc-drift task: reword to the split truth (state authority cut over; lifecycle read authority not).
+  - Dangling semantic-shadow imports crash dossier tooling (evidence-domain.md § dangling finding) → cleanup task per the decision above.
+  - Doc drift contradicting the cutover across 3 trees + zh-CN mirror (INTENT success criterion 5; evidence-pitfalls.md § doc-trees finding for the migrate/recover promises, which remain TRUE under the keep ruling and must NOT be "corrected" away) → doc-drift task: fix only cutover-contradicting rows; the migration/recovery docs stay.
+  - Gap-audit + re-check-trigger documentation (evidence-removal-gates.md § window math; evidence-domain.md § gap list) → the milestone's central deliverable per the Deletion go/no-go decision.
+  - *For the future deletion milestone* (not tasks now): startup drift seam dead-end (re-point `migration-auto-check.ts`); jiti-loaded headless recover invisible to `tsc`; `/gsd migrate` hidden dependent promised in shipped docs; shared hash utilities in `legacy-import-preview.ts` (re-home first); four user-facing guidance strings; `cross-platform-filesystem-safety.test.ts:85` hardcoded `legacy-import-backup.ts` allowlist entry; permanent stranding of pre-cutover source projects (the re-check trigger must state a floor version for importable state, Terraform-style). All preserved in the four moot sequencing blocks above.
 
 ## User rulings
 
 <!-- NEEDS-USER items answered at the synthesis checkpoint. Verbatim-ish. -->
-- **[NEEDS-USER] Rollback tolerance: how many released versions must a downgrade stay
-  readable for?** (carried verbatim from INTENT.md) — options:
-  1. **1 release** — the immediately previous release must read a cut-over project's
-     projections; anything older gets the loud refuse-newer guard plus manual backup
-     restore.
-  2. **2 stable releases + ≥60 days** — mirrors the ADR-046 compatibility-window
-     precedent already in repo governance; requires shipping the explicit backup-restore
-     command in this milestone.
-  3. **Time-based, 90 days** — window ends on calendar, not release count; simplest to
-     communicate, weakest protection for users who skip releases.
-- **RULING 2026-08-01**: user: "your lean" → **Option 2 (2 stable releases + ≥60 days,
-  ADR-046 window)**, the lean presented with the question. Consequences: the explicit
-  backup-restore command ships in this milestone; ADR-046-timeboxed deletions (unadopted
-  import/reconcile, frozen cross-mode witnesses) share this window; the deletion commit
-  may not land until the window has elapsed after the cutover release.
+
+- **Deletion ruling** (deferred from INTENT: removal-gate telemetry/performance baselines never built, and the compatibility window fails — delete on static proof or build evidence first?) → **"Keep; document re-check trigger"** (2026-08-22). The import machinery is retained; the milestone documents the blocker (window open until earliest 2026-10-02 + never-built telemetry/performance legs) and a concrete re-check trigger in the repo gap-audit document. Recorded reasoning (the evidence lean the user followed): every comparable practice treats data-migration paths conservatively, no tool retrofits telemetry at removal time, active mid-window users demonstrably exist, and "deprecated but kept" is a legitimate terminal state (evidence-similar.md § Synthesis for ruling (a), K8s storage-decode rule, PEP 387, VS Code rootPath; evidence-pitfalls.md § bug tail).
+- **12 external doc rows** (Docker Desktop 4.58+, claude.ai installer, npx skills CLI, agent-browser CLI: confirm the v1 precedent or review individually) → **"No ruling needed — external"** (2026-08-22) for all 12, confirming the v1 precedent.
+- **52-row remediation queue remainder** (in scope for this milestone?) → **"Out of scope"** (2026-08-22). Only cutover-contradicting drift is fixed this milestone; the remainder stays for later milestones.
 
 ## Still unknown
 
-<!-- Carried-forward gaps. Never let a question vanish between phases. -->
-- Current pass/fail status of `baseline:refactor:gate`, `baseline:refactor:phase0`,
-  `gate:semantic-shadow-no-cutover`, `legacy:cleanup:gate` at HEAD — closeout claims are
-  2026-05-04 vintage, doc-claimed only — **wave-1 spike** (run the gates at clean HEAD).
-- Whether any of the 13 T07 deferred blockers touches filesystem-state deletion (vs.
-  canonical-lifecycle authority only) — **wave-1 spike** (blocker mapping in the D005
-  scoping task).
-- Observed behavior of a pre-cutover binary opening a cut-over project (silent
-  divergence vs. loud failure vs. read-only) — **wave-1 spike** (mixed-version fixture).
-- Complete union of parsers-legacy production importers (domain's 15 vs. pitfalls' 15
-  +github-sync) and the full set of out-of-repo readers behind the `.gsd` symlink —
-  inventory **wave-1 spike** for the in-repo union; out-of-repo reader set is
-  unobservable — **accept risk** (projection format frozen; documented in milestone
-  decision doc).
-- Depth of coupling in `integrations/hermes` (Python) to projection file formats —
-  **accept risk** (format freeze makes this moot for this milestone; revisit when the
-  projection contract is ever versioned).
-- Rollback tolerance / downgrade readability window — **RULED 2026-08-01**: 2 stable
-  releases + ≥60 days (ADR-046 window); see User rulings. The deletion commit may not
-  land until the window has elapsed after the cutover release.
+- Whether any ADR-046 step-7 restore windows are still open in the field (unverifiable without telemetry). With the keep ruling the restore machinery is retained and any open windows remain serviceable; the recorded re-check trigger must re-examine this question before any future deletion (backups must outlive import machinery by ≥1 stable release).
+- Which historical release first shipped the V46 refuse-newer version stamps (shallow clone; unverifiable locally) — accept risk; downgrade safety at HEAD is proven regardless.
+- Whether the `read-cli-args` isolation failure and prompt-golden Phase-2 gate miss at v1.16.1 are known/accepted — wave-1 verify at build HEAD (prompt-golden gate is INTENT-vetoed from fixing; only its red/green status matters for the CI-green criterion baseline).
+- Which doc tree is canonical — deliberately unanswered; INTENT vetoes the decision. Doc-drift fixes above are per-tree edits that do not require resolving it.
+- M11 completion-audit results (negative audit, requirement matrix, final drills) — can never be known without running the audit; deferred per the program-scope decision with re-entry trigger recorded in the gap audit.

@@ -1,123 +1,127 @@
 # Evidence — codebase
 
-<!-- Written by the codebase mapper during $gsd-path-onboard. Read by the grill
+<!-- Written by the codebase mapper during /gsd-path-inspect. Read by define
      (brownfield mode), researchers (fifth standard dimension), the planner
      (conventions are binding), and reviewers. -->
 
-Repo root: /Users/jeremymcspadden/github/open-gsd/gsd-pi
-Scanned: 2026-08-01 (clean HEAD `ade9db0e4cb7c69440000fa81630091f56dbdcd1`, via disposable worktree `.worktrees/onboard-codebase`)
-Updated: 2026-08-10 to remove retired legacy remote-product surfaces from the current-state map.
-Checks run (all inside the disposable worktree at clean HEAD):
-- `pnpm install --frozen-lockfile --ignore-scripts` → success in 10.1s (lockfile 9.0, pnpm 10.12.1)
-- `npx tsc --noEmit -p tsconfig.json` → exit 0, zero errors
-- `node --import ./src/resources/extensions/gsd/tests/resolve-ts.mjs --experimental-strip-types --test src/tests/parse-cli-args.test.ts` → 45/45 pass, 0 fail
-- `node --experimental-strip-types src/loader.ts --version` → fails `ERR_MODULE_NOT_FOUND` for `./app-paths.js` — src uses compiled `.js` import specifiers, so direct TS execution needs the repo's `resolve-ts.mjs` import hook or a `tsc` build; not a defect
-- Full test suite (`pnpm test`) → `unverifiable` within budget (compiles 1347+ test files plus integration/e2e tiers); spot checks above only
+Repo root: /Users/jeremymcspadden/orca/workspaces/gsd-pi/path-fixes
+Scanned: 2026-08-22 (verify sidecar worktree pinned at e210e12a41df85b2f02e1de65a2afc37b348ba12, branch gsd-path-verify/inspect-codebase)
+Checks run (all inside the verify sidecar; pnpm 10.12.1, node v26.0.0):
+- `pnpm install --frozen-lockfile --ignore-scripts` → clean in 8.5s; lockfile consistent with manifests
+- `pnpm run test:compile` → 3049 files compiled to `dist-test/` in ~3.5s
+- `pnpm run test:unit:compiled` on a fresh checkout (no build) → 3648 passed, 1029 failed, 9 skipped; failures are mass `ERR_MODULE_NOT_FOUND` under `dist-test/packages/*/dist/**` (environmental, see finding)
+- `pnpm run build:core` → exit 0 in ~38s (Rust/native artifacts resolved from prebuilt platform packages)
+- `pnpm run test:compile && pnpm run test:unit:compiled` after build → **14438 passed, 25 failed, 28 skipped** (exit 1); breakdown in the dedicated finding below (23 environmental, 1 genuine gate failure, 1 isolation-sensitive)
+- `node --import ./scripts/dist-test-resolve.mjs --experimental-test-isolation=process --test dist-test/src/tests/prompt-golden-fixtures.test.js dist-test/src/tests/read-cli-args.test.js` → prompt-golden gate assertion reproduced; read-cli-args passed in isolation
+- `node --import ./scripts/dist-test-resolve.mjs --test-reporter=spec --test dist-test/src/tests/worktree-cli-root.test.js` → isolated repro confirming the pre-build failure mode
+- `git rev-parse --is-shallow-repository` → true; only 57 commits visible locally
+- Not run: `test:integration`, `test:e2e`, `test:live*`, `test:packages`, coverage targets (need credentials, Playwright browsers, Docker, or live services)
 
 ## Map
 
-- **Stack**: TypeScript 5.9.3 (strict, NodeNext/ES2022, ESM `"type": "module"`) on Node >= 22.18.0 (engines; dev/CI run Node 24, `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"` in `.github/workflows/ci.yml:24`). pnpm 10.12.1 monorepo (`pnpm-workspace.yaml`: `packages/*`, `extensions/*`, `web`). Rust 2021 workspace (`native/Cargo.toml`, crates `ast`, `engine`, `grep`) built to platform binaries shipped as optional npm deps `@opengsd/engine-{darwin,linux,win32}-*` v1.11.0. Next.js 16.2.11 + React 19 + Radix web app (`web/package.json`). Electron 41 + React 19 in `studio/` (outside workspace). Drizzle ORM + neon-http stub in `packages/db`. Test runner: Node built-in `node --test` with `--experimental-strip-types` and a custom `resolve-ts.mjs` import hook — no Jest; vitest appears exactly once (`test:pi-claude-schemas` for one pi-ai file). Coverage via c8 with low floors (statements/lines 40, branches/functions 20 — `package.json:95`).
-- **Entry points**: CLI binaries `gsd` / `gsd-cli` → `dist/loader.js` (source `src/loader.ts`, fast-paths `--version`/`--help` before heavy imports, runtime Node/git checks), `gsd-pi` → `scripts/install.js`. `src/cli.ts` lazy-loads `@gsd/pi-coding-agent`, `@gsd/agent-core`, `@gsd/agent-modes` (interactive / print / rpc modes). Retained service bins are `gsd-daemon` (`packages/daemon`) and `gsd-mcp-server` (`packages/mcp-server`). Web surface via `gsd --web` → `src/cli-web-branch.ts` → `web/` Next.js standalone (`scripts/stage-web-standalone.cjs`). Rust engine loaded via `@gsd/native`.
-- **Architecture**: Four concentric layers. (1) Vendored upstream agent runtime in `packages/pi-*` (`pi-coding-agent`, `pi-ai` providers for Anthropic/OpenAI/Google/Mistral/Bedrock/Vertex, `pi-tui`, `pi-agent-core`) — vendored from `earendil-works/pi`. (2) GSD wrappers in `packages/gsd-agent-core`, `gsd-agent-modes`, `contracts`, `rpc-client`, `mcp-server`, and `daemon`. (3) The actual GSD product: a bundled extension at `src/resources/extensions/gsd` (29 MB, 2214 files) implementing milestones/slices/tasks, auto mode, worktree lifecycle, and a SQLite (sql.js) DB-authoritative project state (`db-*.ts` schema files) projected to `.gsd/`. (4) Root `src/` CLI shell (loader, cli, headless mode, web branch, worktree CLI) plus 20+ other bundled extensions under `src/resources/extensions/`. Run flow: `gsd` → loader → cli → resource loader discovers bundled/user extensions → agent-modes interactive TUI (or headless/RPC/web) → gsd extension drives plan/implement/verify loops, mutating the state DB and git worktrees.
-- **Conventions**: Conventional Commits (`fix(scope):`, `feat(scope):`, `test:`, `chore:`) plus a repo-specific `no-mistakes(scope):` prefix (36 in last 2 weeks) tied to the 'no mistakes' skill in AGENTS.md. Tests are colocated `*.test.ts` run directly from TypeScript via the strip-types hook; a compile-to-`dist-test` tier exists for the full unit suite (`test:compile`). Numbered plan files in `plans/` (`plans/032-lean-mean-cleanup.md`) AND a second tracked `.plans/` dir; ADRs in `docs/dev/ADR-*.md`; single 67 KB `CONTEXT.md` at root as the canonical context doc (per `docs/agents/domain.md`). Numbered scripts over npm abstractions — 108 entries in `scripts/` plus `scripts/archive/`. Baseline/gate scripts (`baseline:refactor:gate`, `gate:semantic-shadow-no-cutover`, `legacy:cleanup:gate`) encode in-flight refactor invariants as runnable checks. VISION.md explicitly forbids DI containers, framework swaps, cosmetic refactors — "extension-first", "simplicity over abstraction".
-- **Maturity**: Actively shipped product: v1.11.0 on npm as `@opengsd/gsd-pi` with provenance, Docker images, Discord release automation, ~21 GitHub workflows. Root typecheck is clean at HEAD and the spot-checked unit file passes 45/45. Test surface is very large (1347 `*.test.ts` under `src/` including 1106 in the gsd extension alone; 388 in `packages/`; separate `tests/{smoke,live,live-regression,live-workflow,e2e}` tiers) but enforced coverage floors are low (40/40/20/20). Scaffolding/half-built: `studio/` (Electron, v0.0.0, not in workspace), `packages/db` (no package.json, self-described "stub for Phase 1"), `gsd-orchestrator/` (markdown-only skill bundle), `integrations/hermes` (Python plugin).
-- **Recent activity**: Last ~30 commits (through 2026-07-31) cluster on: prompt-size reduction and `system.md` prompt contract repairs (schema sanitization across pi-ai providers), cursor-cli stream-adapter echo filtering, headless `--bare` RPC child fix, a "lean cleanup" dead-code/dependency purge (#1580), verification-gate and gsd_task_complete issue fixes (#1566–#1572), and standalone mcp-server npm install. I.e. maintenance/fix density on the gsd extension and CLI shell, not new-feature greenfield.
+- **Stack**: TypeScript 5.9 (strict, NodeNext ESM, `"type": "module"`) on Node >= 22.18 (`package.json:47-49`); pnpm 10.12.1 monorepo (`pnpm-workspace.yaml` globs `packages/*`, `extensions/*`, `web`). Rust 2021 N-API workspace in `native/` (crates `gsd-engine`, `gsd-ast`, `gsd-grep`; tree-sitter + ast-grep). Web UI is Next.js 16.2.11 (`web/package.json:61`, package `gsd-web`, Radix UI). Python plugin in `integrations/hermes` (pyproject.toml). VS Code extension (`vscode-extension/`, v0.3.0) on a separate npm toolchain (own `package-lock.json`, not in the pnpm workspace). Tests: Node built-in `node --test` with `--experimental-strip-types` plus esbuild-compiled `dist-test/`; one vitest outlier (`test:pi-claude-schemas`); c8 coverage gates at 40% statements/lines, 20% branches/functions (`package.json:94`).
+- **Entry points**: npm bins `gsd`/`gsd-cli` → `dist/loader.js` (`package.json:15-19`); `src/loader.ts` is a fast-path startup loader (`--version`/`--help` short-circuit, then Node/git runtime checks). The real CLI is `src/cli.ts`, lazy-importing `@gsd/pi-coding-agent`, `@gsd/agent-core`, and `@gsd/agent-modes` (interactive, print, RPC modes). Other bins: `gsd-daemon` (packages/daemon), `gsd-mcp-server` (packages/mcp-server), `pi-ai` (packages/pi-ai). Web mode stages and runs a Next standalone server (`scripts/stage-web-standalone.cjs`, `src/web-mode.ts`). Dev entries: `node scripts/dev.js`, `scripts/dev-cli.js`.
+- **Architecture**: A local-first coding-agent CLI ("GSD Pi", `@opengsd/gsd-pi` v1.16.1). Root `src/` is a thin host shell (CLI routing, onboarding, worktree commands, headless mode, web mode) compiled by `tsc` to `dist/`. Agent execution lives in published workspace packages under `packages/` (`pi-coding-agent`, `pi-ai` provider layer, `pi-tui`, `pi-agent-core`, `agent-core`, `agent-modes`, `contracts`, `rpc-client`, `mcp-server`, `daemon`, `native`). The domain/workflow engine (milestones → slices → tasks, SQLite-backed state via sql.js, auto-mode orchestration, dispatch) is NOT in `packages/` — it is a bundled pi extension shipped as TypeScript source under `src/resources/extensions/gsd/` (~1925 `.ts` files incl. ~1155 test files), excluded from the root tsconfig, loaded at runtime via jiti / `--experimental-strip-types` with a custom module hook (`src/resources/extensions/gsd/tests/resolve-ts.mjs`). The Rust `native/` engine (built by `native/scripts/build.js`, shipped as `@opengsd/engine-<platform>` optionalDependencies) accelerates grep/AST/directory-sync and is consumed from the gsd extension's db engine. Hermes (Python), the VS Code extension, the daemon (Discord), and the MCP server are satellite surfaces over the shared `@opengsd/contracts`.
+- **Conventions**: kebab-case filenames with heavy prefix grouping (`auto-worktree-merge-*.ts`, `headless-*.ts`, `worktree-cli-*.ts`). Commit style is conventional-commit-ish, dominated by `fix(issue): ... (#PR)` — all 57 visible commits match. Tests colocated as `*.test.ts` beside source (`src/tests/`, `src/resources/extensions/*/tests/`, `packages/*/src`), run with `node --test`. Domain-layer error handling uses typed errors (`GSDError` with codes such as `GSD_REVISION_CONFLICT`, `GSD_IDEMPOTENCY_CONFLICT`) and revision-checked "domain operation" write boundaries (`src/resources/extensions/gsd/db/domain-operation.ts`). Source files carry `// Project/App:` + `// File Purpose:` headers. ADRs live in `docs/dev/ADR-0NN-*.md` (48 ADRs, up to ADR-048).
+- **Maturity**: Shipping software at v1.16.1 with a real release pipeline (20 GitHub workflows; CI on blacksmith runners with merge queue; trusted manual npm-publish with provenance). Large test surface: 191 test files in `src/tests`, ~1220 under `src/resources/extensions`, 30 script tests, plus e2e/live/smoke/acceptance beds under `tests/` (most gated behind env flags). Unit suite passes 14438/14491 with 25 remaining failures at this revision — 23 environmental (fault-injection native build not run), 1 genuine token-budget gate miss, 1 isolation-sensitive (see findings). Coverage gates are modest (40/40/20/20). Scaffolding/half-built: `packages/db` (no manifest, unreferenced), lost plans 033/034 (`plans/README.md`), empty `docs/adr/` (real ADRs in `docs/dev/`), three parallel doc trees.
+- **Recent activity**: Only 57 commits visible (shallow clone), all within ~30 days, 55/57 by one author. The tail is v1.16.1 release plus a dense cluster of `fix(issue):` patches — Windows path/locking bugs (`os error 32`, forward-slash `pnpm.cmd`, projection bootstrap CWD locking), auto-mode deadlock/liveness fixes, `gsd quick` headless entry points, and validation-shape fixes (`knownIssues` wrapper, `answers[id].answers`). File-touch counts over the visible window: `src/resources` 3121, `packages/pi-coding-agent` 460, `docs/dev` 219, `src/tests` 209, `packages/pi-ai` 177.
 
-## Finding: The repo's center of gravity is inverted — the product is a bundled "extension", not the packages
+## Finding: the domain engine is shipped as uncompiled TypeScript "resources", not built code
 
-- **Claim**: The GSD domain logic (milestones, auto mode, worktree automation, state DB) lives in `src/resources/extensions/gsd` — 29 MB, 2214 files, 1106 test files, 100+ `db-*.ts` schema modules — while `packages/` holds the vendored generic agent runtime.
-- **Source**: `du -sh src/resources/extensions/gsd` → 29M; `find src/resources/extensions/gsd -type f | wc -l` → 2214; `find src/resources/extensions/gsd -name '*.test.*' | wc -l` → 1106; `packages/pi-coding-agent/package.json:3` → "Coding agent CLI (vendored from earendil-works/pi)"; boundary guards `verify:pi-boundary` / `verify:pi-patches` in `package.json:91-92`.
+- **Claim**: The product's core workflow engine — SQLite state, milestone/slice/task lifecycle, auto-mode orchestration (~1925 `.ts` files under `src/resources/extensions/gsd/`, including a 52-entry `auto/` cluster and a `db/` kernel with engine, domain-operation, lifecycle-shadow modules) — is excluded from the root `tsc` build and shipped as source in the npm tarball, loaded at runtime via jiti / `--experimental-strip-types`.
+- **Source**: `tsconfig.json` exclude block (`"src/resources/extensions"`); `package.json:20-38` (`files` includes `src/resources`); `src/resources/extensions/gsd/tests/resolve-ts.mjs:1-7`; `find src/resources/extensions/gsd -name '*.ts' | wc -l` → 1925.
 - **Confidence**: high
-- **Why it matters here**: A planner reading the monorepo layout would assign new behavior to `packages/`; nearly all product behavior actually belongs in the extension tree, which has its own conventions (DB-authoritative state, projection, gate baselines). Editing `packages/pi-*` also trips upstream-sync boundary checks.
+- **Why it matters here**: A planner reading `packages/` would look in the wrong place for the business logic. Engine changes follow resource-extension conventions (jiti resolution, `.ts` import specifiers, custom test hook, separate `tsconfig.extensions.json` typecheck), not package conventions — and they ship uncompiled, so runtime strip-types behavior is part of the compatibility surface.
 
-## Finding: Tests run straight from TypeScript via Node's strip-types and a custom resolver hook
+## Finding: unit suite is green only in the exact order build → test:compile → test:unit
 
-- **Claim**: The entire main suite uses `node --test --experimental-strip-types` with `--import ./src/resources/extensions/gsd/tests/resolve-ts.mjs` to resolve `.js` specifiers to `.ts` sources; running any TS file directly without that hook fails with `ERR_MODULE_NOT_FOUND`.
-- **Source**: `package.json:84,96` (test scripts); observed failure of `node --experimental-strip-types src/loader.ts --version` → `Cannot find module '.../src/app-paths.js'`; success of the same pattern with the hook → 45/45 pass in `src/tests/parse-cli-args.test.ts`.
+- **Claim**: `test:unit:compiled` resolves workspace imports into `dist-test/packages/*/dist/**` via `scripts/dist-test-resolve.mjs`, but that mirror is populated by `test:compile` copying from the packages' real `dist/` (`scripts/compile-tests.mjs:412-428`). On a fresh checkout (`test:compile` before `build:core`) the suite reports 1029 failures, all `ERR_MODULE_NOT_FOUND` — environmental, not real. In the correct order (encoded in `verify:pr`, `package.json:139`) the same tree yields 14438 passed / 25 failed.
+- **Source**: `scripts/dist-test-resolve.mjs:30-41`; `scripts/compile-tests.mjs:418-428`; sidecar runs recorded in "Checks run".
 - **Confidence**: high
-- **Why it matters here**: Any new test, script, or automation that invokes TS files must replicate the hook import or it breaks confusingly; CI and agents must copy this invocation exactly.
+- **Why it matters here**: Anyone running `pnpm test` on a clean clone sees a four-digit failure count and may misread the codebase as broken. Verification agents must replicate the `verify:pr` order exactly.
 
-## Finding: packages/db is a consumerless stub for a cloud state mirror
+## Finding: post-build unit suite has 25 failures — 23 environmental, 1 genuine gate failure, 1 isolation-sensitive
 
-- **Claim**: `packages/db` contains a Drizzle ORM + neon-http client and GSD-state mirror schema marked "stub for Phase 1, expanded in Phase 2", has no `package.json` (so it is not a pnpm workspace package despite matching `packages/*`), and has no importers anywhere in the repo.
-- **Source**: `packages/db/src/schema/gsd-state.ts:1` ("stub for Phase 1"); `packages/db/src/client.ts:1-27`; `ls packages/db` → only `src`, `tests`; grep for `packages/db` / `@opengsd/db` across `*.ts`/`*.mjs` → no consumers; recent commits `e71db0d0d`/`e9b4832b6` still maintain it.
-- **Confidence**: high (stub + unwired); medium (intended future role)
-- **Why it matters here**: Classic half-built area — a planner could either build on it assuming it's live, or delete it assuming it's dead. Only the user can say which phase it's actually in.
+- **Claim**: After `build:core` + `test:compile`, the compiled unit suite ends `14438 passed, 25 failed, 28 skipped` (exit 1). Breakdown of the 25: (a) 23 failures are all in `src/resources/extensions/gsd/tests/migrate-safety-audit.test.ts` (tree publication/deletion/retirement invariants) and require the fault-injection native build — they call `setMutationBoundaryFaultForTest`, which only exists when the native addon is built with `--test-fault-injection`; CI runs `pnpm run build:native:test` before the unit suites (`.github/workflows/ci.yml:184,342`) but `build:core` does not. (b) 1 genuine failure: `prompt golden fixtures meet Phase 2 reduction gate` (`src/tests/prompt-golden-fixtures.test.ts`) — `AssertionError: execute-task should be at least 40% smaller than Phase 2 start baseline (8614/14320)`, i.e. the prompt is ~39.9% smaller, marginally missing a token-reduction gate. (c) 1 isolation-sensitive: `runReadCli handles global flags before read` (`src/tests/read-cli-args.test.ts`) fails in the full run but passes when run standalone.
+- **Source**: sidecar runs recorded in "Checks run"; `migrate-safety-audit.test.ts:165-168` (fault hook); `.github/workflows/ci.yml:184,342`; `package.json:108` (`build:native:test` = `native/scripts/build.js --dev --test-fault-injection`); isolated rerun of the two non-native failures.
+- **Confidence**: high on (a) and (b); medium on (c) being a flake rather than environment-specific (node v26 vs the repo's `>=22.18` floor)
+- **Why it matters here**: A fully green local unit run requires `build:native:test`, not just `build:core` — undocumented in package scripts' default path. The prompt-size gate failure means HEAD of the v1.16.1 release tag is marginally red on a token-budget gate; define should confirm whether that gate is actively enforced in CI or already known-failing.
 
-## Finding: The published package still ships a `@glittercowboy/gsd` shim from the abandoned upstream
+## Finding: packages/db is a half-built, non-workspace package
 
-- **Claim**: Root `package.json` `files` includes `pkg/`, and `pkg/package.json` is named `@glittercowboy/gsd` v1.11.0 — the original pre-fork maintainer's npm scope — while the real package is `@opengsd/gsd-pi`.
-- **Source**: `package.json:26` (`"pkg"` in files), `pkg/package.json:2` (`"name": "@glittercowboy/gsd"`), `package.json:2` (`"@opengsd/gsd-pi"`); VISION.md documents the fork after the original maintainer abandoned the project.
-- **Confidence**: high (fact); medium (that it's a deliberate upgrade/migration alias — likely tied to `src/pi-migration.ts`, inference)
-- **Why it matters here**: Release/packaging work (`prepack`, `postpack`, `validate-pack`) must keep this alias in sync; someone "cleaning up" the old name could break upgrades for legacy installs.
+- **Claim**: `packages/db/` contains `src/client.ts`, `src/schema/{index,gsd-state}.ts`, and `tests/schema.test.ts` (4 files) but no `package.json`, so pnpm's `packages/*` glob ignores it; nothing builds, tests, or imports it. The live database layer is `src/resources/extensions/gsd/db/`.
+- **Source**: `ls packages/db` (src, tests only); `find packages/db -type f | wc -l` → 4; `docs/db-map.md:1-25` maps the real layer under the gsd extension.
+- **Confidence**: high that it is unreferenced; medium on intent (looks like a stalled extraction)
+- **Why it matters here**: Define should confirm whether this is a live migration target or abandoned scaffolding before anyone builds on or deletes it.
 
-## Finding: Extension modularization is mid-flight — google-search exists twice
+## Finding: a database-authoritative lifecycle cutover (ADR-046→048) is mid-flight behind a shadow gate
 
-- **Claim**: The working google-search extension moved to the workspace package `extensions/google-search` (`@gsd-extensions/google-search`), while the bundled copy at `src/resources/extensions/google-search/index.ts` is now a one-line deprecation stub; the two files differ.
-- **Source**: `diff extensions/google-search/index.ts src/resources/extensions/google-search/index.ts` → stub comment "Deprecation stub for google-search (moved to @gsd-extensions/google-search)"; `extensions/google-search/package.json` name field; ADR-006-extension-modularization in `docs/dev/`.
+- **Claim**: `CONTEXT.md` states ADR-046 vocabulary "do[es] not describe current runtime authority until the relevant cutover has completed". The repo carries a dedicated CI gate (`gate:lifecycle-shadow-no-cutover` → `scripts/lifecycle-shadow-no-cutover-gate.mjs`), shadow-comparison code (`src/resources/extensions/gsd/db/lifecycle-shadow-comparison.ts`, `domain-operation.ts`, `writers/`), and `legacy:cleanup:{gate,evidence,proof}` scripts.
+- **Source**: `CONTEXT.md:5-9`; `package.json:77,80-82`; `docs/dev/ADR-046-database-authoritative-workflow-lifecycle.md`, `ADR-047`, `ADR-048`.
+- **Confidence**: high that the cutover is incomplete (the gate's name asserts "no cutover")
+- **Why it matters here**: Two lifecycle models coexist (legacy projections vs DB-authoritative domain operations). Planning that touches milestones/slices/tasks must know which authority a code path uses; assuming either full cutover or no cutover will be wrong in places.
+
+## Finding: Windows platform bugs dominate the visible commit tail
+
+- **Claim**: At least 7 of the last ~25 commits fix Windows-specific failures: forward-slash `pnpm.cmd` breaking `cmd.exe`, a 30s default exec timeout killing builds, projection rendering failing with `os error 32`, worktree projection bootstrap DELETE-locking its own CWD, and tmux-check false positives.
+- **Source**: `git log --oneline -25` (d4c3e00f8, b3dbda15d, d9add4c99, 794a3c600, f6e809adc, d2a1f2dc0, 114c35f33).
 - **Confidence**: high
-- **Why it matters here**: Shows the migration direction (bundled `src/resources/extensions/*` → workspace `extensions/*`) is incomplete; a planner must know which of the two copies of any extension is authoritative before editing.
+- **Why it matters here**: Windows support is real but apparently exercised mostly by users, not pre-merge (a `windows-e2e-changed` gate exists in `ci.yml`). Path handling is a live pain point — the primary workspace branch is literally named `path-fixes`.
 
-## Finding: An in-flight refactor is enforced by executable baseline/gate scripts
+## Finding: two copies of the google-search extension exist with different identities
 
-- **Claim**: The repo carries runnable gates — `baseline:refactor:gate`, `baseline:refactor:phase0`, `gate:semantic-shadow-no-cutover`, `legacy:cleanup:gate`, `audit:test-confidence/gaps/matrix` — plus `docs/dev/2026-05-03-long-running-refactor-plan-of-plans.md`, indicating a long-running refactor (state-DB cutover, legacy cleanup) whose invariants are encoded as scripts.
-- **Source**: `package.json:75-83,129-131`; `docs/dev/` listing; `scripts/refactor-baseline.mjs`, `scripts/semantic-shadow-no-cutover-gate.mjs` exist.
-- **Confidence**: high (gates exist and are wired into scripts); medium (current phase status)
-- **Why it matters here**: Changes near state/projection/legacy surfaces can fail these gates in ways ordinary tests won't reveal; the planner should treat the gate scripts as binding constraints and learn the refactor's current phase from the user.
+- **Claim**: `extensions/google-search` is a publishable workspace package `@gsd-extensions/google-search@1.16.1`, while `src/resources/extensions/google-search` is a private bundled copy `pi-extension-google-search@1.0.0` with its own `extension-manifest.json`. Both are live.
+- **Source**: `extensions/google-search/package.json`; `src/resources/extensions/google-search/package.json`; `pnpm-workspace.yaml:3`.
+- **Confidence**: high on duplication; low on whether the two are intentionally synced
+- **Why it matters here**: A fix applied to one copy may not reach the other; define should clarify the bundled-vs-published extraction story.
 
-## Finding: studio/ (Electron desktop app) is outside the workspace and CI
+## Finding: three parallel documentation trees and an empty docs/adr directory
 
-- **Claim**: `studio/` is an Electron 41 + React 19 + Tailwind 4 app at v0.0.0 with its own test script, but it is not in `pnpm-workspace.yaml` (only `packages/*`, `extensions/*`, `web`) and no root script or CI workflow references it.
-- **Source**: `pnpm-workspace.yaml:1-4`; `studio/package.json:1-12`; grep for `studio` in root `package.json` and `.github/workflows/` → no matches.
+- **Claim**: The repo carries `docs/` (283 markdown files incl. `docs/dev/` with 48 ADRs), `gitbook/` (34 files), and `mintlify-docs/` (21 mdx files) simultaneously; `docs/adr/` exists but contains only `.gitkeep` — actual ADRs live in `docs/dev/`.
+- **Source**: `find docs -name '*.md' | wc -l` → 283; `ls docs/adr` → `.gitkeep` only; `ls docs/dev | grep ADR | wc -l` → 51.
 - **Confidence**: high
-- **Why it matters here**: A "desktop app" assumption would be wrong — it's unscaffolded-but-unwired; dependency installs and tests there don't run in the normal flow, and its relationship to `web/` (the shipped UI) is undefined.
+- **Why it matters here**: Documentation authority is ambiguous; no single tree (and certainly not `docs/adr/`) should be treated as canonical without asking.
 
-## Finding: Multiple parallel plan/docs trees coexist
+## Finding: visible git history is shallow and effectively single-author
 
-- **Claim**: Three documentation systems (`docs/`, `gitbook/`, `mintlify-docs/`) and two tracked plan directories (`plans/` with 33 files, `.plans/` with 23+ files) are all committed; `.planning/` exists locally but is untracked.
-- **Source**: `ls docs gitbook mintlify-docs`; `git ls-files plans | wc -l` → 33; `git ls-files .plans` → tracked entries (e.g. `.plans/issue-524-git2-migration.md`); `git ls-files .planning | wc -l` → 0.
+- **Claim**: The checkout shows 57 commits, all within ~30 days, 55 by one author; `git rev-parse --is-shallow-repository` → true. Issue/PR numbers up to #1931 prove a much longer real history exists remotely but is not available locally.
+- **Source**: `git log --oneline | wc -l` → 57; `git log -60 --format='%an' | sort | uniq -c`.
+- **Confidence**: high for this checkout
+- **Why it matters here**: The "recent activity" picture covers only the visible window; churn and archaeology beyond ~30 days are unverifiable from this clone.
+
+## Finding: heavyweight self-governance tooling and an agent-generated plan backlog
+
+- **Claim**: The repo embeds unusual amounts of self-governance: 109 top-level scripts including test-confidence/gap/matrix auditors (`audit-test-confidence.mjs`, `audit-test-gaps.mjs`, `audit-test-matrix.mjs`), baseline gates (`baseline:refactor:gate`, `legacy:cleanup:*`), a secret scanner, boundary verifiers (`verify:pi-boundary`, `verify:workspace-coverage`), and 34 numbered improvement plans in `plans/` generated by an "improve skill" — two of which (033, 034) were lost to a working-tree clean and remain unrecoverable/TODO.
+- **Source**: `ls scripts | wc -l` → 109; `package.json:73-93,127-131`; `plans/README.md:14-18`.
 - **Confidence**: high
-- **Why it matters here**: The planner must know which tree is authoritative (AGENTS.md says `CONTEXT.md` + `docs/dev/`) or documentation updates will land in the wrong place and plan files will fork.
+- **Why it matters here**: The project is already heavily agent-operated (CI-healing and PatchDeck commits in the log). New work should reuse these gates rather than invent parallel checks, and define should know `plans/` is an active backlog.
 
-## Finding: Coverage enforcement is nominal relative to test volume
+## Finding: version-stamped multi-surface release pipeline
 
-- **Claim**: Despite ~1700+ test files and dedicated coverage jobs, the enforced thresholds are statements 40 / lines 40 / branches 20 / functions 20.
-- **Source**: `package.json:95` (`--check-coverage --statements=40 --lines=40 --branches=20 --functions=20`); counts from `find src -name '*.test.ts'` → 1347, `find packages -name '*.test.ts'` → 388.
+- **Claim**: One version (1.16.1) is stamped across the root package, all 12 workspace packages, the Rust workspace, native platform optionalDependencies (`@opengsd/engine-*`), and `pkg/` (a `@glittercowboy/gsd` alias manifest), enforced by `verify:version-sync` and `verify:native-platform-packages` inside `prepublishOnly`.
+- **Source**: `package.json:149,120-121,208-217`; per-package `package.json` versions; `native/Cargo.toml:6`; `pkg/package.json`.
 - **Confidence**: high
-- **Why it matters here**: "Has many tests" ≠ "coverage gate will catch regressions"; reviewers and the planner should rely on colocated test intent (per AGENTS.md rule 9) rather than assuming the coverage gate is a safety net.
-
-## Finding: Recent history is heavily machine-authored
-
-- **Claim**: In the last 3 months, commit authors include `Cursor Agent` (365), `Flux Labs` (319), `PatchDeck` (219), `Claude` (15) alongside `Jeremy McSpadden`/`jeremymcs` (2449), and PR-titled fix commits referencing issue numbers dominate (`fix(issue): ... (#1566)`).
-- **Source**: `git log --since='3 months ago' --format='%an' | sort | uniq -c | sort -rn`; `git log --oneline -30`.
-- **Confidence**: high
-- **Why it matters here**: Explains the repo's process artifacts (no-mistakes commits, gate scripts, AGENTS.md rules about AI behavior) — this codebase is actively developed by agent loops, so onboarding guidance and conventions are written for agent consumers, not just humans.
+- **Why it matters here**: Version bumps and releases are scripted and gated — planners must not hand-edit versions, and `verify:pr` (build + typecheck + unit + lifecycle gate) is the expected local bar for changes.
 
 ## Apparent intent
 
-<!-- Inference, clearly flagged — what the project seems to be becoming. -->
+- Becoming a multi-surface agent platform rather than just a CLI: the same contracts feed a Next.js web UI, a VS Code extension, a Discord daemon, an MCP server, and a Python (Hermes) plugin — based on the workspace layout and `@opengsd/contracts` as the shared dependency (e.g. `vscode-extension/package.json` deps, `web/package.json` deps).
+- Migrating the workflow engine from file/projection-based state to a database-authoritative lifecycle (ADR-046→048), with the cutover deliberately gated and evidence collected before legacy deletion — based on `CONTEXT.md`, the shadow/no-cutover gate, and `legacy:cleanup:*` scripts.
+- Extracting bundled resource extensions into publishable workspace packages over time — based on the `extensions/google-search` vs bundled twin and the `pi-package`/`gsd-extension` manifest keywords; `packages/db` may be a stalled instance of the same motion for the DB layer.
+- Treating Windows and headless/autonomous operation as first-class — based on the commit tail, the `gsd quick` non-interactive work, and `gsd-orchestrator/SKILL.md` driving `gsd headless` as a subprocess.
 
-- gsd-pi is a **multi-surface agent orchestration platform** rather than only a CLI: terminal, headless/RPC, MCP, daemon, and web surfaces are active; `studio/` remains dormant and `packages/db` remains a hosted-state stub.
-- The project is **migrating bundled extensions out of `src/resources/extensions/` into workspace packages** (`extensions/*`) and simultaneously **migrating project state from filesystem to a DB-authoritative model with file projection** ("semantic-shadow-no-cutover" gate, `db-*-schema.ts` modules, single-writer-invariant tests) — based on the google-search stub, ADR-006, and gate scripts. Both migrations are incomplete.
-- It intends to keep **tracking upstream `earendil-works/pi`** as a vendored base with enforced patch boundaries rather than fork-and-forget — based on `verify:pi-boundary`, `verify:pi-patches`, and the "vendored from" package descriptions.
+## Open questions for define
 
-## Open questions for the grill
-
-<!-- What only the user can settle about this codebase. -->
-
-- Is `packages/db` (Drizzle/neon) still the planned hosted-state path, or superseded — should new work build on it or ignore it?
-- Which plan directory is authoritative for new work: `plans/`, `.plans/`, or local `.planning/` — and should the others be consolidated?
-- What is the intended fate of `studio/` (Electron): active next surface, paused experiment, or dead scaffolding to remove?
-- What is the current phase of the long-running state-DB refactor (`refactor-baseline`, `semantic-shadow-no-cutover` gate) — which surfaces are frozen vs. safe to change?
-- Is the `@glittercowboy/gsd` pkg shim a permanent upgrade alias for legacy installs, and does it need version sync on every release?
-- For extensions present in both `src/resources/extensions/` and `extensions/`, which copy is authoritative during the modularization migration, and which extensions migrate next?
-- Are the low c8 coverage floors (40/40/20/20) deliberate policy, or debt to raise?
+- Is `packages/db` an active extraction target or dead scaffolding? Should new DB work go there or stay in `src/resources/extensions/gsd/db/`?
+- What is the current cutover state of the ADR-046 database-authoritative lifecycle, and which authority (legacy projections vs domain operations) should new features target?
+- Is the prompt-golden-fixtures "Phase 2 reduction gate" failure (execute-task prompt ~39.9% smaller than baseline vs required ≥40%) known/accepted at release HEAD, or is it enforced and currently red in CI? And is the read-cli-args failure a known flake?
+- Are bundled (`src/resources/extensions/*`) and published (`extensions/*`) extension copies meant to converge, and who syncs them?
+- Which documentation tree is canonical (docs/ vs gitbook/ vs mintlify-docs/), and should `docs/adr/` be populated or removed?
+- Is Windows covered in CI beyond the `windows-e2e-changed` gate, given the bug tail? (Workspace branch `path-fixes` suggests active pain.)
+- Are plans 033/034 (lost, still TODO) still wanted, and is `plans/` an active backlog or an archive?
 
 ## Blocked areas
 
-<!-- What could not be inspected and why. "none" if clean. -->
-
-- Full test suite (`pnpm test`) — not run: it compiles and executes 1300+ test files plus integration/e2e tiers; beyond the disposable-worktree time budget. Spot checks (typecheck clean, one unit file 45/45) only.
-- `native/` Rust build — not run: requires cargo toolchain and platform build; verified statically via `native/Cargo.toml` and crate layout only.
-- `web/` and `studio/` builds — not run: separate toolchains (Next build and electron-vite) outside the core verification gate.
-- `.gsd` symlink target (`/Users/jeremymcspadden/.gsd/projects/d311c3f098d1`) — not inspected: external live state directory outside the repo (per ADR-002), read-only scope is the repo itself.
+- Full git history — the sidecar's object store is shallow (57 commits); churn, authorship, and evolution beyond ~30 days could not be inspected.
+- `test:integration`, `test:e2e`, `test:live*`, `test:packages`, and coverage targets were not run — they require API credentials, live services, Playwright browser downloads, or Docker; recorded as unverifiable in this pass.
+- `integrations/hermes` (Python) and `vscode-extension` (separate npm toolchain) were inspected statically only; their test suites were not executed.

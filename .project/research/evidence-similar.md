@@ -1,88 +1,144 @@
 # Evidence — similar
 
-<!-- Written by one researcher role. Consumed by the synthesizer. -->
+<!-- Written by one researcher role. Consumed by the decider. -->
 
 Dimension: similar
-Questions assigned: none (all findings tied to INTENT.md risks: hidden readers, thin telemetry, live-data migration, downgrade story, concurrent writers, gate retirement)
+Questions assigned: none
 
-## Finding: Kubernetes proves a deprecated path is dead with a purpose-built usage gauge, not absence-of-complaints
+Scope note: INTENT.md assigns no RESEARCH question to this dimension. The
+brief asked for lessons from comparable developer tools on how they retire
+compatibility/migration paths, mapped to the three deferred NEEDS-USER
+rulings: (a) delete on static proof vs build telemetry evidence first; (b)
+compat-window length for data-migration paths vs pure API deprecations; (c)
+whether "time + releases" windows are hard gates or advisory. All sources
+below were opened live on 2026-08-22.
 
-- **Claim**: Since v1.19, every request to a deprecated Kubernetes API sets an `apiserver_requested_deprecated_apis` gauge (labeled by group/version/resource plus `removed_release`), adds a Warning header, and annotates the audit event; operators can join the gauge against `apiserver_request_total` to measure — not guess — remaining usage before removal, and the deprecation policy then binds removal to explicit timelines (e.g. beta APIs unserved 9 months/3 releases after deprecation). Deprecated metrics additionally pass through a "hidden" stage (unregistered but re-enableable via `--show-hidden-metrics-for-version`) for one release before deletion.
-- **Source**: https://kubernetes.io/docs/reference/using-api/deprecation-policy/ (opened; Rule #4a/4b, REST-resource telemetry section, metric deprecation rules #11a/11b)
+## Finding: Kubernetes codifies "time OR releases, whichever is longer" as a hard floor, with mandatory runtime warnings
+
+- **Claim**: The official Kubernetes deprecation policy sets minimums as hard floors — GA user-facing CLI elements "must function after their announced deprecation for no less than 12 months or 2 releases (whichever is longer)"; admin-facing GA 6 months or 1 release; features/behaviors ≥1 year — and Rule #6 requires deprecated CLI elements to emit warnings when used. Windows run from *announced deprecation*, not from replacement-ship.
+- **Source**: https://kubernetes.io/docs/reference/using-api/deprecation-policy/ (Rules #4a, #5a, #5b, #6, #7)
 - **Confidence**: high
-- **Why it matters here**: Directly answers the "thin telemetry" risk: the proof that the legacy filesystem-state path is unused (`legacy:cleanup:evidence`) should be an instrumented counter on the legacy read/write path itself, shipped at least one release before deletion — the k8s pattern shows measurement is added first, removal is gated on it, and an escape hatch (hidden stage) survives one more cycle.
+- **Why it matters here**: ADR-046's "2 releases + ≥60 days" has exactly the shape of the industry-standard floor ("N releases OR M days, whichever is longer"). The comparable-tools answer to ruling (c): the *minimum* is a hard gate; the scheduled removal date is not. Note the anchor differs — K8s counts from deprecation announcement, so the decider should confirm what ADR-046's window is anchored to (import-path ship vs deprecation marker).
 
-## Finding: Kubernetes mandates a version-skew window so rollback never strands state written by the newer release
+## Finding: Kubernetes forbids removing the ability to decode old persisted data even after API removal
 
-- **Claim**: Deprecation-policy Rule #4b forbids advancing the preferred/storage version until a release exists that supports both old and new, explicitly so users "can upgrade to a new release and then roll back to a previous release without converting anything... or suffering breakages"; a companion note forbids removing any API version that has been persisted to storage, requiring the server to remain able to decode previously persisted data even after the endpoint is disabled.
-- **Source**: https://kubernetes.io/docs/reference/using-api/deprecation-policy/ (opened; Rule #4b and the #52185 storage note)
+- **Claim**: The K8s policy states (note under Rule #4a, pending issue #52185): "no API versions that have been persisted to storage may be removed… the API server must remain capable of decoding/converting previously persisted data from storage." Serving endpoints may be disabled on schedule; *decode/convert capability for old stored data may not*. Rule #4b additionally requires a release supporting both old and new storage versions before the preferred/storage version advances, so users can upgrade and roll back.
+- **Source**: https://kubernetes.io/docs/reference/using-api/deprecation-policy/ (Rule #4a note, Rule #4b)
 - **Confidence**: high
-- **Why it matters here**: This is the "downgrade story" risk formalized: the cutover release must keep emitting (or be able to regenerate) the file projections the previous binary reads, so that rolling back the CLI never leaves DB-authored state unreadable; it also sets a precedent that "stop serving" and "stop being able to decode old data" are separable stages.
+- **Why it matters here**: Direct input to ruling (b): the most rigorous comparable policy treats *data-migration* compatibility (read/import old persisted state) as permanent or near-permanent, even when the API surface that produced it is long gone. GSD Pi's legacy import path is a data-migration path for pre-cutover `.gsd/milestones/` state — the K8s precedent argues for retiring the *live* fallback (done: "Markdown is never a live-path fallback") while being far more conservative about deleting the *import/decode* capability.
 
-## Finding: Kubernetes feature gates have a staged retirement where disabling a non-operational gate fails loudly instead of running silently
+## Finding: Node.js uses a four-tier deprecation ladder; removal is the last tier, and deprecations are revoked or left doc-only indefinitely
 
-- **Claim**: k8s feature gates move disabled-by-default (alpha) → enabled-by-default (beta) → deprecated and non-operational at GA → removed after the deprecation window (GA gates must function ≥6 months or 2 releases); critically, "when an invocation tries to disable a non-operational feature gate, the call fails in order to avoid unsupported scenarios that might otherwise run silently," and deprecated gates must warn and be documented in release notes and CLI help.
-- **Source**: https://kubernetes.io/docs/reference/using-api/deprecation-policy/ (opened; "Deprecating a feature or behavior", Rules #9/#10)
+- **Claim**: Node.js defines Documentation-only → Application (warn for non-`node_modules` code) → Runtime (warn all code) → End-of-Life (removed) deprecation types, with `--pending-deprecation`/`--throw-deprecation` flags to escalate warnings early. Deprecations are occasionally *revoked* (DEP0033, DEP0037/38, DEP0089, DEP0116 legacy URL API), and some APIs remain documentation-only-deprecated for a decade+ without removal (`node:domain`, DEP0032, deprecated since ~Node 4; `fs.exists`, DEP0034).
+- **Source**: https://nodejs.org/api/deprecations.html
 - **Confidence**: high
-- **Why it matters here**: Maps to the gate-retirement risk for `gate:semantic-shadow-no-cutover`: inverting/retiring the gate should not silently drop its invariants — the k8s pattern makes the retired gate an explicit error with the protected invariants re-homed as named checks, rather than a no-op that lets a misconfiguration run silently.
+- **Why it matters here**: Node — a CLI-adjacent runtime with zero usage telemetry — answers ruling (a) by never gating removal on telemetry at all: warnings precede removal, removal lands only in semver-majors, and if real-world impact emerges the deprecation is revoked rather than muscled through. "Deprecated but cheap to keep" is a legitimate terminal state in a major tool — a counterweight to any "the window elapsed so delete" argument.
 
-## Finding: npm evolved its lockfile format with explicit per-version compatibility windows and kept writing legacy fields for downgraders
+## Finding: Python PEP 387 mandates ≥2 years of warnings, was amended in 2025 to *prefer 5 years*, and allows cheap deprecated code to stay indefinitely
 
-- **Claim**: npm's `package-lock.json` format is versioned (`lockfileVersion` 1/2/3); v2 (npm 7–8) is documented as "backwards compatible to v1 lockfiles" and v3 (npm 9+) as "backwards compatible to npm v7"; npm v7 continued to maintain the legacy `dependencies` section "in order to support switching between npm v6 and npm v7," auto-upgrades old lockfiles on install by backfilling missing data, and states it "will always attempt to get whatever data it can out of a lockfile, even if it is not a version that it was designed to support."
-- **Source**: https://docs.npmjs.com/cli/v10/configuring-npm/package-lock-json (opened; `lockfileVersion`, "Handling Old Lockfiles", `dependencies` section)
+- **Claim**: PEP 387 requires an incompatible change to carry a warning for at least two minor releases (≥2 years under the annual cadence), states "It is preferred, though, to wait 5 years before removal" (added 2025-01-27), and says "If the expected maintenance overhead and security risk of the deprecated behavior is small… it can stay indefinitely." It also defines "soft deprecation" (documented, no warning, no removal scheduled) as a distinct, legitimate state.
+- **Source**: https://peps.python.org/pep-0387/
 - **Confidence**: high
-- **Why it matters here**: A shipped CLI's answer to "downgrade must not strand user data": keep the old representation as a maintained projection during the compatibility window (exactly gsd-pi's DB→file projection plan), auto-migrate forward on first run, and degrade gracefully (best-effort read) instead of hard-failing on newer/older formats — concrete precedent for the NEEDS-USER "how many released versions must a downgrade stay readable for" question.
+- **Why it matters here**: Two lessons: (1) the trend among mature tools is toward *longer* windows, driven by fallout from removals like distutils; (2) the explicit "low overhead → keep indefinitely" clause is the strongest primary-source support for a "no-delete with recorded reason" disposition of GSD Pi's legacy import machinery if its maintenance cost is low — directly feeds ruling (a) and success criterion 3's "If not: the blocker and its re-check trigger are documented."
 
-## Finding: Git's plumbing/porcelain split made the low-level object format the stable contract, which is why external tooling survived decades of UI change
+## Finding: Django requires deprecation shims to survive at least 2 feature releases; warnings are silent by default
 
-- **Claim**: Git is "fundamentally a content-addressable filesystem with a VCS user interface written on top of it"; the plumbing commands (operating on `.git/objects`, `refs`, `HEAD`, `index`) are "designed to be chained together UNIX-style or called from scripts" as building blocks for other tools, while the user-friendly porcelain layer was free to be refined from a complex early UI into the modern one without breaking script consumers.
-- **Source**: https://git-scm.com/book/en/v2/Git-Internals-Plumbing-and-Porcelain (opened)
-- **Confidence**: medium (primary doc, but the "plumbing is a de facto stable API" inference is interpretive)
-- **Why it matters here**: Speaks to the "hidden readers" risk: any on-disk state format that external tools, scripts, or other extensions read becomes a de facto stable API regardless of intent — before files become "pure projections," gsd-pi needs an explicit policy for what stability the projection layer promises (and to enumerate those readers), because Git's experience is that the low-level format, not the UI, is what the ecosystem binds to.
-
-## Finding: Jujutsu replaced lock files with an operation log that always commits and merges divergent heads instead of blocking writers
-
-- **Claim**: jj's repo state is a DAG of "operation" objects pointing at "view" objects (heads, bookmarks, working-copy commits) in content-addressed storage; every command loads a consistent view and always succeeds in writing its operation — concurrent writers create divergent op-log heads, which the next command 3-way merges, recording conflicts (e.g. a bookmark moved two ways) in the view instead of erroring; the op-log head is tracked via atomic add-then-remove of empty marker files. jj explicitly rejects lock files because they corrupt on distributed filesystems and serialize non-conflicting operations.
-- **Source**: https://docs.jj-vcs.dev/latest/technical/concurrency/ (opened)
+- **Claim**: Django's deprecation policy: a feature deprecated in A.x raises `RemovedInDjango(B+1)Warning`, survives all of A.x and B.0, and is removed in B.0/B.1 — always spanning ≥2 feature releases (~16 months at the 8-month cadence). The same policy admits the warnings "are silent by default" (require `python -Wd`).
+- **Source**: https://docs.djangoproject.com/en/stable/internals/release-process/ (Deprecation policy section)
 - **Confidence**: high
-- **Why it matters here**: Directly informs the "concurrent writers" risk with dozens of linked worktrees: a single-writer invariant can be enforced by an append-only operation log with deterministic conflict surfacing rather than by blocking; also a cautionary data point — jj documents that its Git backend is "not entirely lock-free" and repository corruption is possible, i.e. the invariant is only as strong as the storage backend's atomicity.
+- **Why it matters here**: Two-release windows are common, but Django's honest caveat matters for GSD Pi: if users never see warnings, elapsed time is not evidence of migration. When the decider evaluates whether the compat window "holds," the question is whether the import path emitted *visible* warnings to pre-cutover users during the window — silent warnings make time-elapsed a weak proxy for users-migrated (echoes ADR-046's own "time alone is not a Removal Gate").
 
-## Finding: Jujutsu treats the working copy as a recoverable projection of the store, with explicit staleness detection and a recovery-commit path
+## Finding: Docker's floor is one stable release, but real removals of config/data formats run many years behind a deprecate → disable-by-default → remove ladder
 
-- **Claim**: Every jj command runs snapshot → mutate-in-memory-and-record-operation → update-working-copy; the working copy records which operation it was last updated to, so a missed or interrupted step 3 is detected as "stale" and repaired with `jj workspace update-stale`; if the underlying operation was lost, the update creates a "recovery commit" from the working-copy contents parented to the current operation — i.e. the projection can be rebuilt from the store, and store loss can be partially rebuilt from the projection.
-- **Source**: https://docs.jj-vcs.dev/latest/working-copy/ (opened; "Stale working copy")
+- **Claim**: Docker's engine deprecation policy requires only "at least one stable release" before removal "unless specified explicitly otherwise," and its deprecated-features table marks removal releases as *tentative*. In practice: `~/.dockercfg` config-file support was superseded in v1.7 (2015), deprecated in v20.10 (2020), removed in v23.0 (2023); `-g/--graph` deprecated v17.05, removed v23.0; image manifest v2 schema 1 deprecated v19.03 → *disabled by default* v26.0 → removed v28.2; several removals carry escape-hatch env vars (`DOCKERD_DEPRECATED_CORS_HEADER`, `DOCKER_KEEP_DEPRECATED_LEGACY_LINKS_ENV_VARS`) for one release before full removal.
+- **Source**: https://docs.docker.com/engine/deprecated/
 - **Confidence**: high
-- **Why it matters here**: A working blueprint for "files as pure read-only projections": stamp each projection with the DB state version it was rendered from, detect staleness by comparing stamps instead of trusting file contents, and provide an explicit repair command — and note the bidirectional lesson that projections double as a disaster-recovery source if the authoritative store is lost, which matters for the live-data migration risk in `~/.gsd`.
+- **Why it matters here**: Docker shows the two-speed pattern the decider needs for ruling (b): flags and behaviors go fast (1 release); *config file formats and data compatibility* go slow (years, with disable-by-default staging). Also confirms ruling (c): "Remove in vN" targets are advisory and routinely slip (multiple entries show removal landing several releases after the target), while the minimum window is the only hard part.
 
-## Finding: Android Room ships migration correctness as a tested artifact chain: exported schema history in VCS plus tests that run old-version databases through every migration
+## Finding: Go ran the canonical opt-in → default-on-with-opt-out → removal ladder for GOPATH→modules, one release per rung
 
-- **Claim**: Room requires exporting the database schema as JSON at compile time and storing it in version control "so that you can re-create lower versions of the database for testing"; its `MigrationTestHelper` creates a database at an old version, seeds it with raw SQL, runs `runMigrationsAndValidate`, and the official guidance is to test *all* migrations end-to-end ("migrateAll"); a missing migration path throws `IllegalStateException` at runtime, and downgrade behavior is an explicit builder choice (`fallbackToDestructiveMigrationOnDowngrade`) rather than an accident.
-- **Source**: https://developer.android.com/training/data-storage/room/migrating-db-versions (opened)
+- **Claim**: Go modules shipped opt-in/experimental in 1.11 (GO111MODULE=on), became default-on in 1.16 with an explicit opt-out (`GO111MODULE=off`), with the official Go 1.16 blog announcing "We plan to drop support for GOPATH mode in Go 1.17. In other words, Go 1.17 will ignore GO111MODULE." Go 1.17 release notes show the same one-release-ahead pattern for `go get` (deprecation warning in 1.17, behavior change hard in 1.18) and removed the deprecated `go get -insecure` flag outright.
+- **Source**: https://go.dev/blog/go116-module-changes ; https://go.dev/doc/go1.17
 - **Confidence**: high
-- **Why it matters here**: The most transferable migration-engineering pattern for the `~/.gsd` live-data migration: version the state schema, commit fixtures of real old-version state, and make idempotency/rollback tests run the actual old→new path — and make the downgrade behavior an explicit, tested decision (which the intent's NEEDS-USER rollback-tolerance question must settle) instead of undefined behavior.
+- **Why it matters here**: This is the staged ladder in its cleanest documented form: the rungs are separated by ~6-month releases, each rung is announced one release ahead in the release notes, and the opt-out env var is the escape hatch between default-on and removal. GSD Pi's cutover already completed the "default-on" rung (SQLite sole authority); the comparable pattern says the *import* escape hatch's final rung gets its own announced release, not a silent deletion.
 
-## Finding: Chromium's deprecation pipeline is measure → deprecate ≥1 milestone → disable behind a runtime flag → monitor after Stable → only then delete code
+## Finding: Angular deprecates for ≥1 major (~12 months), removes only in majors, and gates migration on upgrade tooling that advances one major at a time
 
-- **Claim**: Chromium requires feature removals to first add a `UseCounter` measurement (which takes 5–9 weeks just to reach Stable telemetry), deprecate for at least one milestone, land the removal behind a runtime-enabled feature flag, disable by default, monitor "developer chatter and bug reports for at least a month or two" after the change hits Stable (with the flag retained so the feature can be turned back on "if the removal goes particularly badly"), and only as Step 9 "Remove Code — once it's clear that developers are no longer relying on the disabled feature."
-- **Source**: https://www.chromium.org/blink/launching-features/ (opened; "Feature deprecations", Steps 1–9)
+- **Claim**: Angular's deprecation policy keeps deprecated APIs "available through their deprecated phase, which lasts a minimum one major version (approximately one year)" and removes only in major releases; `ng update` officially supports updating only "within one major version of the version you want to upgrade to" — multi-major jumps must step through each major. Breaking-change safety is gated on running the tests of Google-internal consumer apps, not on usage telemetry.
+- **Source**: https://angular.dev/reference/releases
 - **Confidence**: high
-- **Why it matters here**: Validates gsd-pi's evidence→gate→delete ordering (`legacy:cleanup:evidence` → `legacy:cleanup:gate` → delete) and quantifies the "thin telemetry" risk: measurement itself has a latency cost, so instrumentation of the legacy path must ship well before the deletion milestone; the retained runtime flag as a post-removal safety valve is a concrete model for keeping a re-enable path during the first release(s) after the legacy path is bypassed but before it is deleted.
+- **Why it matters here**: Reinforces ruling (b): even pure-code migrations get stepwise windows ("one major at a time") so no user is stranded mid-ladder. And it is a second data point (with Node) for ruling (a): a large, telemetry-capable org (Google) gates framework removal on *static* evidence (type-surface diffs + downstream test runs) — i.e., "delete on static proof" has respectable precedent when the consumer surface is enumerable.
 
-## Finding: A shipped agent CLI with SQLite state in `~/.codex` shows the failure modes to design against: corrupt DB wedges startup, and the proposed fix is narrow error matching + timestamped quarantine + rebuild-from-projection
+## Finding: Homebrew runs a deprecate → disable → remove ladder gated on explicit telemetry thresholds
 
-- **Claim**: OpenAI's Codex CLI/Desktop issue reports show `state_5.sqlite` corruption (truncated file, stale `-wal`/`-shm` sidecars, "file is not a database" code 26) blocking all startup with no automatic recovery, and a separate "migration 1 was previously applied but has been modified" error leaving the VS Code extension stuck with no official repair path; the community-proposed fix restricts recovery to the specific corruption error, quarantines the file and sidecars with a `.corrupt-<UTC timestamp>` suffix (never deletes), recreates via the existing migrator, and rebuilds metadata from the JSONL files that are the durable record.
-- **Source**: https://github.com/openai/codex/issues/21750 (opened); corroborating: https://github.com/openai/codex/issues/27361 (search result content)
-- **Confidence**: medium-high (issue reports with code references, not a merged design doc)
-- **Why it matters here**: This is gsd-pi's exact shape (shipped CLI, SQLite state under a home directory, files as rebuildable record) hitting the "live-data migration" and "downgrade story" risks in production: migration must be idempotent and distinguish corruption from real migration/lock/permission failures, back up by quarantining rather than deleting, and treat the file projections as the rebuild source of last resort.
+- **Claim**: Homebrew's formula policy: `deprecate!` warns but installs; `disable!` errors; disabled formulae are auto-removed one year after the disable date. Telemetry gates are explicit: formulae with >1000 analytics installs in 90 days "should not be disabled without a deprecation period of at least six months"; formulae under that bar "can be disabled immediately" and removed three months after disable. Zero installs in 90 days is itself grounds for deprecation.
+- **Source**: https://docs.brew.sh/Deprecating-Disabling-and-Removing-Formulae
+- **Confidence**: high
+- **Why it matters here**: The cleanest documented "telemetry-threshold gates removal" policy found. Note what it implies for GSD Pi's ruling (a): Homebrew could only write this policy because the analytics pipeline *already existed*. The thresholds are calibrated against a known-working measurement system — not retrofit onto a missing one. If GSD Pi's removal-gate telemetry was never built, this policy offers no shortcut: its analog would be "below the measurable bar" only when measurement is real.
+
+## Finding: Chromium/Blink builds usage measurement *before* the removal decision, states no usage level is provably safe, and un-deprecates when usage won't go to zero
+
+- **Claim**: The Blink launch process makes "Step 1: Measure usage" (add a UseCounter; it takes 5–9 weeks to reach Stable before decisions can use it) precede the Intent to Deprecate and Remove, which needs 3 API-owner LGTMs. It states "There is no threshold for which removal is necessarily safe," warns that for older widely-implemented APIs "the cost of removing an API is not accurately reflected by the UseCounter" (long-tail legacy content), requires ≥1 milestone of deprecation before removal, offers Deprecation Trials (opt-in re-enable) as ground-truth on remaining need, and says if a deprecation trial can't make progress "it will be necessary to un-deprecate the API." Post-removal: monitor 1–2 months and be ready to re-enable via runtime flag.
+- **Source**: https://www.chromium.org/blink/launching-features/ (Feature deprecations section)
+- **Confidence**: high
+- **Why it matters here**: The strongest primary answer to ruling (a). Where telemetry *is* the gate, the comparable practice is: (1) instrument first, wait for the data pipeline to mature, *then* decide — never decide on the promise of future telemetry; (2) even measured ~0 usage is not treated as sufficient proof for old paths; (3) inability to demonstrate disuse leads to *un-deprecation*, not deletion. If GSD Pi's `markdownFallbackUsed`-style telemetry was never built, the Chromium analog is "you have not yet reached Step 2," not "you may skip to removal."
+
+## Finding: kubectl's generator removal — years of warnings, still produced doc drift and user breakage across version skew
+
+- **Claim**: kubectl's `--generator` flags printed "is DEPRECATED and will be removed in a future version" from ~v1.12; removal landed in v1.18 (≈2 years, ~6 minor releases). Despite the long warned window, issue kubernetes/kubernetes#91064 documents post-removal fallout: official docs still walked users through removed flags, and "the change is on the client-side, users with newer kubectl but older Kubernetes version might also be affected."
+- **Source**: https://github.com/kubernetes/kubernetes/issues/91064 ; deprecation warning evidence in https://github.com/kubernetes/kubectl/issues/778
+- **Confidence**: high (primary issue tracker; warning text quoted in both issues)
+- **Why it matters here**: A documented removal-after-long-warning case where the cleanup still missed doc drift — exactly GSD Pi success criterion 5's risk (docs describing the legacy layout after cutover). Also the version-skew wrinkle: users on old *states* (pre-cutover projects) with new CLIs are the population an import path serves; deleting import machinery strands that skew cohort permanently, which is why K8s keeps storage-decode forever (finding above).
+
+## Finding: distutils removal (PEP 632) went ahead on a 2-release schedule; the ecosystem needed a permanent shim, and Python later lengthened its general policy
+
+- **Claim**: PEP 632 deprecated distutils in Python 3.10–3.11 with removal in 3.12 (≈2 years of warnings), explicitly *rejecting* "deprecate but do not delete." Removal landed on schedule, but setuptools had to vendor a distutils copy as a compatibility shim (transitional, itself now deprecated), and fallout issues persisted into 2024 (e.g., twisted/incremental#89 tracking PEP 632 breakage under `SETUPTOOLS_USE_DISTUTILS=stdlib`). In January 2025 PEP 387 was amended to prefer 5-year deprecation periods.
+- **Source**: https://peps.python.org/pep-0632/ ; https://github.com/twisted/incremental/issues/89 ; https://peps.python.org/pep-0387/ (changelog entry 2025-01-27)
+- **Confidence**: high
+- **Why it matters here**: The closest thing to a documented "we removed a migration path on schedule and it still hurt" arc: the removal was policy-compliant and telegraphed, yet the practical ecosystem answer was to recreate the compatibility path downstream. Feeds ruling (a): "the window elapsed" did not make deletion safe for a *migration* path; the cost just moved to users and downstream shims.
+
+## Finding: VS Code treats deprecated extension APIs as permanent — `workspace.rootPath` deprecated in 2019 is still documented and functional
+
+- **Claim**: VS Code deprecated `workspace.rootPath` in v1.38 (August 2019) in favor of `workspaceFolders`; the current stable API reference (2026) still documents rootPath and specifies its behavior ("the (deprecated) rootPath property is updated to point to the first workspace folder"). No removal has occurred or been scheduled in ~7 years.
+- **Source**: https://code.visualstudio.com/updates/v1_38 ; https://code.visualstudio.com/api/references/vscode-api
+- **Confidence**: high
+- **Why it matters here**: Second major-tool data point (with Node's `domain`) that "deprecated, documented, never removed" is a stable end state for low-cost compatibility shims — legitimate precedent if the decider records a no-delete ruling for the import machinery with a re-check trigger (INTENT success criterion 3's "If not" branch).
+
+## Finding: Terraform requires one-major-at-a-time upgrades and removes last-major upgrade tooling in the next major; state migrations are one-way
+
+- **Claim**: Terraform's 0.13 upgrade guide: "Terraform supports upgrade tools and features only for one major release upgrade at a time" — the `0.12upgrade` command was *removed in 0.13*, so 0.11 users must install 0.12 latest, run its upgrade tool, then move to 0.13. State migrations applied by the new version make snapshots unparseable by the old version ("Terraform v0.12 cannot parse a state snapshot that was created by this command"), and the guide requires running `terraform apply` (completing the state migration) *before* removing any config blocks the state still references.
+- **Source**: https://developer.hashicorp.com/terraform/language/v1.1.x/upgrade-guides/0-13
+- **Confidence**: high
+- **Why it matters here**: Directly informs ruling (b) for a *data-migration* path in a CLI tool: the migration tooling's lifetime is chained, not windowed — each version carries the importer from exactly one prior version, forever, so any historical state can ladder forward. Under this model GSD Pi would keep the pre-cutover importer until the oldest supported project state is past the cutover, which with no telemetry is unknowable — pushing toward "keep, or delete only with a documented floor version for importable state."
+
+## Finding: npm's only deprecation mechanism is a registry warning with no removal semantics; no npm CLI deprecation/removal policy exists
+
+- **Claim**: `npm deprecate <pkg> <message>` only "update[s] the npm registry entry for a package, providing a deprecation warning to all who attempt to install it" — reversible via empty message, no timeline, no removal mechanics. No published policy for deprecating/removing npm CLI commands themselves was found.
+- **Source**: https://docs.npmjs.com/cli/v11/commands/npm-deprecate
+- **Confidence**: high for the command's behavior; medium for the absence of a CLI policy (absence of evidence)
+- **Why it matters here**: Lower bound of the spectrum: the most widely-used dev-tool registry formalizes nothing beyond "warn forever." Useful as contrast, not as a model for ADR-046's gated deletion.
+
+## Finding: Synthesis for ruling (a) — delete on static proof vs build telemetry first: both precedents exist, but no comparable tool *retrofits* telemetry at removal time
+
+- **Claim**: Across the tools examined, removal gates are either (i) static/time-based with no telemetry at all (Node, K8s, Django, Python, Docker, Angular — Angular's evidence is downstream test runs and API-surface diffs), or (ii) telemetry-based where the measurement pipeline predates the gate and is *built first* as an explicit step (Chromium UseCounter, Homebrew analytics). No documented case was found where a tool announced telemetry-gated removal, discovered the telemetry never existed, and then either built it just-in-time or treated the absence as proof of disuse.
+- **Source**: synthesis of the sources above (Chromium Step 1; Homebrew analytics thresholds; Node/Angular static gates)
+- **Confidence**: medium-high (synthesis; negative claim bounded by the tools surveyed)
+- **Why it matters here**: The deferred NEEDS-USER ruling is precisely this situation. The comparable-tools evidence frames the choice as: follow the Node/Angular/Python model (drop the telemetry condition, rely on static proof + long warned window, optionally keep the cheap shim) or the Chromium model (instrument now, decide in N releases when data exists). What has no precedent is treating missing telemetry as satisfying a telemetry gate.
+
+## Finding: Synthesis for ruling (c) — minimum windows are hard gates; scheduled removal dates are advisory
+
+- **Claim**: Every policy examined that states a minimum treats it as a hard floor ("must function for no less than", "at least", "minimum one major version"), while scheduled removal dates/releases are explicitly tentative and routinely slip: Docker's "Remove" column is "a tentative release" with many entries landing releases later; Chromium targets "remember to keep this updated, if things change"; Node/Python/Django remove "in a future major" without a date.
+- **Source**: https://docs.docker.com/engine/deprecated/ ; https://www.chromium.org/blink/launching-features/ ; https://kubernetes.io/docs/reference/using-api/deprecation-policy/
+- **Confidence**: high
+- **Why it matters here**: ADR-046's "2 releases + ≥60 days" reads as a hard floor in industry terms — satisfying it authorizes removal but does not *obligate* it, and slipping the actual deletion is normal practice, not process failure. This supports keeping the deletion decision evidence-driven even after the window math checks out.
 
 ## Assigned questions — answers
 
-- None assigned directly. Each finding above names the INTENT.md risk it addresses: thin telemetry (k8s metric, Chromium UseCounter), downgrade story (k8s Rule #4b, npm lockfileVersion, Room downgrade fallback), gate retirement (k8s feature gates), concurrent writers (jj op-log), hidden readers (Git plumbing/porcelain, Chromium dev-trial step), live-data migration (Room, Codex), projection fidelity (jj working copy).
+- none assigned → nothing to answer; the four briefed research threads (policy windows/warnings, telemetry-gated removal, staged ladders, lessons for the three deferred rulings) are covered by the findings above.
 
 ## Dead ends
 
-<!-- What was checked and didn't pan out, so nobody re-treads it. -->
-- VS Code state-storage migration to SQLite — search returned unrelated noise (openai/codex issues, Ghost CLI forum posts about `@vscode/sqlite3`); no primary microsoft/vscode design doc or issue was opened within budget. The Codex findings partially cover the same ground (editor-adjacent SQLite state).
-- Mozilla support page `https://support.mozilla.org/en-US/kb/dedicated-profiles-firefox-installation` — fetch returned a JS-blocked shell; Firefox's downgrade-protection design (`compatibility.ini`, `--allow-downgrade`) is real and visible in secondary sources and Bugzilla (bug 1610712 thread surfaced in search), but no clean primary doc was opened, so it was not promoted to a finding. It would support the same "block downgrade loudly rather than corrupt silently" lesson already covered by npm/Room.
-- 1Password 8 / Obsidian Sync storage internals — no public primary engineering sources (design docs, ADRs, or source) on their SQLite cutover/downgrade handling; blog-level material only, below the evidence bar.
-- JetBrains IDE state/index storage migrations — no primary design documents surfaced quickly; platform sources are closed. Not pursued further.
+- esbuild — searched for an official deprecation/removal policy; none found (esbuild documents breaking changes only per-release in its changelog; no policy page exists). Not citable for this dimension.
+- npm CLI — no published policy for deprecating/removing npm's own CLI commands; only the registry `npm deprecate` command docs exist (recorded as a finding instead).
+- Formal post-mortems of "removed a migration path too early" — searched; the genre is mostly vendor blogs. Primary issue-tracker evidence (kubernetes/kubernetes#91064, twisted/incremental#89, PEP 387's 2025 amendment) proved more load-bearing and was used instead.
+- VS Code extension API removal schedule — does not exist as a policy; evidence of permanent deprecation (rootPath) used instead.
