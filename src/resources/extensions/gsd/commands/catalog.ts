@@ -122,6 +122,12 @@ const NESTED_COMPLETIONS: CompletionMap = {
     { cmd: "--dry-run", desc: "Preview next step without executing" },
     { cmd: "--debug", desc: "Enable debug logging" },
   ],
+  quick: [
+    { cmd: "--discuss", desc: "Surface design choices before planning" },
+    { cmd: "--research", desc: "Investigate approaches before planning" },
+    { cmd: "--validate", desc: "Check the plan and verify the result" },
+    { cmd: "--full", desc: "Enable discussion, research, and validation" },
+  ],
   widget: [
     { cmd: "full", desc: "Full widget display" },
     { cmd: "small", desc: "Compact widget display" },
