@@ -8,7 +8,10 @@ import {
   type ExecSandboxRequest,
   type ExecSandboxResult,
 } from "../exec-sandbox.js";
-import { isContextModeEnabled, type ContextModeConfig } from "../preferences-types.js";
+import {
+  isContextModeEnabled,
+  type GSDPreferences,
+} from "../preferences-types.js";
 import { bashReferencesProjectRootOutsideWorktree } from "../worktree-shell-guard.js";
 import { contextModeDisabledResult, type ToolExecutionResult } from "./context-mode-tool-result.js";
 
@@ -34,10 +37,9 @@ export interface ExecToolDeps {
   signal?: AbortSignal;
 }
 
-interface ExecToolPreferences {
-  context_mode?: ContextModeConfig;
-  verification_timeout_ms?: number;
-}
+type ExecToolPreferences = Pick<GSDPreferences, "context_mode" | "verification_timeout_ms">;
+
+const UNRELATED_EXEC_DEFAULT_TIMEOUT_MS = 30_000;
 
 export type UatExecIntent =
   | "uat-artifact-check"
@@ -81,6 +83,7 @@ export function buildExecOptions(
   baseDir: string,
   preferences: ExecToolPreferences | null | undefined,
   extras?: Pick<ExecSandboxOptions, "env" | "now" | "generateId" | "signal">,
+  inheritVerificationTimeout = true,
 ): ExecSandboxOptions {
   const cfg = preferences?.context_mode;
   const allowlist = Array.isArray(cfg?.exec_env_allowlist) ? cfg!.exec_env_allowlist! : EXEC_DEFAULTS.envAllowlist;
@@ -98,7 +101,7 @@ export function buildExecOptions(
   );
   const defaultTimeout = clampNumber(
     cfg?.exec_timeout_ms,
-    verificationTimeout,
+    inheritVerificationTimeout ? verificationTimeout : UNRELATED_EXEC_DEFAULT_TIMEOUT_MS,
     1_000,
     EXEC_DEFAULTS.clampTimeoutMs,
   );
@@ -163,6 +166,25 @@ function normalizeScript(params: ExecToolParams): string | ToolExecutionResult {
   return paramError("script is required and must be a non-empty string");
 }
 
+function isVerificationWorkload(params: ExecToolParams, script: string): boolean {
+  if (typeof params.purpose === "string" && /\b(?:build|test|verify|verification|lint|typecheck)\b/i.test(params.purpose)) {
+    return true;
+  }
+
+  return script.split(/&&|\|\||[;|\n]/).some((statement) => {
+    const invocation = statement.trim().match(/^(?:["']([^"']+)["']|(\S+))(?:\s+([\s\S]*))?$/);
+    if (!invocation) return false;
+    const executable = (invocation[1] ?? invocation[2] ?? "").split(/[\\/]/).pop()?.toLowerCase() ?? "";
+    const args = invocation[3] ?? "";
+
+    if (/^(?:npm|pnpm|yarn|bun)(?:\.(?:cmd|bat|exe))?$/.test(executable)) {
+      return /\b(?:build|test|lint|typecheck|check|verify|verification)\b/i.test(args);
+    }
+    if (executable === "node" || executable === "node.exe") return /(?:^|\s)--test(?:\s|$)/.test(args);
+    return /^(?:next|eslint|tsc|vitest|jest|pytest)(?:\.(?:cmd|bat|exe))?$/.test(executable);
+  });
+}
+
 function normalizeRequiredString(value: unknown, field: string): string | ToolExecutionResult {
   if (typeof value !== "string" || value.trim().length === 0) {
     return paramError(`${field} is required and must be a non-empty string`);
@@ -223,6 +245,7 @@ export async function executeGsdExec(
     deps.baseDir,
     deps.preferences,
     { env: deps.env, now: deps.now, generateId: deps.generateId, signal: deps.signal },
+    isVerificationWorkload(params, script),
   );
   const run = deps.run ?? runExecSandbox;
 
