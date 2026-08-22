@@ -3,7 +3,7 @@ id: T003
 title: Repair dangling semantic-shadow-no-cutover references in dossier tooling
 wave: 1
 deps: []            # task ids whose output or landed effect this task needs
-status: blocked     # orchestrator-owned: pending | in-progress | done | failed | blocked
+status: in-progress # orchestrator-owned: pending | in-progress | done | failed | blocked
 agent: build_T003   # orchestrator-owned: set at dispatch
 commit: null        # orchestrator-owned: exact task commit SHA
 base: 20dbb856c7a1cdcee3cc5864eae7090fc88d26dc # orchestrator-owned: clean layer SHA for isolated Verify
