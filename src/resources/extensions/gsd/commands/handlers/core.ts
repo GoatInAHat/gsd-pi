@@ -117,6 +117,7 @@ export function showHelp(ctx: ExtensionCommandContext, args = ""): void {
     "  /gsd rethink        Conversational project reorganization — reorder, park, discard, add milestones",
     "  /gsd park [id]      Park a milestone — skip without deleting  [reason]",
     "  /gsd unpark [id]    Reactivate a parked milestone",
+    "  /gsd discard <id>   Permanently discard one milestone (with confirmation)",
     "",
     "PROJECT KNOWLEDGE",
     "  /gsd knowledge <type> <text>   Add a rule to KNOWLEDGE.md or capture a pattern/lesson to memories",
