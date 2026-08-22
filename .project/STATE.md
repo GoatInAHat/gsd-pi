@@ -2,7 +2,7 @@
 pipeline: gsd-path/v2
 project: path-fixes
 milestone: adr-046-completion # set by define; names the archive directory at ship
-phase: build        # v2 tokens: inspect | define | research | decide | roadmap | plan | build | ship | shipped
+phase: ship         # v2 tokens: inspect | define | research | decide | roadmap | plan | build | ship | shipped
                     # inspect only for brownfield; greenfield starts at define
                     # roadmap only in program flow (CHARTER.md exists)
 status: active      # active | done | blocked; shipped is only phase: shipped + status: done
@@ -33,3 +33,5 @@ it on completion. If this file and the artifacts disagree, the artifacts win
 - 2026-08-22 — plan — alignment queue: user ruled skip+close on both carried-forward rows (ADR labels, ci-cd doc — verified fixed by 2026-08-22 re-audit); DOCS-AUDIT rows marked n/a
 - 2026-08-22 — plan — done: PLAN.md + 4 tasks gated PASS (rows↔files 1:1, acyclic, disjoint same-wave scopes, T001↔T004 interface contract, veto exclusion, validate-plan exit 0); user approved ("Approve and start build") — build authorized for both waves
 - 2026-08-22 — build — build started; branch bound: gsd-path/M001 created at origin/main SHA e210e12a4 (jeremys/path-fixes carried only the approved plan checkpoint 36940edd8, whose .project tree was carried onto the bound branch by this transition commit)
+- 2026-08-22 — build — wave 1 done (3/3, full review pass cycle 1): T001 gap audit a89c363d6, T002 doc drift 4235bfeda, T003 dossier repair 4d9e1ea4f (one environmental block + one granted redispatch; two brief-lint repairs + one Verify-whitelist repair, all logged). Wave 2 done (1/1, verify-only pass): T004 merged-state verification 3ac062a13 (one flaky unnamed unit-test failure in 4 full-suite runs, recorded as warning).
+- 2026-08-22 — build — done; final review pending. Project verify in clean sidecar at 56ad63c93: builds + typecheck green, unit suite exactly at the recorded honest baseline (14461 pass / 2 named vetoed failures / 28 skipped; 0 beyond baseline), shadow gate PASS. Note: PLAN's Project verify needs the ci.yml:226-228 addon-copy interposed after test:compile in a fresh checkout — recorded for the ship review. Transition: build → ship/active.
