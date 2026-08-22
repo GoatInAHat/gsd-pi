@@ -423,6 +423,7 @@ The following commands are sent directly in your **Telegram chat** to a configur
 | `gsd remove <source>` | Remove a previously installed extension |
 | `gsd list` | List installed extensions |
 | `gsd graph <subcommand>` | Build, query, status, or diff the project knowledge graph built from `.gsd/` artifacts |
+| `gsd quick <task>` | Execute a quick task without a TUI (alias for `gsd headless quick <task>`) |
 | `gsd headless --json` | Structured JSONL event stream to stdout for scripting, CI, and troubleshooting (alias: `--output-format stream-json`) |
 | `gsd headless new-milestone` | Create a new milestone from a context file (headless — no TUI required) |
 
@@ -436,6 +437,9 @@ gsd headless
 
 # Run a single unit
 gsd headless next
+
+# Execute a quick task and return task, branch, artifact, commit, and exit details
+gsd quick --output-format json "fix the login button on mobile"
 
 # Instant JSON snapshot — no LLM, ~50ms
 gsd headless query

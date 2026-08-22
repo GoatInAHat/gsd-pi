@@ -161,6 +161,7 @@ In terminals without Kitty keyboard protocol support (macOS Terminal.app, JetBra
 | `gsd sessions` | Interactive session picker |
 | `gsd config` | Set up global API keys |
 | `gsd update` | Update GSD to the latest version |
+| `gsd quick <task>` | Execute a quick task without a TUI |
 
 ## Headless mode
 
@@ -169,6 +170,7 @@ In terminals without Kitty keyboard protocol support (macOS Terminal.app, JetBra
 ```bash
 gsd headless              # run auto mode
 gsd headless next         # run a single unit
+gsd quick --output-format json "fix typo"  # structured quick-task result
 gsd headless query        # instant JSON snapshot (~50ms, no LLM)
 gsd headless recover      # print the sealed recovery Preview for approval
 gsd headless --timeout 600000 auto   # with timeout

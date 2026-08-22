@@ -179,6 +179,13 @@ Then use slash commands inside the GSD session:
 /gsd status
 ```
 
+For automation, quick tasks also have a non-interactive entry point with a
+structured result and meaningful exit code:
+
+```bash
+gsd quick --output-format json "Describe the task"
+```
+
 ## What GSD Pi Does
 
 - Plans work into milestones, slices, and tasks.
