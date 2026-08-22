@@ -1,0 +1,22 @@
+# Gap Review — 1: Project verify honest-green at reviewed HEAD
+
+<!-- Written by one final gap reviewer. This file covers exactly one
+     cross-wave integration risk named in the review brief. -->
+
+Reviewed HEAD: 0010a26abaedec5442558256d97dbfcbba0a9794
+Gap verdict: pass
+Risk: PLAN.md's Project verify — `pnpm run build:native:test && pnpm run verify:pr` — passes at the reviewed HEAD under the plan's recorded honest-green definition: the compiled unit suite may exit nonzero on exactly the two pre-existing, INTENT-vetoed failures (`prompt golden fixtures meet Phase 2 reduction gate`; `runReadCli handles global flags before read`); anything beyond them is a failure of this gap. Waves checked: 1-2.
+Waves checked: 1-2
+
+## Checked evidence
+
+- **Check**: Full Project verify recipe run once, sequentially, on a quiet machine in the clean verify sidecar at the reviewed HEAD (`git rev-parse HEAD` confirmed `0010a26abaedec5442558256d97dbfcbba0a9794` before install), as one ordered command chain: `pnpm install --frozen-lockfile` → `pnpm run build:native:test` → `pnpm run build:core` → `pnpm run typecheck:extensions` → `pnpm run test:compile` → addon copy per ci.yml:226-228 (`mkdir -p dist-test/native/addon && cp native/addon/*.node dist-test/native/addon/`) → `pnpm run test:unit:compiled` → `pnpm run gate:lifecycle-shadow-no-cutover`
+- **Observed**: All build/typecheck/compile legs exit 0 (`install` 4m 5.9s; `build:native:test` produced `native/addon/gsd_engine.dev.node`, 105,951,632 bytes, in 50.84s; `build:core` all sub-builds clean; `typecheck:extensions` zero diagnostics; `test:compile` 3049 files, 1118 import rewrites, 10.07s). The compiled unit suite exited 1 with **14461 passed / 2 failed / 28 skipped**, the 2 failures being exactly the two tolerated named failures and nothing else: `✖ prompt golden fixtures meet Phase 2 reduction gate` ("execute-task should be at least 40% smaller than Phase 2 start baseline (8610/14320)", `dist-test/src/tests/prompt-golden-fixtures.test.js:44:12`) and `✖ runReadCli handles global flags before read` (schema-version message, `1 !== 0`). `grep -E "^  ✖"` over the full log returns exactly those two test names (`grep -c "✖"` = 4: 2 names + section header + summary line); no extra failure appeared, so no flake observation was needed. `gate:lifecycle-shadow-no-cutover` exit 0, 15/15 checks PASS (dispatch-resolver-no-canonical-read, state-derivation-authority ×2, validation-assessment-authority, closed-local-inputs, runtime-disagreement, same-status-repair, park-unpark, discard, skipped-dispatch, db-unavailable-dispatch, db-unavailable-resolver, db-unavailable-resolver-no-active, resolve-dispatch-authority, db-unavailable-status).
+- **Reference**: `.project/plan/PLAN.md:5-14` (Project verify command and honest-baseline note); `ci.yml:226-228` (addon-copy parity step, interposed between `test:compile` and `test:unit:compiled` — `dist-test/native/addon/gsd_engine.dev.node` confirmed present before the suite ran, and none of the 23 environmental fault-injection failures appeared); full unit-suite log captured at `/tmp/review-gap-1-unit.log`.
+
+Per-leg detail: install printed one non-fatal postinstall warning (`[gsd] WARNING: failed to materialize runtime dependencies`, a network-restricted npm call inside `scripts/install.js`); install still exited 0 and no subsequent leg was affected. `build:native:test` ran `node native/scripts/build.js --dev --test-fault-injection` and reported "Build complete." `build:core` covered contracts, pi, rpc-client, mcp-server, daemon, root `tsc`, copy-resources, copy-themes, and copy-export-html without error. `typecheck:extensions` ran `tsc --noEmit --project tsconfig.extensions.json`. `test:compile` ran `node scripts/compile-tests.mjs` with `{"cacheHit":false,"fileCount":8029,...,"wallMs":10068}`. The gate ran `node scripts/lifecycle-shadow-no-cutover-gate.mjs`.
+
+## Finding
+
+- **Found**: The full Project verify recipe (`build:native:test` + every `verify:pr` leg, with the ci.yml:226-228 addon copy interposed between `test:compile` and `test:unit:compiled`) was run sequentially at reviewed HEAD `0010a26abaedec5442558256d97dbfcbba0a9794` in the clean verify sidecar. Every leg behaved per the plan's honest-green definition: builds, typecheck, compile, and the lifecycle gate all exited 0; the compiled unit suite exited 1 on exactly the two recorded pre-existing, INTENT-vetoed failures and no others (14461 passed / 2 failed / 28 skipped). The risk is not present at this HEAD.
+- **Fix direction**: none when pass.

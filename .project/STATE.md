@@ -2,14 +2,14 @@
 pipeline: gsd-path/v2
 project: path-fixes
 milestone: adr-046-completion # set by define; names the archive directory at ship
-phase: ship         # v2 tokens: inspect | define | research | decide | roadmap | plan | build | ship | shipped
+phase: shipped      # v2 tokens: inspect | define | research | decide | roadmap | plan | build | ship | shipped
                     # inspect only for brownfield; greenfield starts at define
                     # roadmap only in program flow (CHARTER.md exists)
-status: active      # active | done | blocked; shipped is only phase: shipped + status: done
+status: done        # active | done | blocked; shipped is only phase: shipped + status: done
 branch: gsd-path/M001 # bound per milestone as gsd-path/M00N; after integration
                     # the router rebinds before any next-milestone file change
                     # the bound branch is never main; ship merges it there
-archive: null       # persisted archive transaction path; never recomputed
+archive: .project/archive/001-adr-046-completion
 ---
 
 # Project State
@@ -35,3 +35,5 @@ it on completion. If this file and the artifacts disagree, the artifacts win
 - 2026-08-22 — build — build started; branch bound: gsd-path/M001 created at origin/main SHA e210e12a4 (jeremys/path-fixes carried only the approved plan checkpoint 36940edd8, whose .project tree was carried onto the bound branch by this transition commit)
 - 2026-08-22 — build — wave 1 done (3/3, full review pass cycle 1): T001 gap audit a89c363d6, T002 doc drift 4235bfeda, T003 dossier repair 4d9e1ea4f (one environmental block + one granted redispatch; two brief-lint repairs + one Verify-whitelist repair, all logged). Wave 2 done (1/1, verify-only pass): T004 merged-state verification 3ac062a13 (one flaky unnamed unit-test failure in 4 full-suite runs, recorded as warning).
 - 2026-08-22 — build — done; final review pending. Project verify in clean sidecar at 56ad63c93: builds + typecheck green, unit suite exactly at the recorded honest baseline (14461 pass / 2 named vetoed failures / 28 skipped; 0 beyond baseline), shadow gate PASS. Note: PLAN's Project verify needs the ci.yml:226-228 addon-copy interposed after test:compile in a fresh checkout — recorded for the ship review. Transition: build → ship/active.
+- 2026-08-22 — ship — final gate passed; shipping approval pending. FINAL.md: 5/5 criteria met at reviewed HEAD 0010a26abaedec5442558256d97dbfcbba0a9794 (SC5 under the synthesis doc-drift boundary scoping, warning recorded). final-gap-1.md: pass (project Verify honest-green; unit failure set exactly the two vetoed named ones, 14461/2/28). Orchestrator project Verify in a fresh sidecar at the same HEAD: PASS. No patch findings.
+- 2026-08-22 — ship — archived to .project/archive/001-adr-046-completion; preflight PASS; LESSONS.md written (5 lessons); MANIFEST.md criteria byte-matched to FINAL.md
