@@ -3,9 +3,9 @@ id: T002
 title: Fix cutover-contradicting doc drift (CONTEXT.md, GSD_ALLOW_MARKDOWN_DERIVE_FALLBACK, legacy-layout skill rows)
 wave: 1
 deps: []            # task ids whose output or landed effect this task needs
-status: in-progress # orchestrator-owned: pending | in-progress | done | failed | blocked
+status: done        # orchestrator-owned: pending | in-progress | done | failed | blocked
 agent: build_T002   # orchestrator-owned: set at dispatch
-commit: null        # orchestrator-owned: exact task commit SHA
+commit: 4235bfedaf9bf413aec74541415f1645e5caf8c7 # orchestrator-owned: exact task commit SHA
 base: 20dbb856c7a1cdcee3cc5864eae7090fc88d26dc # orchestrator-owned: clean layer SHA for isolated Verify
 worktree: /Users/jeremymcspadden/orca/workspaces/gsd-pi/path-fixes.gsd-path/task/T002 # orchestrator-owned: isolated task worktree while active
 task_branch: gsd-path-task/T002 # orchestrator-owned: gsd-path-task/<id> while parallel; null when serial
@@ -111,3 +111,5 @@ under the keep ruling and must not be "corrected" away.
 - 2026-08-22 — created by planner
 - 2026-08-22 — plan-defect repair (orchestrator): removed backticks around two .gsd/milestones/ prose mentions in Approach — the brief linter extracted them as path tokens missing at the layer base; the string names a legacy layout, not a repo path. No contract change.
 - 2026-08-22 — coder: fixed rows 37/38/40 — decompose-into-slices, handoff, and write-milestone-brief now give the flat-phase paths (`.gsd/phases/NN-slug/NN-ROADMAP.md`, `NN-CONTEXT.md`, `NN-MM-CONTINUE.md` per paths.ts targetMilestoneFile/targetSliceFile + layout-policy planFileName) with `.gsd/milestones/...` retained only as explicitly-marked legacy pre-flat-phase layout; coupled bare-name mentions on the same steps updated (`M###-ROADMAP.md`/`M###-CONTEXT.md` → `NN-*`). CONTEXT.md glossary intro now splits the truth: workflow state authority HAS cut over (state.ts derives from DB only, markdown never a live-path fallback); canonical lifecycle read authority for deferred surfaces remains legacy per D005. Removed the unimplemented `GSD_ALLOW_MARKDOWN_DERIVE_FALLBACK` row from environment-variables.md and rewrote the auto-mode passage to state the DB is authoritative with no markdown-derive fallback switch. Row 39 (gsd_milestone_new) and all mirror/migration docs untouched. Verify: PASS (full task Verify command exits 0; diff touches only the six listed files).
+- 2026-08-22 — plan-defect repair (orchestrator): Verify's final git-diff clause whitelisted only the six product files, so the role-mandated append-only Log edit to this task file made the orchestrator's authoritative rerun fail. Added the task file to the whitelist; product-path strictness unchanged. (Committed pre-landing in 51adfd2e8; this Log line deferred to post-landing to keep the cherry-pick conflict-free.)
+- 2026-08-22 — orchestrator: isolated Verify rerun PASS (repaired command). First landing attempt conflicted on the task-file Log tail (orchestrator repair append raced the coder append); resolved by deferring the orchestrator Log line; product diff unaffected. Landed as 4235bfedaf9bf413aec74541415f1645e5caf8c7.
