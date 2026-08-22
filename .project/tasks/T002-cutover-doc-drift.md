@@ -110,4 +110,3 @@ under the keep ruling and must not be "corrected" away.
      review verdicts, fixes. -->
 - 2026-08-22 — created by planner
 - 2026-08-22 — plan-defect repair (orchestrator): removed backticks around two .gsd/milestones/ prose mentions in Approach — the brief linter extracted them as path tokens missing at the layer base; the string names a legacy layout, not a repo path. No contract change.
-- 2026-08-22 — plan-defect repair (orchestrator): Verify's final git-diff clause whitelisted only the six product files, so the role-mandated append-only Log edit to this task file made the orchestrator's authoritative rerun fail. Added the task file to the whitelist; product-path strictness unchanged.
