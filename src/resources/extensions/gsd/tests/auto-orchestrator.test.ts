@@ -43,10 +43,10 @@ import {
 } from "../gsd-db.js";
 import { AutoSession } from "../auto/session.js";
 import { markWorkerCrashed, registerAutoWorker } from "../db/auto-workers.js";
-import { claimMilestoneLease, getMilestoneLease, releaseMilestoneLease } from "../db/milestone-leases.js";
-import { recordDispatchClaim, markFailed } from "../db/unit-dispatches.js";
+import { claimMilestoneLease, forceReleaseLeasesForWorker, getMilestoneLease, releaseMilestoneLease } from "../db/milestone-leases.js";
+import { recordDispatchClaim } from "../db/unit-dispatches.js";
 import { claimTaskAttempt, settleTaskAttempt } from "../task-execution-domain-operation.js";
-import { recordFailureAndSelectRecovery } from "../task-recovery-domain-operation.js";
+import { recordFailureAndSelectRecovery, resumeTaskRecovery } from "../task-recovery-domain-operation.js";
 import { internalExecutionInvocation } from "../execution-invocation.js";
 import { normalizeRealPath, resolveMilestoneFile } from "../paths.js";
 import { acquireSessionLock, releaseSessionLock } from "../session-lock.js";
@@ -747,10 +747,7 @@ test("idempotency skip fires with its own reason before saturation", async (t) =
   assert.equal(second.code, "unit-already-active");
 });
 
-test("an active UnitRun with a settled executor Attempt stops with durable recovery guidance", async (t) => {
-  const f = makeFixture();
-  t.after(() => f.cleanup());
-
+async function terminateUnitRunWithSettledAbort(f: Fixture, key: string) {
   const first = await f.orchestrator.advance();
   assert.equal(first.kind, "advanced");
   if (first.kind !== "advanced") throw new Error("expected first advance");
@@ -760,14 +757,14 @@ test("an active UnitRun with a settled executor Attempt stops with durable recov
   assert.ok(milestoneLeaseToken);
 
   const attempt = claimTaskAttempt({
-    invocation: internalExecutionInvocation("test:orchestrator:orphan:claim"),
+    invocation: internalExecutionInvocation(`test:orchestrator:${key}:claim`),
     task: { milestoneId: "M001", sliceId: "S01", taskId: "T01" },
     workerId,
     milestoneLeaseToken,
     coordinationDispatchId: first.dispatchId,
   });
   const settled = settleTaskAttempt({
-    invocation: internalExecutionInvocation("test:orchestrator:orphan:settle"),
+    invocation: internalExecutionInvocation(`test:orchestrator:${key}:settle`),
     attemptId: attempt.attemptId,
     outcome: "failed",
     failureClass: "execution",
@@ -775,7 +772,7 @@ test("an active UnitRun with a settled executor Attempt stops with durable recov
     output: {},
   });
   const recovery = recordFailureAndSelectRecovery({
-    invocation: internalExecutionInvocation("test:orchestrator:orphan:route"),
+    invocation: internalExecutionInvocation(`test:orchestrator:${key}:route`),
     attemptId: attempt.attemptId,
     resultId: settled.resultId,
     owner: "agent",
@@ -785,21 +782,42 @@ test("an active UnitRun with a settled executor Attempt stops with durable recov
     rationale: "preserve a durable resume action",
   });
   assert.equal(recovery.action, "abort");
+  // settleTaskAttempt already terminalized the UnitRun's dispatch row.
 
+  // Crash recovery pairs the crashed marker with a lease release
+  // (crash-recovery.ts); a settled abort must then reach dispatch.
   markWorkerCrashed(workerId);
+  forceReleaseLeasesForWorker(workerId);
   f.session.workerId = registerAutoWorker({ projectRootRealpath: normalizeRealPath(f.base) });
   f.session.milestoneLeaseToken = null;
   f.session.unitExecutionInFlight = false;
+  return recovery;
+}
+
+test("a settled abort on a terminated UnitRun reaches task recovery cutover", async (t) => {
+  const f = makeFixture();
+  t.after(() => f.cleanup());
+
+  await terminateUnitRunWithSettledAbort(f, "settled-abort");
   const result = await f.orchestrator.advance();
 
-  assert.equal(result.kind, "blocked");
-  if (result.kind !== "blocked") throw new Error("expected orphaned active unit to block");
-  assert.equal(result.action, "stop");
-  assert.match(result.reason, /stale-active execute-task M001\/S01\/T01/);
-  assert.match(result.reason, /executor worker .* is not live/);
-  assert.match(result.reason, new RegExp(recovery.recoveryActionId));
-  assert.match(result.reason, /gsd_task_recovery_resume/);
-  assert.ok(f.journalNames().includes("advance-blocked"));
+  assert.equal(result.kind, "advanced");
+});
+
+test("an authorized settled abort reaches the successor retry claim", async (t) => {
+  const f = makeFixture();
+  t.after(() => f.cleanup());
+
+  const recovery = await terminateUnitRunWithSettledAbort(f, "authorized-abort");
+  resumeTaskRecovery({
+    invocation: internalExecutionInvocation("test:orchestrator:authorized-abort:resume"),
+    recoveryActionId: recovery.recoveryActionId,
+    repairSummary: "Repaired the executor lifecycle and verified a retry is safe.",
+    evidence: { verification: "focused recovery check passed" },
+  });
+  const result = await f.orchestrator.advance();
+
+  assert.equal(result.kind, "advanced");
 });
 
 test("an active UnitRun checks its running Attempt worker before idling", async (t) => {
