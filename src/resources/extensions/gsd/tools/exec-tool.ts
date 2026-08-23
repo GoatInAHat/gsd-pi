@@ -10,7 +10,6 @@ import {
 } from "../exec-sandbox.js";
 import {
   isContextModeEnabled,
-  type ContextModeConfig,
   type GSDPreferences,
 } from "../preferences-types.js";
 import { bashReferencesProjectRootOutsideWorktree } from "../worktree-shell-guard.js";
@@ -29,7 +28,7 @@ export interface ExecToolParams {
 
 export interface ExecToolDeps {
   baseDir: string;
-  preferences: Pick<GSDPreferences, "context_mode" | "verification_timeout_ms"> | null;
+  preferences: ExecToolPreferences | null;
   /** Optional override for testing. */
   run?: (req: ExecSandboxRequest, opts: ExecSandboxOptions) => Promise<ExecSandboxResult>;
   env?: NodeJS.ProcessEnv;
@@ -37,6 +36,10 @@ export interface ExecToolDeps {
   generateId?: () => string;
   signal?: AbortSignal;
 }
+
+type ExecToolPreferences = Pick<GSDPreferences, "context_mode" | "verification_timeout_ms">;
+
+const UNRELATED_EXEC_DEFAULT_TIMEOUT_MS = 30_000;
 
 export type UatExecIntent =
   | "uat-artifact-check"
@@ -78,10 +81,11 @@ const UAT_EXEC_INTENT_ALIASES: Record<string, UatExecIntent> = {
 
 export function buildExecOptions(
   baseDir: string,
-  cfg: ContextModeConfig | undefined,
+  preferences: ExecToolPreferences | null | undefined,
   extras?: Pick<ExecSandboxOptions, "env" | "now" | "generateId" | "signal">,
-  verificationTimeoutMs?: number,
+  inheritVerificationTimeout = true,
 ): ExecSandboxOptions {
+  const cfg = preferences?.context_mode;
   const allowlist = Array.isArray(cfg?.exec_env_allowlist) ? cfg!.exec_env_allowlist! : EXEC_DEFAULTS.envAllowlist;
   const stdoutCap = clampNumber(
     cfg?.exec_stdout_cap_bytes,
@@ -89,9 +93,15 @@ export function buildExecOptions(
     4_096,
     16_777_216,
   );
-  const defaultTimeout = clampNumber(
-    cfg?.exec_timeout_ms ?? verificationTimeoutMs,
+  const verificationTimeout = clampNumber(
+    preferences?.verification_timeout_ms,
     EXEC_DEFAULTS.defaultTimeoutMs,
+    1_000,
+    EXEC_DEFAULTS.clampTimeoutMs,
+  );
+  const defaultTimeout = clampNumber(
+    cfg?.exec_timeout_ms,
+    inheritVerificationTimeout ? verificationTimeout : UNRELATED_EXEC_DEFAULT_TIMEOUT_MS,
     1_000,
     EXEC_DEFAULTS.clampTimeoutMs,
   );
@@ -233,9 +243,9 @@ export async function executeGsdExec(
 
   const opts = buildExecOptions(
     deps.baseDir,
-    deps.preferences?.context_mode,
+    deps.preferences,
     { env: deps.env, now: deps.now, generateId: deps.generateId, signal: deps.signal },
-    isVerificationWorkload(params, script) ? deps.preferences?.verification_timeout_ms : undefined,
+    isVerificationWorkload(params, script),
   );
   const run = deps.run ?? runExecSandbox;
 

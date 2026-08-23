@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { getShellConfig, killProcessTree, SIGKILL_GRACE_MS, HARD_DEADLINE_MS } from "@gsd/pi-coding-agent";
+import { DEFAULT_COMMAND_TIMEOUT_MS } from "./constants.js";
 import { redactSecrets } from "./redact-secrets.js";
 
 export interface ExecSandboxRequest {
@@ -97,7 +98,7 @@ const ALWAYS_FORWARD_ENV = ["PATH", "HOME"] as const;
 
 export const EXEC_DEFAULTS = {
   clampTimeoutMs: 600_000,
-  defaultTimeoutMs: 30_000,
+  defaultTimeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
   stdoutCapBytes: 1_048_576,
   stderrCapBytes: 262_144,
   digestChars: 300,
