@@ -900,9 +900,23 @@ export async function handleAgentEnd(
       }
     }
 
+    // Auto-mode owns bounded credential cooldowns at the loop boundary. Keep
+    // the Task Attempt on its transient retry route instead of pausing the
+    // session here, which can later be mistaken for a crashed executor.
+    if (cls.kind === "rate-limit") {
+      resolveAgentEndCancelled({
+        message: `Provider error${errorDetail}`,
+        category: "provider",
+        isTransient: true,
+        retryAfterMs: cls.retryAfterMs,
+      });
+      return;
+    }
+
     // --- Transient fallback: pause with auto-resume ---
+    // (rate-limit already returned above, so this is never a rate-limit pause)
     if (isTransient(cls)) {
-      await pauseTransientWithBackoff(cls, pi, ctx, errorDetail, cls.kind === "rate-limit");
+      await pauseTransientWithBackoff(cls, pi, ctx, errorDetail, false);
       return;
     }
 

@@ -172,7 +172,7 @@ export async function runUnitPhase(
   iterData: IterationData,
   loopState: LoopState,
   sidecarItem?: SidecarItem,
-): Promise<PhaseResult<{ unitStartedAt?: number; requestDispatchedAt?: number }>> {
+): Promise<PhaseResult<{ unitStartedAt?: number; requestDispatchedAt?: number; retryAfterMs?: number }>> {
   const { ctx, pi, s, deps, prefs } = ic;
   const { unitType, unitId, prompt, state, mid } = iterData;
 
@@ -656,6 +656,25 @@ export async function runUnitPhase(
     }
 
     const errorCategory = unitResult.errorContext?.category;
+    if (
+      errorCategory === "provider" &&
+      unitResult.errorContext?.isTransient === true &&
+      typeof unitResult.errorContext.retryAfterMs === "number" &&
+      unitResult.errorContext.retryAfterMs > 0
+    ) {
+      await emitCancelledUnitEnd(ic, unitType, unitId, unitStartSeq, unitResult.errorContext);
+      debugLog("autoLoop", {
+        phase: "provider-credential-cooldown",
+        unitType,
+        unitId,
+        retryAfterMs: unitResult.errorContext.retryAfterMs,
+      });
+      return {
+        action: "retry",
+        reason: "credential-cooldown",
+        data: { retryAfterMs: unitResult.errorContext.retryAfterMs },
+      };
+    }
     // Provider-error pause: agent_end recovery normally pauses before this
     // branch. Provider readiness failures happen before dispatch, so pause here
     // if nothing upstream already did.
