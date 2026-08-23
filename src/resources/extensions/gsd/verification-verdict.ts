@@ -7,6 +7,7 @@ export type VerificationVerdictReason =
   | "passed"
   | "no-host-checks"
   | "command-not-found"
+  | "execution-fault"
   | "checks-failed";
 
 export interface VerificationVerdict {
@@ -50,6 +51,16 @@ export function decideVerificationVerdict(
       reason: "command-not-found",
       retryable: false,
       failureContext: `Verify command not runnable on this platform: \`${unrunnableCheck.command}\``,
+    };
+  }
+
+  const shellParseFailure = result.checks.find((check) => check.failureClass === "shell-parse");
+  if (shellParseFailure) {
+    return {
+      passed: false,
+      reason: "execution-fault",
+      retryable: false,
+      failureContext: `The verification shell could not parse command: ${shellParseFailure.command}. ${shellParseFailure.stderr}`.trim(),
     };
   }
 
