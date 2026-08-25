@@ -41,9 +41,9 @@ echo "Build a CLI tool" | gsd headless new-milestone --context -
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--timeout N` | 300000 (5 min) | Overall timeout in milliseconds |
+| `--timeout N` | See the [authoritative command reference](../../docs/user-docs/commands.md#headless-mode) | Overall timeout in milliseconds |
 | `--max-restarts N` | 3 | Auto-restart on crash (0 to disable) |
-| `--json` | — | Stream events as JSONL to stdout |
+| `--json` | — | Stream events and the terminal result as JSONL; see the [authoritative command reference](../../docs/user-docs/commands.md#headless-mode) |
 | `--model ID` | — | Override model for this session |
 | `--thinking LEVEL` | — | Override thinking level for this session (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) |
 | `--context <file>` | — | Context file for `new-milestone` (use `-` for stdin) |
@@ -56,7 +56,8 @@ echo "Build a CLI tool" | gsd headless new-milestone --context -
 |------|---------|
 | `0` | Complete |
 | `1` | Error or timeout |
-| `2` | Blocked |
+| `10` | Blocked |
+| `11` | Cancelled |
 
 ## Instant State Query
 

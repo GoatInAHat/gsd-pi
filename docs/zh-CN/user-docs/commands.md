@@ -307,7 +307,7 @@ echo "Build a CLI tool" | gsd headless new-milestone --context -
 
 | 参数 | 说明 |
 |------|------|
-| `--timeout N` | 总超时（毫秒），默认 `300000` / 5 分钟 |
+| `--timeout N` | 超时行为和默认值请参阅[英文命令参考](../../user-docs/commands.md#headless-mode) |
 | `--max-restarts N` | 崩溃时自动重启并指数退避（默认 3）。设为 0 可关闭 |
 | `--json` | 以 JSONL 形式把所有事件流式输出到 stdout |
 | `--model ID` | 覆盖 headless 会话使用的模型 |
@@ -316,7 +316,7 @@ echo "Build a CLI tool" | gsd headless new-milestone --context -
 | `--context-text <text>` | 给 `new-milestone` 提供内联上下文文本 |
 | `--auto` | 在创建 milestone 后直接接续自动模式 |
 
-**退出码：** `0` 表示完成，`1` 表示错误或超时，`2` 表示被阻塞。
+**退出码：** 请参阅[英文命令参考](../../user-docs/commands.md#headless-mode)。
 
 任何 `/gsd` 子命令都可以作为位置参数使用，例如：`gsd headless status`、`gsd headless doctor`、`gsd headless dispatch execute` 等。
 

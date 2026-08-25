@@ -246,7 +246,13 @@ After each unit, GSD verifies that the expected artifact exists on disk. If the 
 
 `reactive-execute` batches are handled differently after the retry cap. If dispatched tasks are still missing task summary files, GSD writes a slice-level `S##-REACTIVE-BLOCKER.md` diagnostic that lists which summaries are present or missing. The blocker prevents the same slice from launching another reactive batch, but it is not lifecycle authority: task statuses stay under canonical database Attempt/recovery control, not summary-file presence.
 
-For `run-uat`, existence alone is not sufficient: a pre-existing `S##-ASSESSMENT.md` only counts as completed when it contains a canonical verdict field (for example frontmatter `verdict: PASS | FAIL | PARTIAL`). If the file exists but has no verdict, artifact verification fails and `run-uat` is redispatched.
+For `run-uat`, existence alone is not sufficient: a pre-existing
+`S##-ASSESSMENT.md` only counts as completed when it contains a canonical
+verdict field (for example frontmatter `verdict: PASS | FAIL | PARTIAL`). If
+the file exists but has no verdict, artifact verification fails and `run-uat`
+is redispatched. During milestone closeout, a UAT-scoped non-passing verdict is
+also redispatched so closeout can recover with fresh UAT evidence; roadmap and
+backfill assessments do not suppress that UAT run.
 
 Artifact verification retries are capped at 3 attempts. If the expected artifact is still missing after those retries, GSD pauses auto mode with an "Artifact still missing..." error instead of relying on loop detection or an unbounded dispatch counter.
 

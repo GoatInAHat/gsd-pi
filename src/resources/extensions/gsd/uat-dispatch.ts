@@ -158,7 +158,8 @@ export async function findRunUatDispatchFromCandidates(
  * - No completed slices exist in DB or the caller-provided fallback candidates
  * - uat_dispatch is not enabled and the UAT spec does not require runtime/browser evidence
  * - No UAT file exists for the slice
- * - UAT result already exists in the UAT or ASSESSMENT file
+ * - A UAT result already exists in the UAT or UAT-scoped ASSESSMENT file,
+ *   unless milestone closeout requested a retry of a non-acceptable verdict
  */
 export async function checkNeedsRunUat(
   base: string,

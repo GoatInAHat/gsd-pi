@@ -14,8 +14,8 @@ gsd headless [flags] [command] [args...]
 ```
 
 **Flags:**
-- `--timeout N` — overall timeout in ms (default 300000)
-- `--json` — JSONL event stream to stdout
+- `--timeout N` — overall timeout in ms; `auto` has no overall timeout unless this flag is set
+- `--json` — JSONL event stream ending with the authoritative `headless_result`
 - `--model ID` — override LLM model
 - `--thinking LEVEL` — override thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`)
 - `--resume <id>` — resume a prior headless session by ID
@@ -27,7 +27,7 @@ gsd headless [flags] [command] [args...]
 - `--answers <path>` — pre-supply answers and secrets from JSON file
 - `--events <types>` — filter JSONL output to specific event types (comma-separated, implies `--json`)
 
-**Exit codes:** 0=complete, 1=error/timeout, 2=blocked
+**Exit codes:** 0=complete, 1=error/timeout, 10=blocked, 11=cancelled
 
 ## Core Workflows
 

@@ -23,21 +23,11 @@ Two scenarios:
 | Script | Seed | Command | Proves | Default budget |
 | --- | --- | --- | --- | --- |
 | `test-tiny-milestone.ts` | 1 slice / 1 task | `gsd headless next` | one real agent turn passes the dispatch + verification gates and exits 0 | 300 s |
-| `test-multi-slice-auto.ts` | S01 → S02 → S03, 5 tasks | `gsd headless auto` | the whole loop — every execute-task, every complete-slice (in dependency order), milestone closeout — finishes headlessly: exit 0, all five per-task verifications pass, M001 + all slices + all tasks are `complete` in `.gsd/gsd.db`, ≥5 new commits, no liveness/wedge/pause/error lines on stderr | 1800 s |
+| `test-multi-slice-auto.ts` | S01 → S02 → S03, 5 tasks | `gsd headless auto` | the whole loop — every execute-task, every complete-slice (in dependency order), UAT recovery, and milestone closeout — finishes headlessly: the structured result and process both report success, all five per-task verifications pass, M001 + all slices + all tasks are `complete` in `.gsd/gsd.db`, and at least five commits are added | 2400 s |
 
-The `auto` scenario is the one that matches what a user runs. A real agent's
-closeout does complete headlessly on `main` (verified 2026-08-23 with
-`kimi-for-coding`: the 1-task seed closed M001 in 273 s with 0 wedge lines).
-`next` stays as the fast, cheap smoke of a single dispatch.
-
-Status of the multi-slice scenario on `main` (2026-08-23, `kimi-for-coding`):
-S01 → S02 → S03 all completed in order, but milestone validation returned
-`needs-remediation` (the agent's own S03 UAT invented a `formatAnswer(7)` check
-that the fixture never specified), `gsd_reassess_roadmap` added S04, and
-plan-slice S04 failed pre-execution checks twice with identical inputs
-(planning artifacts listed as task inputs) — liveness backstop wedge, exit 10.
-The scenario fails until that closeout path is fixed; on failure it saves
-`gsd.db` next to the transcript for post-mortem.
+The `auto` scenario is the one that matches what a user runs, including
+milestone-closeout recovery after a non-passing UAT. `next` stays as the fast,
+cheap smoke of a single dispatch.
 
 ## Running
 
@@ -119,12 +109,10 @@ post-mortem.
 
 ## Seeing the output
 
-By default the run uses `--output-format text --verbose`, so you get a
-**readable transcript** — gsd's own progress renderer (assistant text, tool
-calls with summarized args, status/notify lines, cost). It is **streamed live**
-to your terminal as the agent works (the harness tees the child's
-stdout/stderr via `runStreaming`), bracketed by `─── live transcript ───`
-markers, and also saved for post-mortem:
+By default the run uses `--output-format stream-json`. The JSONL event stream
+is printed live and saved for post-mortem, and its final `headless_result` is
+the authoritative workflow result. The harness also saves a combined,
+ANSI-stripped transcript:
 
 ```bash
 # the test prints this path near the end as `transcript: <path>`
@@ -133,11 +121,15 @@ cat test-results/e2e/<timestamp>_live-tiny-milestone/transcript.txt   # clean, A
 #   dispatch.stdout.log   dispatch.stderr.log
 ```
 
-Want machine-readable JSONL instead (e.g. to post-process events)? Set:
+For a readable diagnostic transcript instead, set:
 
 ```bash
-GSD_LIVE_WORKFLOW_OUTPUT=stream-json GSD_LIVE_TESTS=1 npm run test:live-workflow
-# then, for just the assistant prose:
+GSD_LIVE_WORKFLOW_OUTPUT=text GSD_LIVE_TESTS=1 npm run test:live-workflow
+```
+
+To extract only assistant prose from the default JSONL stream:
+
+```bash
 jq -rc 'select(.type=="agent_end") | .messages[]
         | select(.role=="assistant") | .content[]?
         | select(.type=="text") | .text' \

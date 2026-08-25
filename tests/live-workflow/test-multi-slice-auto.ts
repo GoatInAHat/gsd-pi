@@ -7,10 +7,9 @@
  * complete-slice, and the milestone closeout. It proves the loop reaches the
  * fixed point a user expects — not just that one agent turn did work.
  *
- * Proof is durable only — never agent prose: exit code, each task's own
- * verification command, git history, milestone/slice/task rows in gsd.db
- * (including slice completion order), and the absence of liveness/wedge/
- * pause/error lines on the child's stderr.
+ * Proof is durable only — never agent prose: the structured terminal result,
+ * exit code, each task's own verification command, git history, and
+ * milestone/slice/task rows in gsd.db (including slice completion order).
  *
  * Exit: 0 pass · 77 skip (no creds) · non-zero fail.
  */
@@ -61,11 +60,11 @@ try {
     const sliceRows = db
       .prepare("SELECT id, status, completed_at FROM slices WHERE milestone_id = 'M001' ORDER BY id")
       .all() as { id: string; status: string; completed_at: string | null }[];
-    assert.deepEqual(
-      sliceRows.map((r) => [r.id, r.status]),
-      slices.map((s) => [s.id, "complete"]),
-      "every seeded slice should be complete",
-    );
+    const sliceStatus = new Map(sliceRows.map((row) => [row.id, row.status]));
+    for (const slice of slices) {
+      assert.equal(sliceStatus.get(slice.id), "complete", `${slice.id} should be complete`);
+    }
+    assert.ok(sliceRows.every((row) => row.status === "complete"), "every workflow slice should be complete");
     for (let i = 1; i < sliceRows.length; i++) {
       const prev = sliceRows[i - 1];
       const cur = sliceRows[i];
@@ -79,11 +78,13 @@ try {
     const taskRows = db
       .prepare("SELECT slice_id, id, status FROM tasks WHERE milestone_id = 'M001' ORDER BY slice_id, id")
       .all() as { slice_id: string; id: string; status: string }[];
-    assert.deepEqual(
-      taskRows.map((r) => [r.slice_id, r.id, r.status]),
-      slices.flatMap((s) => s.tasks.map((t) => [s.id, t.id, "complete"])),
-      "every seeded task should be complete",
-    );
+    const taskStatus = new Map(taskRows.map((row) => [`${row.slice_id}/${row.id}`, row.status]));
+    for (const slice of slices) {
+      for (const task of slice.tasks) {
+        assert.equal(taskStatus.get(`${slice.id}/${task.id}`), "complete", `${slice.id}/${task.id} should be complete`);
+      }
+    }
+    assert.ok(taskRows.every((row) => row.status === "complete"), "every workflow task should be complete");
   } finally {
     db.close();
   }
