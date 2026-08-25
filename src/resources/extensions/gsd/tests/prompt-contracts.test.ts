@@ -649,6 +649,23 @@ test("validate-milestone prompt dispatches parallel reviewers", () => {
   assert.match(prompt, /assessment evidence/i);
 });
 
+test("validate-milestone reviewer B does not invent direct dependency gaps", () => {
+  const prompt = readPrompt("validate-milestone");
+  assert.match(prompt, /evaluate only the declared boundaries/i);
+  assert.match(prompt, /transitive dependency chains are valid/i);
+  assert.match(prompt, /do not require an additional direct dependency/i);
+  assert.match(prompt, /no boundary map.*no declared boundaries.*PASS/i);
+  assert.match(prompt, /absence.*not.*gap/i);
+});
+
+test("validate-milestone reviewer C treats observed acceptance failures as remediation", () => {
+  const prompt = readPrompt("validate-milestone");
+  assert.match(prompt, /ASSESSMENT records `FAIL`.*return `FAIL`/i);
+  assert.match(prompt, /NEEDS-ATTENTION.*missing or inconclusive evidence/i);
+  assert.match(prompt, /later slice.*passing full-suite run.*newer passing evidence/i);
+  assert.match(prompt, /do not require.*earlier ASSESSMENT.*rerun/i);
+});
+
 // ─── ADR-029: forward preloaded evidence to validate reviewers ────────
 test("validate-milestone forwards preloaded evidence to reviewers and keeps full reads on-demand", () => {
   const prompt = readPrompt("validate-milestone");

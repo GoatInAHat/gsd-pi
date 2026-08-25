@@ -960,6 +960,7 @@ export const DISPATCH_RULES: DispatchRule[] = [
         mid,
         prefs,
         await loadRoadmapCompletedSliceCandidates(basePath, mid),
+        { retryNonPass: state.phase === "completing-milestone" },
       );
       if (!needsRunUat) return null;
       const { sliceId, uatType } = needsRunUat;

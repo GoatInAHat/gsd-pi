@@ -9,7 +9,7 @@ import {
   shouldDispatchUatForContent,
   type UatType,
 } from "./uat-policy.js";
-import { hasVerdict } from "./verdict-parser.js";
+import { extractVerdict, hasVerdict, isAcceptableUatVerdict } from "./verdict-parser.js";
 import { logWarning } from "./workflow-logger.js";
 
 export interface UatDispatchCandidate {
@@ -17,6 +17,9 @@ export interface UatDispatchCandidate {
 }
 
 export type RunUatDispatch = { sliceId: string; uatType: UatType };
+export interface RunUatDispatchOptions {
+  retryNonPass?: boolean;
+}
 
 async function loadSliceFileContent(
   base: string,
@@ -56,6 +59,7 @@ async function resolveCandidateRunUatDispatch(
   milestoneId: string,
   candidate: UatDispatchCandidate,
   prefs: GSDPreferences | undefined,
+  options: RunUatDispatchOptions,
 ): Promise<RunUatDispatch | null> {
   const uatContent = await loadSliceFileContent(
     base,
@@ -64,7 +68,6 @@ async function resolveCandidateRunUatDispatch(
     "UAT",
   );
   if (!uatContent) return null;
-  if (hasVerdict(uatContent)) return null;
 
   const assessmentContent = await loadSliceFileContent(
     base,
@@ -72,17 +75,26 @@ async function resolveCandidateRunUatDispatch(
     candidate.sliceId,
     "ASSESSMENT",
   );
-  if (assessmentContent && hasVerdict(assessmentContent)) return null;
+  const verdictContent = assessmentContent && hasVerdict(assessmentContent)
+    ? assessmentContent
+    : hasVerdict(uatContent)
+      ? uatContent
+      : null;
+  const uatType = await resolveRunUatEffectiveType(
+    base,
+    milestoneId,
+    candidate.sliceId,
+    uatContent,
+  );
+  if (verdictContent) {
+    const verdict = extractVerdict(verdictContent);
+    if (!options.retryNonPass || !verdict || isAcceptableUatVerdict(verdict, uatType)) return null;
+  }
   if (!shouldDispatchUatForContent(uatContent, prefs)) return null;
 
   return {
     sliceId: candidate.sliceId,
-    uatType: await resolveRunUatEffectiveType(
-      base,
-      milestoneId,
-      candidate.sliceId,
-      uatContent,
-    ),
+    uatType,
   };
 }
 
@@ -112,6 +124,7 @@ export async function findRunUatDispatchFromCandidates(
   milestoneId: string,
   candidates: readonly UatDispatchCandidate[],
   prefs: GSDPreferences | undefined,
+  options: RunUatDispatchOptions = {},
 ): Promise<RunUatDispatch | null> {
   for (const candidate of candidates) {
     const dispatch = await resolveCandidateRunUatDispatch(
@@ -119,6 +132,7 @@ export async function findRunUatDispatchFromCandidates(
       milestoneId,
       candidate,
       prefs,
+      options,
     );
     if (dispatch) return dispatch;
   }
@@ -146,6 +160,7 @@ export async function checkNeedsRunUat(
   milestoneId: string,
   prefs: GSDPreferences | undefined,
   fallbackCandidates: readonly UatDispatchCandidate[] = [],
+  options: RunUatDispatchOptions = {},
 ): Promise<RunUatDispatch | null> {
   try {
     const dbCandidates = await getDbCompletedSliceCandidates(milestoneId);
@@ -158,6 +173,7 @@ export async function checkNeedsRunUat(
         milestoneId,
         dbCandidates,
         prefs,
+        options,
       );
     }
   } catch (err) {
@@ -172,5 +188,6 @@ export async function checkNeedsRunUat(
     milestoneId,
     fallbackCandidates,
     prefs,
+    options,
   );
 }

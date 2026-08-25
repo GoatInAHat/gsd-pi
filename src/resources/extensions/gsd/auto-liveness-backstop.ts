@@ -267,7 +267,7 @@ export async function acknowledgeWedge(
 
 /**
  * Hash the DB rows a unit was dispatched to move (its target identity's
- * milestone/slice/task rows). Used to detect completed-no-advance dispatches:
+ * milestone/slice/task rows, plus unit-specific durable verdict rows). Used to detect completed-no-advance dispatches:
  * a unit that returns while this hash is unchanged did zero target work
  * (ADR-047 §4 — the #1626 zero-work re-dispatch class). Timestamp columns are
  * excluded so bookkeeping touches don't mask a semantic no-advance.
@@ -295,6 +295,23 @@ export function snapshotUnitTargetRows(unitType: string, unitId: string): UnitTa
     } else if (slice) {
       collect('SELECT * FROM slices WHERE milestone_id = :m AND id = :s ORDER BY id', { ':m': milestone, ':s': slice });
       collect('SELECT * FROM tasks WHERE milestone_id = :m AND slice_id = :s ORDER BY id', { ':m': milestone, ':s': slice });
+      if (unitType === 'run-uat') {
+        collect(
+          `SELECT milestone_id, slice_id, scope, status
+             FROM assessments
+            WHERE milestone_id = :m AND slice_id = :s AND scope = 'run-uat'
+            ORDER BY created_at DESC, ROWID DESC
+            LIMIT 1`,
+          { ':m': milestone, ':s': slice },
+        );
+        collect(
+          `SELECT milestone_id, slice_id, gate_id, scope, task_id, status, verdict
+             FROM quality_gates
+            WHERE milestone_id = :m AND slice_id = :s AND gate_id = 'UAT'
+            ORDER BY task_id`,
+          { ':m': milestone, ':s': slice },
+        );
+      }
     } else {
       collect('SELECT * FROM slices WHERE milestone_id = :m ORDER BY id', { ':m': milestone });
     }

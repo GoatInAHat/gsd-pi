@@ -4342,6 +4342,76 @@ test("autoLoop handles verification retry by continuing loop", async (t) => {
   }
 });
 
+test("autoLoop leaves finalize-retry liveness to orchestration closeout", async (t) => {
+  _resetPendingResolve();
+  mock.timers.enable({ apis: ["Date", "setTimeout"], now: 10_000 });
+  t.after(() => mock.timers.reset());
+
+  const ctx = makeMockCtx();
+  ctx.ui.setStatus = () => {};
+  ctx.ui.notify = () => {};
+  ctx.sessionManager = { getSessionFile: () => "/tmp/session.json" };
+  const pi = makeMockPi();
+  const unit = { unitType: "execute-task", unitId: "M001/S01/T01" };
+  const loopLivenessGuards: string[] = [];
+  let advanceCalls = 0;
+  let retryCloseouts = 0;
+  const s = makeLoopSession({ currentMilestoneId: "M001" });
+  s.orchestration = {
+    start: async () => ({ kind: "stopped" as const, reason: "unused" }),
+    advance: async () => {
+      advanceCalls++;
+      if (advanceCalls === 1) {
+        return {
+          kind: "advanced" as const,
+          unit,
+          stateSnapshot: await makeMockDeps().deriveState(s.basePath),
+          dispatchId: 1,
+        };
+      }
+      s.active = false;
+      return { kind: "stopped" as const, reason: "retry observed" };
+    },
+    settle: async () => {},
+    completeActiveUnit: async () => {},
+    retryActiveUnit: async () => { retryCloseouts++; },
+    abandonActiveUnit: async () => {},
+    resume: async () => ({ kind: "stopped" as const, reason: "unused" }),
+    stop: async (reason: string) => ({ kind: "stopped" as const, reason }),
+    getStatus: () => ({ phase: "running" as const, transitionCount: advanceCalls }),
+  } satisfies AutoOrchestrationModule;
+  openLoopDatabase(t, s);
+
+  const deps = makeMockDeps({
+    runPostUnitVerification: async () => {
+      s.pendingVerificationRetry = {
+        unitId: unit.unitId,
+        failureContext: "canonical validation needs fresh objective evidence",
+        attempt: 1,
+      };
+      return "retry" as const;
+    },
+    adjudicateNonAdvancingOutcome: (_session, input) => {
+      loopLivenessGuards.push(input.guardId);
+      return null;
+    },
+  });
+
+  const loopPromise = autoLoop(ctx, pi, s, deps);
+  await waitForMicrotasks(() => pi.calls.length === 1, "finalize retry dispatch");
+  resolveAgentEnd(makeEvent());
+  await drainMicrotasks(100);
+  mock.timers.tick(30_000);
+  await loopPromise;
+
+  assert.equal(retryCloseouts, 1, "the retry must close through orchestration once");
+  assert.deepEqual(
+    loopLivenessGuards.filter((guardId) => guardId === "finalize-retry"),
+    [],
+    "orchestration owns finalize-retry liveness and the loop must not record it again",
+  );
+});
+
 test("autoLoop pauses a machine-terminal verification abort with a terminal notification (#1971)", async () => {
   _resetPendingResolve();
   mock.timers.enable({ apis: ["Date", "setTimeout"], now: 10_000 });

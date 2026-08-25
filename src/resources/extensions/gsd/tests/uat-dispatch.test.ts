@@ -115,6 +115,38 @@ test("checkNeedsRunUat skips slices that already have an ASSESSMENT verdict", as
   assert.equal(await checkNeedsRunUat(base, "M001", { uat_dispatch: true }, [{ sliceId: "S01" }]), null);
 });
 
+test("checkNeedsRunUat retries a failed ASSESSMENT only during milestone closeout", async (t) => {
+  const base = createFixtureBase();
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+
+  writeRoadmap(base, "M001");
+  writeSliceFile(
+    base,
+    "M001",
+    "S01",
+    "UAT",
+    ["# S01 UAT", "", "## UAT Type", "- UAT mode: runtime-executable"].join("\n"),
+  );
+  writeSliceFile(base, "M001", "S01", "ASSESSMENT", "---\nverdict: FAIL\n---\n# UAT Assessment\n");
+
+  assert.equal(
+    await checkNeedsRunUat(base, "M001", { uat_dispatch: true }, [{ sliceId: "S01" }]),
+    null,
+    "a failed UAT must not prevent later remediation slices from running",
+  );
+  assert.deepEqual(
+    await checkNeedsRunUat(
+      base,
+      "M001",
+      { uat_dispatch: true },
+      [{ sliceId: "S01" }],
+      { retryNonPass: true },
+    ),
+    { sliceId: "S01", uatType: "runtime-executable" },
+    "closeout must make the documented failed-UAT recovery path reachable",
+  );
+});
+
 test("auto-prompts keeps the compatibility checkNeedsRunUat wrapper", async (t) => {
   const base = createFixtureBase();
   t.after(() => {

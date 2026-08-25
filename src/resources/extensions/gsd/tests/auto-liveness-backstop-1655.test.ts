@@ -14,6 +14,7 @@ import {
   insertMilestone,
   insertSlice,
   insertTask,
+  insertAssessment,
   updateTaskStatus,
 } from '../gsd-db.ts';
 import {
@@ -298,6 +299,52 @@ test('ADR-047: completed-no-advance — target-row hash is stable until a target
   updateTaskStatus('M001', 'S01', 'T01', 'complete');
   const afterAdvance = readTargetSnapshot('execute-task', 'M001/S01/T01');
   assert.notEqual(afterAdvance, atDispatch, 'a moved target row changes the hash');
+});
+
+test('ADR-047: run-uat target advances when a retried assessment changes verdict', (t) => {
+  const base = makeBase();
+  t.after(() => cleanup(base));
+  openDatabase(join(base, '.gsd', 'gsd.db'));
+  insertMilestone({ id: 'M001', title: 'T', status: 'active' });
+  insertSlice({ id: 'S01', milestoneId: 'M001', title: 'S', status: 'complete', depends: [] });
+
+  insertAssessment({
+    path: '.gsd/phases/01-fixture/01-01-ASSESSMENT.md',
+    milestoneId: 'M001',
+    sliceId: 'S01',
+    status: 'fail',
+    scope: 'run-uat',
+    fullContent: 'attempt 1 failed',
+    createdAt: '2026-01-01T00:00:00.000Z',
+  });
+  const failed = readTargetSnapshot('run-uat', 'M001/S01');
+
+  insertAssessment({
+    path: '.gsd/phases/01-fixture/01-01-ASSESSMENT.md',
+    milestoneId: 'M001',
+    sliceId: 'S01',
+    status: 'pass',
+    scope: 'run-uat',
+    fullContent: 'attempt 2 passed',
+    createdAt: '2026-01-02T00:00:00.000Z',
+  });
+  const passed = readTargetSnapshot('run-uat', 'M001/S01');
+  assert.notEqual(passed, failed, 'FAIL → PASS must advance the run-uat target');
+
+  insertAssessment({
+    path: '.gsd/phases/01-fixture/01-01-ASSESSMENT.md',
+    milestoneId: 'M001',
+    sliceId: 'S01',
+    status: 'pass',
+    scope: 'run-uat',
+    fullContent: 'attempt 3 also passed',
+    createdAt: '2026-01-03T00:00:00.000Z',
+  });
+  assert.equal(
+    readTargetSnapshot('run-uat', 'M001/S01'),
+    passed,
+    'new attempt metadata without a verdict change is not target advancement',
+  );
 });
 
 test('ADR-047: stable guard identity isolates identical payloads from different guards', (t) => {
