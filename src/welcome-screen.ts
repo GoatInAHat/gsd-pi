@@ -29,7 +29,8 @@ function readGsdState(): GsdState | undefined {
     const raw = readFileSync(join(process.cwd(), '.gsd', 'STATE.md'), 'utf-8')
     const state: GsdState = {}
     const milestone = raw.match(/^\*\*Active Milestone:\*\*\s*(.+)$/m)
-    if (milestone) state.milestone = milestone[1].trim()
+    const activeMilestone = milestone?.[1].trim()
+    if (activeMilestone && activeMilestone !== 'None') state.milestone = activeMilestone
     const slice = raw.match(/^\*\*Active Slice:\*\*\s*(.+)$/m)
     if (slice) state.slice = slice[1].trim()
     const phase = raw.match(/^\*\*Phase:\*\*\s*(.+)$/m)

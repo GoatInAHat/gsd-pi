@@ -73,6 +73,30 @@ test('renders GSD project state or fallback hint', (t) => {
   )
 })
 
+test('treats completed-state None sentinels as no active project', (t) => {
+  const tmp = mkdtempSync(join(tmpdir(), 'gsd-welcome-complete-'))
+  mkdirSync(join(tmp, '.gsd'))
+  writeFileSync(
+    join(tmp, '.gsd', 'STATE.md'),
+    [
+      '**Active Milestone:** None',
+      '**Phase:** complete',
+      '**Active Slice:** None',
+      '**Next Action:** Review the closeout.',
+    ].join('\n'),
+  )
+  const origCwd = process.cwd()
+  process.chdir(tmp)
+  t.after(() => {
+    process.chdir(origCwd)
+    rmSync(tmp, { recursive: true, force: true })
+  })
+
+  const out = strip(capture({ version: '1.0.0', width: 120 }))
+  assert.ok(out.includes('No active GSD project'))
+  assert.doesNotMatch(out, /Project\s+None/)
+})
+
 test('renders cwd hint', () => {
   const out = strip(capture({ version: '1.0.0' }))
   assert.ok(out.includes('/gsd to begin'), 'hint line missing')
