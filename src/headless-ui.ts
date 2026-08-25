@@ -339,6 +339,17 @@ export function formatProgress(event: Record<string, unknown>, ctx: ProgressCont
   }
 }
 
+/** Render one progress event without joining it to an open assistant stream. */
+export function formatProgressOutput(
+  event: Record<string, unknown>,
+  ctx: ProgressContext,
+  streamOpen: boolean,
+): string | null {
+  const line = formatProgress(event, ctx)
+  if (!line) return null
+  return `${streamOpen ? '\n' : ''}${line}\n`
+}
+
 /**
  * Format a thinking preview line from accumulated LLM text deltas.
  * Used as a fallback when streaming is not enabled — shows a truncated one-liner.

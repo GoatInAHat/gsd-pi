@@ -54,7 +54,7 @@ import type { QuickTaskMetadata, QuickTaskResultDetails } from './headless-quick
 
 import {
   handleExtensionUIRequest,
-  formatProgress,
+  formatProgressOutput,
   formatThinkingLine,
   formatTextStart,
   formatTextEnd,
@@ -843,8 +843,15 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
         lastCost: eventType === 'agent_end' ? lastCostData : undefined,
       }
 
-      const line = formatProgress(eventObj, ctx)
-      if (line) process.stderr.write(line + '\n')
+      const streamOpen = !!options.verbose && (inTextBlock || inThinkingBlock)
+      const output = formatProgressOutput(eventObj, ctx, streamOpen)
+      if (output) {
+        process.stderr.write(output)
+        if (streamOpen) {
+          inTextBlock = false
+          inThinkingBlock = false
+        }
+      }
     }
 
     // Handle execution_complete (v2 structured completion)

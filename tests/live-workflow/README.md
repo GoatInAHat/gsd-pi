@@ -77,7 +77,7 @@ node --experimental-strip-types tests/live-workflow/test-multi-slice-auto.ts
 | `GSD_LIVE_WORKFLOW_USE_HOME` | — | `1` forwards your real `HOME` so the child reads `~/.gsd/agent/auth.json` and prefs. Counts as a credential source. Off by default: the child normally gets an isolated, fresh home. |
 | `GSD_LIVE_WORKFLOW_TIMEOUT_MS` | `300000` (`next`) / `1800000` (`auto`) | Per-run dispatch timeout (wall-clock budget). Overrides the scenario default. Raise for slower models. |
 | `GSD_LIVE_WORKFLOW_RUNNER_TIMEOUT_MS` | — | Optional extra per-test deadline for `run.ts`. Unset = none; each scenario already kills its own gsd child at its budget. |
-| `GSD_LIVE_WORKFLOW_OUTPUT` | `text` | Output format. `text` = readable transcript; `stream-json` = machine-parseable JSONL. |
+| `GSD_LIVE_WORKFLOW_OUTPUT` | `stream-json` | Output format. `stream-json` provides the authoritative terminal result; set `text` for a readable diagnostic transcript. |
 
 ## How it works
 
@@ -109,9 +109,10 @@ Each `test-*.ts` script:
    - (`auto` only) every per-task verification passes, `milestones`/`slices`/
      `tasks` rows for M001 and all seeded slices/tasks read `complete` in
      `.gsd/gsd.db`, slices' `completed_at` respects the `depends` order,
-     commits grew by at least the task count, and the child's **stderr** has
-     no line matching `/liveness|wedge|Cannot dispatch|paused|error/i`
-     (stdout, where the agent's tool output lands, is not scanned).
+     commits grew by at least the task count. In the default `stream-json` mode,
+     the final `headless_result` must report `status: "success"` and `exitCode: 0`.
+     Text mode is diagnostic only because it mixes engine notices with model
+     prose and tool-call display lines.
 
 Artifacts (transcript + raw streams) are written under `test-results/e2e/` for
 post-mortem.
