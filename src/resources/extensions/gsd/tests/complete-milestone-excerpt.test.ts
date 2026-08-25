@@ -392,6 +392,23 @@ test("validate-milestone prompt uses slice excerpts and on-demand paths instead 
   );
 });
 
+test("validate-milestone emits failure-aware reviewer instructions", async (t) => {
+  const base = createBase();
+  t.after(() => cleanup(base));
+  invalidateAllCaches();
+  writeRoadmap(base, makeRoadmap());
+  seedRoadmapSlices(base);
+  writeSummary(base, "S01", makeFatSummary("S01"));
+  writeSummary(base, "S02", makeFatSummary("S02"));
+
+  const prompt = await buildValidateMilestonePrompt("M001", "Test Milestone", base);
+
+  assert.match(prompt, /evaluate only the declared boundaries/i);
+  assert.match(prompt, /transitive dependency chains are valid/i);
+  assert.match(prompt, /ASSESSMENT records `FAIL`.*return `FAIL`/i);
+  assert.match(prompt, /Any FAIL -> `needs-remediation`[\s\S]*Otherwise, any NEEDS-ATTENTION/i);
+});
+
 test("validate-milestone prompt inlines persisted slice-level Q3/Q4 gate flags", async (t) => {
   const base = createBase();
   t.after(() => {

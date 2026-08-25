@@ -79,6 +79,7 @@ import {
 
 export interface HeadlessOptions {
   timeout: number
+  timeoutExplicit?: boolean
   json: boolean
   outputFormat: OutputFormat
   model?: string
@@ -194,6 +195,7 @@ export function parseHeadlessArgs(argv: string[]): HeadlessOptions {
     if (arg.startsWith('--')) {
       if (arg === '--timeout' && i + 1 < args.length) {
         options.timeout = parseInt(args[++i], 10)
+        options.timeoutExplicit = true
         if (Number.isNaN(options.timeout) || options.timeout < 0) {
           process.stderr.write('[headless] Error: --timeout must be a non-negative integer (milliseconds, 0 to disable)\n')
           process.exit(1)
@@ -368,7 +370,7 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
   // discuss and plan are multi-turn: they involve multiple question rounds,
   // codebase scanning, and artifact writing before the workflow completes (#3547).
   let isMultiTurnCommand = isMultiTurnHeadlessCommand(options.command)
-  if (isAutoMode && options.timeout === 300_000) {
+  if (isAutoMode && !options.timeoutExplicit && options.timeout === 300_000) {
     options.timeout = 0
   }
 

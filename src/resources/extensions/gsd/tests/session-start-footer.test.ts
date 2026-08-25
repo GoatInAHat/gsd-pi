@@ -20,7 +20,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { autoSession } from "../auto-runtime-state.ts";
 import { registerHooks } from "../bootstrap/register-hooks.ts";
@@ -228,15 +228,19 @@ test("session_start installs the welcome screen as the TUI header", async (t) =>
   );
   mkdirSync(join(dir, "bin"), { recursive: true });
   mkdirSync(join(dir, "dist"), { recursive: true });
+  mkdirSync(join(dir, ".gsd"), { recursive: true });
+  writeFileSync(
+    join(dir, ".gsd", "STATE.md"),
+    "**Active Milestone:** None\n**Phase:** complete\n**Active Slice:** None\n",
+    "utf-8",
+  );
   writeFileSync(join(dir, "bin", "welcome-screen.js"), "export const stale = true;\n", "utf-8");
+  const welcomeModuleUrl = pathToFileURL(
+    join(__dirname, "..", "..", "..", "..", "welcome-screen.ts"),
+  ).href;
   writeFileSync(
     join(dir, "dist", "welcome-screen.js"),
-    [
-      "export function buildWelcomeScreenLines(opts) {",
-      "  return [`welcome ${opts.version} ${opts.remoteChannel ?? 'none'} ${opts.width}`];",
-      "}",
-      "",
-    ].join("\n"),
+    `export { buildWelcomeScreenLines } from ${JSON.stringify(welcomeModuleUrl)};\n`,
     "utf-8",
   );
 
@@ -296,7 +300,9 @@ test("session_start installs the welcome screen as the TUI header", async (t) =>
 
   assert.equal(typeof headerFactory, "function", "session_start should install a header factory");
   const header = headerFactory!({}, {});
-  assert.deepEqual(header.render(123), ["welcome 9.9.9-test none 123"]);
+  const rendered = header.render(123).join("\n");
+  assert.match(rendered, /No active GSD project/);
+  assert.doesNotMatch(rendered, /Project\s+None/);
 });
 
 test("session_start suppresses the welcome header while auto-mode is active", async (t) => {

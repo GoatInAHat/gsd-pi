@@ -41,8 +41,8 @@ Prompt: "Review milestone {{milestoneId}} assessment evidence and acceptance cri
 
 Aggregate reviewer verdicts:
 - ALL PASS -> `pass`
-- Any NEEDS-ATTENTION -> `needs-attention`
 - Any FAIL -> `needs-remediation`
+- Otherwise, any NEEDS-ATTENTION -> `needs-attention`
 
 ### Step 3 - Persist Validation
 

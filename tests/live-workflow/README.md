@@ -75,7 +75,7 @@ node --experimental-strip-types tests/live-workflow/test-multi-slice-auto.ts
 | `*_API_KEY` / `*_OAUTH_TOKEN` | — | Provider credential, forwarded to the child. At least one required. Provider-agnostic. |
 | `GSD_LIVE_WORKFLOW_MODEL` | auto-resolved (`openai/gpt-5.4-mini` in optional release CI) | Force a model id. Unset = gsd picks the default for whichever provider's credential is present. |
 | `GSD_LIVE_WORKFLOW_USE_HOME` | — | `1` forwards your real `HOME` so the child reads `~/.gsd/agent/auth.json` and prefs. Counts as a credential source. Off by default: the child normally gets an isolated, fresh home. |
-| `GSD_LIVE_WORKFLOW_TIMEOUT_MS` | `300000` (`next`) / `1800000` (`auto`) | Per-run dispatch timeout (wall-clock budget). Overrides the scenario default. Raise for slower models. |
+| `GSD_LIVE_WORKFLOW_TIMEOUT_MS` | `300000` (`next`) / `2400000` (`auto`) | Harness wall-clock budget. When explicitly set it also becomes the headless auto timeout; otherwise auto's overall product timeout stays disabled. |
 | `GSD_LIVE_WORKFLOW_RUNNER_TIMEOUT_MS` | — | Optional extra per-test deadline for `run.ts`. Unset = none; each scenario already kills its own gsd child at its budget. |
 | `GSD_LIVE_WORKFLOW_OUTPUT` | `stream-json` | Output format. `stream-json` provides the authoritative terminal result; set `text` for a readable diagnostic transcript. |
 
@@ -98,7 +98,7 @@ Each `test-*.ts` script:
    fresh agent home, so the test behaves identically locally and in CI.
    Provider-agnostic by construction — no vendor is named anywhere.
    (`GSD_LIVE_WORKFLOW_USE_HOME=1` is the opt-in exception, see above.)
-3. **Dispatches**: `gsd headless --output-format text --verbose
+3. **Dispatches**: `gsd headless --output-format stream-json
    --timeout <T> --max-restarts 0 [--model <M>] <next|auto>`. `next` runs a
    single real agent turn (execute-task) through the verification gate, then
    exits; `auto` keeps dispatching until the milestone is closed.

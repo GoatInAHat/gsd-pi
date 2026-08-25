@@ -2,8 +2,9 @@
 // File Purpose: Resolve whether a completed slice needs run-uat dispatch.
 
 import { loadFile } from "./files.js";
+import { getAssessment } from "./gsd-db.js";
 import type { GSDPreferences } from "./preferences.js";
-import { resolveSliceFile } from "./paths.js";
+import { relSliceFile, resolveSliceFile } from "./paths.js";
 import {
   classifyUatContentForRun,
   shouldDispatchUatForContent,
@@ -75,7 +76,11 @@ async function resolveCandidateRunUatDispatch(
     candidate.sliceId,
     "ASSESSMENT",
   );
-  const verdictContent = assessmentContent && hasVerdict(assessmentContent)
+  const assessmentScope = String(
+    getAssessment(relSliceFile(base, milestoneId, candidate.sliceId, "ASSESSMENT"))?.scope ?? "",
+  ).trim().toLowerCase();
+  const isUatAssessment = assessmentScope !== "roadmap" && assessmentScope !== "backfill";
+  const verdictContent = isUatAssessment && assessmentContent && hasVerdict(assessmentContent)
     ? assessmentContent
     : hasVerdict(uatContent)
       ? uatContent
