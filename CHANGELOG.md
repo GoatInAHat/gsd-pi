@@ -8,6 +8,52 @@ This changelog starts from the `open-gsd/gsd-pi` ownership baseline. Earlier pro
 
 ## [Unreleased]
 
+## [1.16.2] - 2026-08-25
+
+### Fixed
+- **tui**: hide completed project sentinel
+- **headless**: classify live workflow outcomes structurally
+- **gsd**: recover failed UAT closeout
+- **legacy-import**: take only the code span of a Verification bullet as the verify command (#1982)
+- **auto**: abort the live host turn on permanent provider-error pause; completion gate names its recovery lever and admits blocker reports (#1977)
+- **state-reconciliation**: stop mapping remediation slice ids onto other slices' plan files (#1976)
+- **auto**: keep the verification auto-fix retry bound attempt-independent and pause loudly on durable abort (#1972)
+- **legacy-import**: carry Verification/Inputs/Expected Output from a task's ### section into its import claim (#1970)
+- **headless**: keep timeout status when SIGTERMed child exits cleanly (#1969)
+- **auto**: pause canonical needs-attention validation for human review instead of retrying into a wedge (#1966)
+- **legacy-import**: map every checkbox task line in a nested slice plan (#1964)
+- **pre-exec**: auto-repair planning-artifact refs in task inputs/files; lead retry context with real findings (#1962)
+- **issue**: [Bug]: auto-mode escape-path violation — resumed-once task-recovery abort re-settled with dead worker names an already-consumed recoveryActionId as its only exit; transient Codex usage_limit_reached escalated to terminal abort (1.16.1) (#1917)
+- **dashboard**: reload milestone data when the DB project revision changes (#1958)
+- **gsd**: void stale abort route on task reopen so recovery levers stay live (#1948) (#1957)
+- **issue**: [Bug]: resume-consumed abort route stays terminal after its retry succeeds — staged completion never reaches host verification, dead already-resumed lever is the only exit (1.16.1) (#1946)
+- **issue**: [Bug]: orchestrator orphaned-active-unit guard deadlocks settled attempts with a never-resumed abort — agent-tool-only exit is unreachable and even gsd_task_recovery_resume cannot clear the guard (1.16.1) (#1942)
+- **remote-questions**: add GSD_DISABLE_REMOTE_QUESTIONS guard and isolate ask-user tests (#1954)
+- **baseline**: make per-invariant timeout overridable via GSD_BASELINE_INVARIANT_TIMEOUT_MS (#1953)
+- **issue**: Windows: verification gate mangles nested-quote verify commands (cmd /c without windowsVerbatimArguments) -> deterministic host/agent divergence -> unbreakable finalize-break wedge (#1940)
+- **issue**: [Bug]: provider usage_limit_reached during execute-task closeout strands a running Attempt with a dead lease; no in-context recovery can complete or settle it (#1918)
+- **issue**: Legacy import drops completion state: CLOSED milestones import as active, done tasks import as pending (preview knows 173/174 done) (#1914)
+- **verification-gate**: parse <item> wrappers in task Verify and stop silent fallback to package.json (#1951)
+- **issue**: [Bug]: validate-milestone recovery tells validator to write VALIDATION.md instead of calling gsd_validate_milestone (#1921)
+- **auto**: verify reassess-roadmap against the milestone-scoped ROADMAP-ASSESSMENT.md (#1950)
+- **dispatch-guard**: do not block dispatch on an earlier placeholder milestone with no slice rows (#1949)
+- **issue**: Windows: verification gate scores a missing OS command (grep 'is not recognized') as a real failure, not command-not-found -> unbreakable auto-fix loop -> liveness wedge (#1945)
+- **issue**: [Bug]: post-execution import check cannot resolve `.d.ts` targets — `resolveImportPath` omits the extension, blocking task completion on committed generated declaration files (1.16.1) (#1938)
+- **issue**: [Bug]: checkTmuxKeyboardSetup emits false positive warning when tmux show times out or returns undefined
+- **issue**: Bug: gsd_task_complete knownIssues validation rejects LLM {"item": "..."} wrapper — wedges task as orphaned-active-unit (1.16.x)
+- **issue**: [Bug]: `gsd_plan_slice` fails rendering projections on Windows with persistent `os error 32` after restart
+- **issue**: Add a bounded selective route to discard orphaned milestone reservations (headless + slash)
+- **bug-2**: Quick tasks have no non-interactive entry point headless quick tasks now return structured lifecycle details and meaningful failure codes.
+- **bug-1**: CLI silently ignores `quick` and its task arguments direct `gsd quick` invocations now dispatch through headless mode without losing task arguments.
+- **issue**: gsd quick lacks the right-sizing flags gsd-core has (--research/--validate/--discuss/--full)
+- **bug-2**: Default 30-second exec timeout kills valid verification builds verification and build workloads now inherit the configured verification timeout without changing unrelated exec defaults.
+- **bug-1**: Windows cmd.exe cannot execute forward-slash package-manager path Windows verification now invokes relative package-manager paths using native backslashes and an explicit `.\` prefix.
+- **issue**: Depth verification ignores answers[id].answers result shape
+- **issue**: [Bug]: gsd_exec default timeout is 30s (sourced from exec_timeout_ms, not verification_timeout_ms) — silently kills legitimate verify/build chains and mislabels them as timeouts, driving re-dispatch loops
+- **bug-2**: Paused auto results discard typed projection-lock failures paused results preserve typed projection-lock failures through liveness adjudication.
+- **bug-1**: Initial projection bootstrap locks the worktree CWD on Windows bootstrap now identity-locks `.gsd` instead of the worktree CWD.
+- **ci**: land production npm releases through RELEASE_PAT (#1904)
+
 ## [1.16.1] - 2026-08-21
 
 ### Fixed

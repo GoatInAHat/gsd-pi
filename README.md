@@ -28,16 +28,16 @@ See [CHANGELOG.md](./CHANGELOG.md) for release-by-release fixes and [Legacy Rele
 ## Latest Release Highlights
 
 <!-- release-highlights:start -->
-Latest release: **v1.16.1**
+Latest release: **v1.16.2**
 
-- **issue:** Fix(gsd): prevent slice plans from assigning phase-owned lifecycle mutations to execute-task (#1899).
-- **issue:** Branch isolation makes recorded integration branch disappear in unborn repositories (#1900).
-- **Fixed:** Restore broken star history chart (#1902).
-- **issue:** Re-entrant session lock acquisition releases ownership and wedges auto-mode (#1901).
-- **issue:** Migration staging resolves to live repo .gsd (#1866) (#1879).
-- **issue:** Post-unit gates audit stale HEAD and ignore evidence-backed GSD-only task verification (#1898).
-- **issue:** No sanctioned task lifecycle reconcile after repair (#1749) (#1893).
-- **issue:** Phase-dir slug drift and lock rmSync no-op (#1526) (#1892).
+- **tui:** Hide completed project sentinel.
+- **headless:** Classify live workflow outcomes structurally.
+- **gsd:** Recover failed UAT closeout.
+- **legacy-import:** Take only the code span of a Verification bullet as the verify command (#1982).
+- **auto:** Abort the live host turn on permanent provider-error pause; completion gate names its recovery lever and admits blocker reports (#1977).
+- **state-reconciliation:** Stop mapping remediation slice ids onto other slices' plan files (#1976).
+- **auto:** Keep the verification auto-fix retry bound attempt-independent and pause loudly on durable abort (#1972).
+- **legacy-import:** Carry Verification/Inputs/Expected Output from a task's ### section into its import claim (#1970).
 
 <!-- release-highlights:end -->
 
