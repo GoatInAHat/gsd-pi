@@ -54,7 +54,7 @@ import type { QuickTaskMetadata, QuickTaskResultDetails } from './headless-quick
 
 import {
   handleExtensionUIRequest,
-  formatProgress,
+  formatProgressOutput,
   formatThinkingLine,
   formatTextStart,
   formatTextEnd,
@@ -79,6 +79,7 @@ import {
 
 export interface HeadlessOptions {
   timeout: number
+  timeoutExplicit?: boolean
   json: boolean
   outputFormat: OutputFormat
   model?: string
@@ -194,6 +195,7 @@ export function parseHeadlessArgs(argv: string[]): HeadlessOptions {
     if (arg.startsWith('--')) {
       if (arg === '--timeout' && i + 1 < args.length) {
         options.timeout = parseInt(args[++i], 10)
+        options.timeoutExplicit = true
         if (Number.isNaN(options.timeout) || options.timeout < 0) {
           process.stderr.write('[headless] Error: --timeout must be a non-negative integer (milliseconds, 0 to disable)\n')
           process.exit(1)
@@ -368,7 +370,7 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
   // discuss and plan are multi-turn: they involve multiple question rounds,
   // codebase scanning, and artifact writing before the workflow completes (#3547).
   let isMultiTurnCommand = isMultiTurnHeadlessCommand(options.command)
-  if (isAutoMode && options.timeout === 300_000) {
+  if (isAutoMode && !options.timeoutExplicit && options.timeout === 300_000) {
     options.timeout = 0
   }
 
@@ -577,13 +579,28 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
 
   // Batch JSON emits one object; stream-json emits the same terminal result as
   // a typed JSONL event after the raw RPC event stream.
-  function emitStructuredResult(): void {
+  function structuredResultLine(): string | undefined {
     const result = buildStructuredResult()
     if (options.outputFormat === 'json') {
-      process.stdout.write(JSON.stringify(result) + '\n')
-    } else if (options.outputFormat === 'stream-json') {
-      process.stdout.write(JSON.stringify({ type: 'headless_result', ...result }) + '\n')
+      return JSON.stringify(result) + '\n'
     }
+    if (options.outputFormat === 'stream-json') {
+      return JSON.stringify({ type: 'headless_result', ...result }) + '\n'
+    }
+    return undefined
+  }
+
+  async function emitStructuredResult(): Promise<void> {
+    const line = structuredResultLine()
+    if (!line) return
+    await new Promise<void>((resolve, reject) => {
+      process.stdout.write(line, (error) => error ? reject(error) : resolve())
+    })
+  }
+
+  function emitStructuredResultSync(): void {
+    const line = structuredResultLine()
+    if (line) writeSync(1, line)
   }
 
   function trackEvent(event: Record<string, unknown>): void {
@@ -843,8 +860,15 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
         lastCost: eventType === 'agent_end' ? lastCostData : undefined,
       }
 
-      const line = formatProgress(eventObj, ctx)
-      if (line) process.stderr.write(line + '\n')
+      const streamOpen = !!options.verbose && (inTextBlock || inThinkingBlock)
+      const output = formatProgressOutput(eventObj, ctx, streamOpen)
+      if (output) {
+        process.stderr.write(output)
+        if (streamOpen) {
+          inTextBlock = false
+          inThinkingBlock = false
+        }
+      }
     }
 
     // Handle execution_complete (v2 structured completion)
@@ -969,7 +993,7 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
     if (timeoutTimer) clearTimeout(timeoutTimer)
     if (idleTimer) clearTimeout(idleTimer)
     // Preserve a terminal machine-readable result for both JSON output modes.
-    emitStructuredResult()
+    emitStructuredResultSync()
     process.exit(exitCode)
   }
   // Use prependListener so our handler runs before pi-coding-agent's
@@ -1201,7 +1225,7 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
   }
 
   // Emit structured JSON result in batch mode
-  emitStructuredResult()
+  await emitStructuredResult()
 
   return { exitCode, interrupted, totalEvents, toolCallCount, recentEvents: [...recentEvents], status }
 }

@@ -27,7 +27,7 @@ export interface LiveWorkflowScenario {
   seed(project: TmpProject): LiveWorkflowSeed;
   dispatch?: {
     command?: "next" | "auto";
-    /** Scenario default; GSD_LIVE_WORKFLOW_TIMEOUT_MS always wins when set. */
+    /** Harness wall-clock budget; GSD_LIVE_WORKFLOW_TIMEOUT_MS always wins when set. */
     timeoutMs?: number;
     maxRestarts?: number;
   };
@@ -61,12 +61,19 @@ function skip(reason: string): never {
   process.exit(77);
 }
 
-function resolveOutputFormat(): LiveWorkflowOutputFormat {
-  return process.env.GSD_LIVE_WORKFLOW_OUTPUT?.trim() === "stream-json" ? "stream-json" : "text";
+export function resolveLiveWorkflowOutputFormat(): LiveWorkflowOutputFormat {
+  return process.env.GSD_LIVE_WORKFLOW_OUTPUT?.trim() === "text" ? "text" : "stream-json";
 }
 
 function resolveTimeoutMs(scenario: LiveWorkflowScenario): number {
   return Number(process.env.GSD_LIVE_WORKFLOW_TIMEOUT_MS ?? scenario.dispatch?.timeoutMs ?? 300_000);
+}
+
+/** Keep auto's product-level overall timeout disabled unless the operator explicitly requests one. */
+export function resolveHeadlessTimeoutMs(scenario: LiveWorkflowScenario): number {
+  const override = process.env.GSD_LIVE_WORKFLOW_TIMEOUT_MS;
+  if (override !== undefined) return Number(override);
+  return (scenario.dispatch?.command ?? "next") === "auto" ? 0 : resolveTimeoutMs(scenario);
 }
 
 function parseJsonEvents(stdout: string): Record<string, unknown>[] {
@@ -84,6 +91,20 @@ function parseJsonEvents(stdout: string): Record<string, unknown>[] {
     }
   }
   return events;
+}
+
+export function assertSuccessfulHeadlessResult(events: readonly Record<string, unknown>[]): void {
+  let result: Record<string, unknown> | undefined;
+  for (const event of events) {
+    if (event.type === "headless_result") result = event;
+  }
+  assert.ok(result, "missing headless_result from stream-json output");
+  assert.equal(
+    result.status,
+    "success",
+    `expected successful headless result, got status=${String(result.status)}, exitCode=${String(result.exitCode)}`,
+  );
+  assert.equal(result.exitCode, 0, `expected headless_result exitCode=0, got ${String(result.exitCode)}`);
 }
 
 function collectToolNames(events: readonly Record<string, unknown>[]): string[] {
@@ -138,14 +159,15 @@ export async function runLiveWorkflowScenario(scenario: LiveWorkflowScenario): P
     const requestedModel = process.env.GSD_LIVE_WORKFLOW_MODEL?.trim();
     const model = normalizeLiveWorkflowModel(requestedModel);
     const timeoutMs = resolveTimeoutMs(scenario);
-    const outputFormat = resolveOutputFormat();
+    const headlessTimeoutMs = resolveHeadlessTimeoutMs(scenario);
+    const outputFormat = resolveLiveWorkflowOutputFormat();
     const dispatchArgs = [
       "headless",
       "--output-format",
       outputFormat,
       ...(outputFormat === "text" ? ["--verbose"] : []),
       "--timeout",
-      String(timeoutMs),
+      String(headlessTimeoutMs),
       "--max-restarts",
       String(scenario.dispatch?.maxRestarts ?? 0),
       ...(model ? ["--model", model] : []),
@@ -174,6 +196,7 @@ export async function runLiveWorkflowScenario(scenario: LiveWorkflowScenario): P
     console.log(`transcript: ${artifacts.dir}/transcript.txt`);
 
     assert.ok(!result.timedOut, "unit dispatch hit the harness timeout — raise GSD_LIVE_WORKFLOW_TIMEOUT_MS");
+    if (outputFormat === "stream-json") assertSuccessfulHeadlessResult(events);
     assert.equal(
       result.code,
       0,

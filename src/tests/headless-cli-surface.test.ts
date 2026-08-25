@@ -26,6 +26,7 @@ import { VALID_OUTPUT_FORMATS } from '../headless-types.js'
 
 interface HeadlessOptions {
   timeout: number
+  timeoutExplicit?: boolean
   json: boolean
   outputFormat: OutputFormat
   model?: string
@@ -66,6 +67,7 @@ function parseHeadlessArgs(argv: string[]): HeadlessOptions {
     if (arg.startsWith('--')) {
       if (arg === '--timeout' && i + 1 < args.length) {
         options.timeout = parseInt(args[++i], 10)
+        options.timeoutExplicit = true
       } else if (arg === '--json') {
         options.json = true
         options.outputFormat = 'stream-json'
@@ -339,8 +341,9 @@ test('--events still works with new outputFormat default', () => {
 })
 
 test('--timeout still works', () => {
-  const opts = parseHeadlessArgs(['node', 'gsd', 'headless', '--timeout', '60000', 'auto'])
-  assert.equal(opts.timeout, 60000)
+  const opts = parseHeadlessArgs(['node', 'gsd', 'headless', '--timeout', '300000', 'auto'])
+  assert.equal(opts.timeout, 300000)
+  assert.equal(opts.timeoutExplicit, true)
 })
 
 test('--supervised still works and implies stream-json', () => {

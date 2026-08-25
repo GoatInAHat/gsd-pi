@@ -470,7 +470,7 @@ echo "Build a CLI tool" | gsd headless new-milestone --context -
 
 | Flag | Description |
 |------|-------------|
-| `--timeout N` | Overall timeout in milliseconds (default: 300000 / 5 min) |
+| `--timeout N` | Overall timeout in milliseconds. The default is 300000 (5 min), except `auto`, whose overall timeout is disabled unless this flag is set. Use `0` to disable explicitly. |
 | `--max-restarts N` | Auto-restart on crash with exponential backoff (default: 3). Set 0 to disable. Deterministic no-work failures are not restart-eligible. |
 | `--json` | Stream all events as JSONL to stdout |
 | `--model ID` | Override the model for the headless session |
@@ -481,7 +481,12 @@ echo "Build a CLI tool" | gsd headless new-milestone --context -
 
 **Exit codes:** `0` = complete, `1` = error or timeout, `10` = blocked, `11` = cancelled.
 
-In JSON output summaries, headless can also return `status: "no-work-deterministic"` for repeatable no-progress tails (for example select → input → cancelled). This status exits with code `1` and suppresses automatic restart loops.
+With `--json` or `--output-format stream-json`, the event stream ends with a
+`headless_result` object. Its `status` and `exitCode` are the authoritative
+terminal result for automation; human-readable output is diagnostic only.
+Headless can return `status: "no-work-deterministic"` for repeatable no-progress
+tails (for example select → input → cancelled). This status exits with code `1`
+and suppresses automatic restart loops.
 
 Any `/gsd` subcommand works as a positional argument — `gsd headless status`, `gsd headless doctor`, `gsd headless dispatch execute`, etc.
 

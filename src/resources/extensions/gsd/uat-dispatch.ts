@@ -2,14 +2,15 @@
 // File Purpose: Resolve whether a completed slice needs run-uat dispatch.
 
 import { loadFile } from "./files.js";
+import { getAssessment } from "./gsd-db.js";
 import type { GSDPreferences } from "./preferences.js";
-import { resolveSliceFile } from "./paths.js";
+import { relSliceFile, resolveSliceFile } from "./paths.js";
 import {
   classifyUatContentForRun,
   shouldDispatchUatForContent,
   type UatType,
 } from "./uat-policy.js";
-import { hasVerdict } from "./verdict-parser.js";
+import { extractVerdict, hasVerdict, isAcceptableUatVerdict } from "./verdict-parser.js";
 import { logWarning } from "./workflow-logger.js";
 
 export interface UatDispatchCandidate {
@@ -17,6 +18,9 @@ export interface UatDispatchCandidate {
 }
 
 export type RunUatDispatch = { sliceId: string; uatType: UatType };
+export interface RunUatDispatchOptions {
+  retryNonPass?: boolean;
+}
 
 async function loadSliceFileContent(
   base: string,
@@ -56,6 +60,7 @@ async function resolveCandidateRunUatDispatch(
   milestoneId: string,
   candidate: UatDispatchCandidate,
   prefs: GSDPreferences | undefined,
+  options: RunUatDispatchOptions,
 ): Promise<RunUatDispatch | null> {
   const uatContent = await loadSliceFileContent(
     base,
@@ -64,7 +69,6 @@ async function resolveCandidateRunUatDispatch(
     "UAT",
   );
   if (!uatContent) return null;
-  if (hasVerdict(uatContent)) return null;
 
   const assessmentContent = await loadSliceFileContent(
     base,
@@ -72,17 +76,30 @@ async function resolveCandidateRunUatDispatch(
     candidate.sliceId,
     "ASSESSMENT",
   );
-  if (assessmentContent && hasVerdict(assessmentContent)) return null;
+  const assessmentScope = String(
+    getAssessment(relSliceFile(base, milestoneId, candidate.sliceId, "ASSESSMENT"))?.scope ?? "",
+  ).trim().toLowerCase();
+  const isUatAssessment = assessmentScope !== "roadmap" && assessmentScope !== "backfill";
+  const verdictContent = isUatAssessment && assessmentContent && hasVerdict(assessmentContent)
+    ? assessmentContent
+    : hasVerdict(uatContent)
+      ? uatContent
+      : null;
+  const uatType = await resolveRunUatEffectiveType(
+    base,
+    milestoneId,
+    candidate.sliceId,
+    uatContent,
+  );
+  if (verdictContent) {
+    const verdict = extractVerdict(verdictContent);
+    if (!options.retryNonPass || !verdict || isAcceptableUatVerdict(verdict, uatType)) return null;
+  }
   if (!shouldDispatchUatForContent(uatContent, prefs)) return null;
 
   return {
     sliceId: candidate.sliceId,
-    uatType: await resolveRunUatEffectiveType(
-      base,
-      milestoneId,
-      candidate.sliceId,
-      uatContent,
-    ),
+    uatType,
   };
 }
 
@@ -112,6 +129,7 @@ export async function findRunUatDispatchFromCandidates(
   milestoneId: string,
   candidates: readonly UatDispatchCandidate[],
   prefs: GSDPreferences | undefined,
+  options: RunUatDispatchOptions = {},
 ): Promise<RunUatDispatch | null> {
   for (const candidate of candidates) {
     const dispatch = await resolveCandidateRunUatDispatch(
@@ -119,6 +137,7 @@ export async function findRunUatDispatchFromCandidates(
       milestoneId,
       candidate,
       prefs,
+      options,
     );
     if (dispatch) return dispatch;
   }
@@ -139,13 +158,15 @@ export async function findRunUatDispatchFromCandidates(
  * - No completed slices exist in DB or the caller-provided fallback candidates
  * - uat_dispatch is not enabled and the UAT spec does not require runtime/browser evidence
  * - No UAT file exists for the slice
- * - UAT result already exists in the UAT or ASSESSMENT file
+ * - A UAT result already exists in the UAT or UAT-scoped ASSESSMENT file,
+ *   unless milestone closeout requested a retry of a non-acceptable verdict
  */
 export async function checkNeedsRunUat(
   base: string,
   milestoneId: string,
   prefs: GSDPreferences | undefined,
   fallbackCandidates: readonly UatDispatchCandidate[] = [],
+  options: RunUatDispatchOptions = {},
 ): Promise<RunUatDispatch | null> {
   try {
     const dbCandidates = await getDbCompletedSliceCandidates(milestoneId);
@@ -158,6 +179,7 @@ export async function checkNeedsRunUat(
         milestoneId,
         dbCandidates,
         prefs,
+        options,
       );
     }
   } catch (err) {
@@ -172,5 +194,6 @@ export async function checkNeedsRunUat(
     milestoneId,
     fallbackCandidates,
     prefs,
+    options,
   );
 }

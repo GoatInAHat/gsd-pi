@@ -2074,7 +2074,12 @@ export async function autoLoop(
           unitType: iterData.unitType,
           unitId: iterData.unitId,
         });
-        finishTurn("retry", "closeout", finalizeDecision.ledgerErrorSummary, "finalize-retry");
+        finishTurn(
+          "retry",
+          "closeout",
+          finalizeDecision.ledgerErrorSummary,
+          s.orchestration?.retryActiveUnit ? null : "finalize-retry",
+        );
         continue;
       }
 

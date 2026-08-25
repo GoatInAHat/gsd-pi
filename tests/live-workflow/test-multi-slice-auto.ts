@@ -7,10 +7,9 @@
  * complete-slice, and the milestone closeout. It proves the loop reaches the
  * fixed point a user expects — not just that one agent turn did work.
  *
- * Proof is durable only — never agent prose: exit code, each task's own
- * verification command, git history, milestone/slice/task rows in gsd.db
- * (including slice completion order), and the absence of liveness/wedge/
- * pause/error lines on the child's stderr.
+ * Proof is durable only — never agent prose: the structured terminal result,
+ * exit code, each task's own verification command, git history, and
+ * milestone/slice/task rows in gsd.db (including slice completion order).
  *
  * Exit: 0 pass · 77 skip (no creds) · non-zero fail.
  */
@@ -18,19 +17,14 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { stripAnsi } from "../e2e/_shared/index.ts";
 import { type FixtureSlice, runVerification, seedMultiSliceMilestone } from "./harness.ts";
 import { runLiveWorkflowScenario } from "./scenario.ts";
 
-// Authority: a manual single-task auto run on 2026-08-23 took ~275s
-// (kimi-for-coding); five tasks plus closeout need room. Override with
-// GSD_LIVE_WORKFLOW_TIMEOUT_MS.
-const AUTO_TIMEOUT_MS = 1_800_000;
-// Only the child's stderr is scanned: that is where gsd's operator
-// notifications (liveness, wedge, pause, provider errors) land. Fixture test
-// output from the agent's tool calls goes to stdout and is not scanned.
-const STDERR_FAILURE_RE = /liveness|wedge|Cannot dispatch|paused|error/i;
-
+// Authority: the 2026-08-24 remediation-path run reached its final UAT retry at
+// 1,800s. Its prior S03 UAT took 129s and the slowest validation took 277s, so
+// the complete measured path needs more than 2,206s. Use a 2,400s harness
+// budget; headless auto keeps its own overall timeout disabled.
+const AUTO_TIMEOUT_MS = 2_400_000;
 let slices: FixtureSlice[] = [];
 
 const result = await runLiveWorkflowScenario({
@@ -45,9 +39,6 @@ const result = await runLiveWorkflowScenario({
 });
 
 try {
-  const badLines = stripAnsi(result.stderr).split("\n").filter((line) => STDERR_FAILURE_RE.test(line));
-  assert.equal(badLines.length, 0, `auto reported liveness/wedge/pause/error lines on stderr:\n${badLines.join("\n")}`);
-
   const taskCount = slices.reduce((n, s) => n + s.tasks.length, 0);
   assert.ok(
     result.commitsAfter - result.commitsBefore >= taskCount,
@@ -69,11 +60,11 @@ try {
     const sliceRows = db
       .prepare("SELECT id, status, completed_at FROM slices WHERE milestone_id = 'M001' ORDER BY id")
       .all() as { id: string; status: string; completed_at: string | null }[];
-    assert.deepEqual(
-      sliceRows.map((r) => [r.id, r.status]),
-      slices.map((s) => [s.id, "complete"]),
-      "every seeded slice should be complete",
-    );
+    const sliceStatus = new Map(sliceRows.map((row) => [row.id, row.status]));
+    for (const slice of slices) {
+      assert.equal(sliceStatus.get(slice.id), "complete", `${slice.id} should be complete`);
+    }
+    assert.ok(sliceRows.every((row) => row.status === "complete"), "every workflow slice should be complete");
     for (let i = 1; i < sliceRows.length; i++) {
       const prev = sliceRows[i - 1];
       const cur = sliceRows[i];
@@ -87,11 +78,13 @@ try {
     const taskRows = db
       .prepare("SELECT slice_id, id, status FROM tasks WHERE milestone_id = 'M001' ORDER BY slice_id, id")
       .all() as { slice_id: string; id: string; status: string }[];
-    assert.deepEqual(
-      taskRows.map((r) => [r.slice_id, r.id, r.status]),
-      slices.flatMap((s) => s.tasks.map((t) => [s.id, t.id, "complete"])),
-      "every seeded task should be complete",
-    );
+    const taskStatus = new Map(taskRows.map((row) => [`${row.slice_id}/${row.id}`, row.status]));
+    for (const slice of slices) {
+      for (const task of slice.tasks) {
+        assert.equal(taskStatus.get(`${slice.id}/${task.id}`), "complete", `${slice.id}/${task.id} should be complete`);
+      }
+    }
+    assert.ok(taskRows.every((row) => row.status === "complete"), "every workflow task should be complete");
   } finally {
     db.close();
   }

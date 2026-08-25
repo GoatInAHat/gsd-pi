@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { formatProgress, formatThinkingLine, formatCostLine, summarizeToolArgs } from '../headless-ui.js'
+import { formatProgress, formatProgressOutput, formatThinkingLine, formatCostLine, summarizeToolArgs } from '../headless-ui.js'
 import type { ProgressContext } from '../headless-ui.js'
 
 // Tests run with NO_COLOR or non-TTY stderr, so ANSI codes are empty strings.
@@ -118,6 +118,15 @@ describe('formatProgress', () => {
       }, ctx())
       assert.ok(result)
       assert.ok(result.includes('Auto-mode started'))
+    })
+
+    it('starts a progress line after an open streaming block', () => {
+      const result = formatProgressOutput({
+        type: 'extension_ui_request',
+        method: 'notify',
+        message: 'Auto-mode blocked',
+      }, ctx(), true)
+      assert.equal(result, '\n[gsd]     Auto-mode blocked\n')
     })
 
     it('bolds important notifications', () => {

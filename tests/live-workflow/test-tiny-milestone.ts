@@ -16,10 +16,10 @@
 import assert from "node:assert/strict";
 
 import { seedTinyMilestone } from "./harness.ts";
-import { runLiveWorkflowScenario } from "./scenario.ts";
+import { resolveLiveWorkflowOutputFormat, runLiveWorkflowScenario } from "./scenario.ts";
 
 function shouldRequireToolEvents(): boolean {
-  return process.env.GSD_LIVE_WORKFLOW_OUTPUT === "stream-json";
+  return resolveLiveWorkflowOutputFormat() === "stream-json";
 }
 
 const result = await runLiveWorkflowScenario({

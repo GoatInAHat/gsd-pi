@@ -46,9 +46,9 @@
 | Flag | Description |
 |------|-------------|
 | `gsd headless` | Run without TUI |
-| `gsd headless --timeout N` | Timeout in ms (default: 300000) |
+| `gsd headless --timeout N` | See the [authoritative command reference](../../docs/user-docs/commands.md#headless-mode) for timeout defaults |
 | `gsd headless --max-restarts N` | Auto-restart on crash (default: 3) |
-| `gsd headless --json` | Stream events as JSONL |
+| `gsd headless --json` | Stream events and the terminal result as JSONL; see the [authoritative command reference](../../docs/user-docs/commands.md#headless-mode) |
 | `gsd headless --model ID` | Override model |
 | `gsd headless --thinking LEVEL` | Override thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) |
 | `gsd headless --context <file>` | Context file for `new-milestone` |
