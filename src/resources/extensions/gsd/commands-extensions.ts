@@ -8,7 +8,7 @@
 
 import type { ExtensionCommandContext } from "@gsd/pi-coding-agent";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { gsdHome } from "./gsd-home.js";
@@ -269,12 +269,31 @@ function discoverManifests(): Map<string, ExtensionManifest> {
   }
 
   // Shell-installed packages remain in the package manager's install tree.
-  // Their registry entry records the manifest directory so this command sees
-  // the same extensions that the runtime package loader already resolves.
+  // Entries that recorded their manifest directory (extensionDir) resolve
+  // directly; npm entries without one fall back to the package manager's
+  // node_modules layout via installedFrom, so list/info/enable/disable see
+  // the same extensions the runtime package loader already resolves.
   for (const entry of Object.values(loadRegistry().entries)) {
-    if (!entry.extensionDir) continue;
     if (entry.source === "project" && entry.projectDir !== resolve(process.cwd())) continue;
-    const manifest = readManifest(entry.extensionDir);
+
+    if (entry.extensionDir) {
+      const manifest = readManifest(entry.extensionDir);
+      if (manifest && (entry.source === "project" || !manifests.has(manifest.id))) {
+        manifests.set(manifest.id, manifest);
+      }
+      continue;
+    }
+
+    if (entry.installType !== "npm" || !entry.installedFrom) continue;
+    const npmRoot = entry.source === "project"
+      ? join(process.cwd(), ".gsd", "npm", "node_modules")
+      : join(gsdHome(), "agent", "npm", "node_modules");
+    const packageDir = resolve(npmRoot, npmPackageName(entry.installedFrom));
+    const resolvedRoot = resolve(npmRoot);
+    if (packageDir !== resolvedRoot && !packageDir.startsWith(resolvedRoot + sep)) {
+      continue;
+    }
+    const manifest = readManifest(packageDir);
     if (manifest && (entry.source === "project" || !manifests.has(manifest.id))) {
       manifests.set(manifest.id, manifest);
     }
@@ -284,6 +303,15 @@ function discoverManifests(): Map<string, ExtensionManifest> {
 
 function getInstalledExtDir(): string {
   return join(gsdHome(), "extensions");
+}
+
+function npmPackageName(specifier: string): string {
+  if (specifier.startsWith("@")) {
+    const versionSeparator = specifier.indexOf("@", specifier.indexOf("/") + 1);
+    return versionSeparator === -1 ? specifier : specifier.slice(0, versionSeparator);
+  }
+  const versionSeparator = specifier.indexOf("@");
+  return versionSeparator === -1 ? specifier : specifier.slice(0, versionSeparator);
 }
 
 // Source: derived from npm/git URL conventions (from RESEARCH.md)
@@ -1012,7 +1040,9 @@ function handleList(ctx: ExtensionCommandContext): void {
       lines[lines.length - 1] = lastLine + `      [${regEntry.source}]`;
       if (regEntry.installedFrom) {
         const typePrefix = regEntry.installType ? `${regEntry.installType}:` : "";
-        const versionSuffix = regEntry.version ? `@${regEntry.version}` : "";
+        const versionSuffix = regEntry.version && !regEntry.installedFrom.endsWith(`@${regEntry.version}`)
+          ? `@${regEntry.version}`
+          : "";
         lines.push(`  installed from: ${typePrefix}${regEntry.installedFrom}${versionSuffix}`);
       }
     }
