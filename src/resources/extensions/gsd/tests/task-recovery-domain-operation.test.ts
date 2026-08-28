@@ -1275,7 +1275,8 @@ test("durable budget use survives retries and exhausts to agent abort", async ()
     sliceId: "S01",
     taskId: "T01",
   }), {
-    action: "resume",
+    action: "continue",
+    resumeAuthorized: true,
     recoveryActionId: third.recoveryActionId,
     attemptId: thirdFailure.attemptId,
     resultId: thirdFailure.resultId,
@@ -1329,12 +1330,14 @@ test("durable budget use survives retries and exhausts to agent abort", async ()
     logPostDerive: () => {},
   })).prompt;
   for (const prompt of [builtInPrompt, customPrompt]) {
-    assert.match(prompt, /Required action:\*\* resume/);
+    assert.match(prompt, /Required action:\*\* continue/);
     assert.match(prompt, new RegExp(summaries[2]));
     assert.match(prompt, /The missing tool surface was restored in the executor runtime/);
     assert.match(prompt, /open-gsd\/gsd-pi#1457/);
     assert.match(prompt, /focused recovery tests passed/);
-    assert.match(prompt, /apply and verify the explicitly authorized repair evidence/i);
+    assert.match(prompt, /resume authorization is already durable/i);
+    assert.match(prompt, /do not call `gsd_task_recovery_resume`/i);
+    assert.match(prompt, /continue from the checkpoint/i);
   }
   assert.match(customPrompt, /Non-authoritative Custom Engine Context/);
   assert.deepEqual(row(`
@@ -1474,7 +1477,7 @@ test("deterministic repair abort resumes after restart and is consumed by one su
     milestoneId: "M001",
     sliceId: "S01",
     taskId: "T01",
-  })?.action, "resume");
+  })?.action, "continue");
 
   const thirdDispatchId = insertClaimedDispatch(3);
   const third = claimTaskAttempt({
