@@ -605,7 +605,7 @@ test("initResources syncs top-level shared resources used by extension imports",
   );
 });
 
-test("initResources steady-state hash match returns before recursive drift checks", async (t) => {
+test("initResources steady-state extension match skips refresh for non-extension drift", async (t) => {
   const tmp = mkdtempSync(join(tmpdir(), "gsd-resource-loader-fast-path-"));
   const fakeAgentDir = join(tmp, ".gsd", "agent");
   const skillsDir = join(tmp, "skills");
@@ -626,12 +626,43 @@ test("initResources steady-state hash match returns before recursive drift check
 
   assert.doesNotThrow(
     () => initResources(fakeAgentDir, skillsDir),
-    "matching manifest hash should return before walking installed resource trees",
+    "matching manifest and extensions should skip the refresh path",
   );
   assert.equal(
     readFileSync(sharedDir, "utf-8"),
     "not a directory",
     "matching manifest hash should skip the refresh path",
+  );
+});
+
+test("initResources repairs missing bundled extension files with a current manifest", async (t) => {
+  const tmp = mkdtempSync(join(tmpdir(), "gsd-resource-loader-extension-drift-"));
+  const fakeAgentDir = join(tmp, ".gsd", "agent");
+  const skillsDir = join(tmp, "skills");
+
+  t.after(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  const { initResources } = await import("../resource-loader.ts");
+  initResources(fakeAgentDir, skillsDir);
+
+  const extensionsDir = join(fakeAgentDir, "extensions", "gsd");
+  const extensionSuffix = existsSync(join(extensionsDir, "auto.ts")) ? ".ts" : ".js";
+  const missingFile = join(extensionsDir, `debug-logger${extensionSuffix}`);
+  const corruptedFile = join(extensionsDir, `auto${extensionSuffix}`);
+  const originalCorruptedContent = readFileSync(corruptedFile, "utf-8");
+
+  rmSync(missingFile);
+  writeFileSync(corruptedFile, "CORRUPTED\n");
+
+  initResources(fakeAgentDir, skillsDir);
+
+  assert.equal(existsSync(missingFile), true, "missing bundled extension files should be restored");
+  assert.equal(
+    readFileSync(corruptedFile, "utf-8"),
+    originalCorruptedContent,
+    "a repair sync should overwrite other drifted extension files",
   );
 });
 
