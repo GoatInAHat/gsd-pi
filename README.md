@@ -28,16 +28,16 @@ See [CHANGELOG.md](./CHANGELOG.md) for release-by-release fixes and [Legacy Rele
 ## Latest Release Highlights
 
 <!-- release-highlights:start -->
-Latest release: **v1.16.2**
+Latest release: **v1.17.0**
 
-- **tui:** Hide completed project sentinel.
-- **headless:** Classify live workflow outcomes structurally.
-- **gsd:** Recover failed UAT closeout.
-- **legacy-import:** Take only the code span of a Verification bullet as the verify command (#1982).
-- **auto:** Abort the live host turn on permanent provider-error pause; completion gate names its recovery lever and admits blocker reports (#1977).
-- **state-reconciliation:** Stop mapping remediation slice ids onto other slices' plan files (#1976).
-- **auto:** Keep the verification auto-fix retry bound attempt-independent and pause loudly on durable abort (#1972).
-- **legacy-import:** Carry Verification/Inputs/Expected Output from a task's ### section into its import claim (#1970).
+- **gsd:** Non-blocking cheaper/better same-tier Copilot notifications (GSD-W017) (#2060).
+- **gsd:** Session-start GitHub Copilot catalog refresh (GSD-W018) (#2058).
+- **copilot-models:** Add safe registration and provider-aware diagnostics.
+- **copilot-models:** Explain provider-aware routing and pricing.
+- **gsd:** Add profile-confidence routing safety.
+- **copilot-models:** Add opt-in --register overlay writer (Phase H slice 1).
+- **gsd:** Annotate Copilot catalog drift with registry ID and capability tier.
+- **copilot-models:** Add live catalog sync command and tests.
 
 <!-- release-highlights:end -->
 

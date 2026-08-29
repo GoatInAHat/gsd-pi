@@ -8,6 +8,69 @@ This changelog starts from the `open-gsd/gsd-pi` ownership baseline. Earlier pro
 
 ## [Unreleased]
 
+## [1.17.0] - 2026-08-29
+
+### Added
+- **gsd**: non-blocking cheaper/better same-tier Copilot notifications (GSD-W017) (#2060)
+- **gsd**: session-start GitHub Copilot catalog refresh (GSD-W018) (#2058)
+- **copilot-models**: add safe registration and provider-aware diagnostics
+- **copilot-models**: explain provider-aware routing and pricing
+- **gsd**: add profile-confidence routing safety
+- **copilot-models**: add opt-in --register overlay writer (Phase H slice 1)
+- **gsd**: annotate Copilot catalog drift with registry ID and capability tier
+- **copilot-models**: add live catalog sync command and tests
+
+### Fixed
+- **test**: raise baseline invariant timeout to cover slower machines (#2057)
+- **issue**: [Bug]: recover  fails with LEGACY_IMPORT_APPLICATION_PREVIEW_UNRESOLVED - filename pattern mismatch (#2049)
+- **issue**: [Bug]: stalled-tool watchdog aborts a legitimately long-running subagent (parallel reviewer dispatch), so validate-milestone is killed before it can persist and the liveness backstop wedges auto-mode (#2053)
+- **gsd**: address 6 fresh Copilot automated-review findings on PR #1978
+- **gsd**: fully adopt canonicalizeModelId after rebasing past upstream #2035
+- **copilot-models**: scope account keys and notification dedup to the actual sync event
+- address 7 new GitHub Copilot review findings on PR #1978
+- implement documented user-override precedence, fix getApiKey-throws regression
+- correct 4 regressions found by an independent codex review
+- address Copilot automated review findings on PR #1978
+- **gsd**: reject wrong-provider pricing targets before resolving auth
+- **gsd**: harden copilot catalog state and economics coverage
+- **gsd**: describe expanded copilot-models command surface
+- **gsd**: complete Copilot model explanation contract
+- **gsd**: make Copilot model explanation local and truthful
+- **gsd**: align overlay-writer test typing with dynamic model ids
+- **gsd**: quarantine incomplete Copilot catalog models
+- **copilot-models**: prove manual-selection claim, drop unlinkable plan refs
+- **gsd**: include copilot-models in full help
+- **issue**: [Bug]: `gsd install` (shell) never writes an extensions registry entry, making installed extensions invisible to `/gsd extensions list`/`update` (#2012)
+- **mcp-server**: mirror canonical read payloads into structuredContent (#2039)
+- **extensions**: parse pinned specifiers on update-all, harden temp cleanups, unique registry staging (#2044)
+- **daemon**: port mcp-server's PATH lookup and empty-sessionId guards (#2043)
+- **update-check**: sort prereleases below the same release in compareSemver (#2045)
+- **pi-agent-core**: end the loop stream with an error message when runAgentLoop throws (#2041)
+- **pi-coding-agent**: make execCommand's SIGKILL escalation actually fire (#2040)
+- **mcp-server**: validate projectDir and verify the recorded PID before gsd_cancel signals it (#2038)
+- **daemon**: don't dereference cleared pendingBlocker in relay success log (#2037)
+- **issue**: [Bug] plan-slice timeout writes invalid canonical PLAN then enters finalize-retry wedge (#1996)
+- **pi-ai**: map unknown and paused Anthropic stop reasons to the error terminal instead of throwing (#2042)
+- **issue**: [Bug]: `gsd list` (shell) never reads the extensions registry, so extensions installed via `/gsd extensions install` show as "No packages installed." (#2009)
+- **issue**: [Bug]: `/gsd extensions list` shows a duplicated `npm:` prefix in "installed from" (`npm:npm:<pkg>@<version>`) (#2010)
+- **gsd**: allow repeated successful requirement saves (#2000)
+- **issue**: plan-milestone prompt mentions forbidden gsd_resume, then recovery marks failed planning as completed S00-blocker (#2023)
+- **issue**: Authorized recovery prompt becomes stale after auto claims successor Attempt (#1989)
+- **issue**: [Bug]: task reopened to ready with NO attempt lineage after a failed completion wedges on orphaned SUMMARY artifact — taskHasAttemptHistory=false defeats #1771 skip-guard, rebuild/doctor give 0 auto-fixable (1.16.1) (#1984)
+- **issue**: Windows: projection-lock transient wedges auto-mode after 2 strikes — loop re-detects transience from taxonomy-labeled reason string, regex no longer matches (defeats #1690/#1856 backoff budget) (#2003)
+- **issue**: [Bug]: gsd_task_settle --reconcileLifecycle cannot reconcile orphaned in_progress lifecycle row whose latest Attempt outcome is succeeded (variant of #1983) (#2019)
+- **issue**: Terminal deadlock: agent-owned `abort` + `lifecycle=ready` + reopen restricted to `status=complete` → execute-task is undispatchable (#2022)
+- **issue**: [Bug]: plan-slice content validator counts 0 tasks when task ids are slice-qualified (S07-T01) — unrecoverable finalize-retry wedge, sanctioned exit cannot fix it (#2027)
+- **issue**: [Bug]: initResources() never inspects the destination, so a torn ~/.gsd/agent/ copy is never repaired — and hasMissingBundledResourceFiles() has no caller (#2030)
+- **issue**: [Bug]: 503 no_available_providers never reaches model fallback — core-retry hand-off keys on a display-only string (#2032)
+- **issue**: [Bug]: Extensions installed via `/gsd extensions install` are registered but never loaded at runtime (#2011)
+- **issue**: [bug] model router ignores dotted Copilot model IDs and pins all phases to the ceiling model (#2035)
+
+### Changed
+- **gsd**: remove dead lastActiveAccountKey write-only variable
+- ignore generated GSD working state (#2036)
+- **verify-merge**: heavy-gate classifier and compile-once optimization (#1990)
+
 ## [1.16.2] - 2026-08-25
 
 ### Fixed
