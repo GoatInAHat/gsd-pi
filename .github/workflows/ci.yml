@@ -257,7 +257,8 @@ jobs:
           GSD_NATIVE_PREFER_LOCAL: '1'
         run: |
           chmod +x dist/loader.js
-          export GSD_SMOKE_BINARY="$(pwd)/dist/loader.js"
+          GSD_SMOKE_BINARY="$(pwd)/dist/loader.js"
+          export GSD_SMOKE_BINARY
           pnpm run test:e2e
 
       - name: Run docker e2e suite
@@ -369,7 +370,8 @@ jobs:
         shell: bash
         continue-on-error: true
         run: |
-          export GSD_SMOKE_BINARY="$(pwd)/dist/loader.js"
+          GSD_SMOKE_BINARY="$(pwd)/dist/loader.js"
+          export GSD_SMOKE_BINARY
           pnpm run test:e2e:windows-smoke
 
       - name: Flag Windows e2e smoke failure
@@ -443,7 +445,8 @@ jobs:
           GSD_NATIVE_PREFER_LOCAL: '1'
         run: |
           chmod +x dist/loader.js
-          export GSD_SMOKE_BINARY="$(pwd)/dist/loader.js"
+          GSD_SMOKE_BINARY="$(pwd)/dist/loader.js"
+          export GSD_SMOKE_BINARY
           pnpm run test:smoke
 
       - name: Verify SQLite close behavior on Node 22
@@ -456,10 +459,39 @@ jobs:
   # protection. Because it always runs, branch protection always has a concrete
   # pass/fail signal — a conditionally-skipped `build`/`windows-portability` job
   # can no longer read as a neutral "required check never reported" state.
+  workflow-lint:
+    name: workflow-lint
+    timeout-minutes: 5
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout repository without GITHUB_TOKEN
+        shell: bash
+        env:
+          FETCH_DEPTH: '0'
+        run: |
+          set -euo pipefail
+          git init "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -c protocol.version=2 fetch --no-tags --prune origin \
+            "+${GITHUB_SHA}:refs/checkout-ref"
+          git checkout --force --detach "$GITHUB_SHA"
+
+      - name: Run actionlint
+        run: |
+          set -euo pipefail
+          # Pinned: actionlint is the static-analysis gate for GitHub Actions
+          # workflows; runner-label exceptions live in actionlint.yaml.
+          ACTIONLINT_VERSION=v1.7.7
+          curl -sSfL "https://github.com/rhysd/actionlint/releases/download/${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION#v}_linux_amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin actionlint
+          actionlint -config-file .config/actionlint.yaml
+
   ci-gate:
     name: ci-gate
     if: always()
-    needs: [fast-gates, build, windows-portability, node22-smoke]
+    needs: [fast-gates, build, windows-portability, node22-smoke, workflow-lint]
     runs-on: ubuntu-latest
     steps:
       - name: Assert no upstream job failed or was cancelled
@@ -468,14 +500,15 @@ jobs:
           BUILD: ${{ needs.build.result }}
           WINDOWS: ${{ needs.windows-portability.result }}
           NODE22: ${{ needs.node22-smoke.result }}
+          WORKFLOW_LINT: ${{ needs.workflow-lint.result }}
         shell: bash
         run: |
           set -euo pipefail
-          echo "fast-gates=$FAST_GATES build=$BUILD windows-portability=$WINDOWS node22-smoke=$NODE22"
+          echo "fast-gates=$FAST_GATES build=$BUILD windows-portability=$WINDOWS node22-smoke=$NODE22 workflow-lint=$WORKFLOW_LINT"
           # 'skipped' is an acceptable result (job legitimately not needed).
           # Only 'failure' / 'cancelled' must block the merge.
           status=0
-          for result in "$FAST_GATES" "$BUILD" "$WINDOWS" "$NODE22"; do
+          for result in "$FAST_GATES" "$BUILD" "$WINDOWS" "$NODE22" "$WORKFLOW_LINT"; do
             case "$result" in
               success|skipped) ;;
               *) status=1 ;;
