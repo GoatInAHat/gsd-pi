@@ -12,6 +12,14 @@
       "kind": "runtime-slash"
     }
   ],
+  "contracts": {
+    "tools": [
+      "gsd_status"
+    ]
+  },
+  "skills": [
+    "./skills"
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
