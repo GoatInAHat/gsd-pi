@@ -28,16 +28,16 @@ See [CHANGELOG.md](./CHANGELOG.md) for release-by-release fixes and [Legacy Rele
 ## Latest Release Highlights
 
 <!-- release-highlights:start -->
-Latest release: **v1.18.0**
+Latest release: **v1.19.0**
 
-- **gsd:** Refresh models and pricing in session (#2095).
-- **models:** Refresh generated model catalog (#2120).
-- **gsd:** Remove dead Copilot catalog classification (#2094).
-- **issue:** Bug: finalize/retry lease race + gsd_task_recovery_resume missing 'remediate' handler strands completed tasks (#2113).
-- **gsd:** Make Copilot suggestions fail closed (#2093).
-- **gsd:** Preserve GitHub Copilot catalog unknowns (#2092).
-- **gsd:** Browser daemon warm-up burns its full timeout on an inherited stdio pipe (#2104).
-- **auto:** Register liveness identity on rejected unit-run claim (#2097) (#2098).
+- **vscode:** Add Copilot project read tools.
+- **gsd:** Expose progress read metadata.
+- **mcp:** GSD-side smoke probe and per-host checklist for canonical read tools (#2174).
+- **vscode:** Show DB-authoritative project progress in sidebar (#2136) (#2143).
+- **gsd:** Add gsd_project_snapshot canonical DB read tool (#2170).
+- **gsd:** Delete dead planner-handoff module (#2149).
+- **gsd:** Stop husk-task gates from wedging milestone closeout.
+- **gsd:** Rebuild markdown projections at the invocation root.
 
 <!-- release-highlights:end -->
 

@@ -8,6 +8,70 @@ This changelog starts from the `open-gsd/gsd-pi` ownership baseline. Earlier pro
 
 ## [Unreleased]
 
+## [1.19.0] - 2026-09-09
+
+### Added
+- **vscode**: add Copilot project read tools
+- **gsd**: expose progress read metadata
+- **mcp**: GSD-side smoke probe and per-host checklist for canonical read tools (#2174)
+- **vscode**: show DB-authoritative project progress in sidebar (#2136) (#2143)
+- **gsd**: add gsd_project_snapshot canonical DB read tool (#2170)
+
+### Fixed
+- **gsd**: stop husk-task gates from wedging milestone closeout
+- **gsd**: rebuild markdown projections at the invocation root
+- **gsd**: make the headless query preview non-mutating
+- **gsd**: stop doubling the colon in provider-error pause messages (#2229)
+- **gsd**: match persisted tool calls structurally, not by activity-file grep (#2226)
+- **gsd**: classify the lease-fencing abort as structural so the loop stops retrying (#2225)
+- **gsd**: ack the resume-wedge before the session switch so refusals render (#2224)
+- **gsd**: preserve the planned task title on legacy completions (#2220)
+- **gsd**: dismiss pending elicitation when a unit is abandoned (#2214)
+- **gsd**: enforce the blocking-rework gate on canonical task completion
+- **gsd**: honor passing task evidence over command-not-found verify pauses (#2211)
+- **gsd**: judge evidence cross-ref claims by the newest matching run (#2206)
+- **gsd**: exempt bounded execution tools from the 5-minute stall watchdog (#2204)
+- **gsd**: stop the bash write-guard from blocking read-only state access (#2201)
+- **gsd**: pause with the finalize cause instead of wedging on identical finalize retries (#2199)
+- **gsd**: enforce blocking post-unit hooks in step mode and persist gate state (#2197)
+- **gsd**: validate run-hook IDs by unit type (#2196)
+- **gsd**: normalize Markdown-formatted versions in the version check (#2192)
+- **gsd**: claim successor attempt after an authorized recovery resume (#2190)
+- **mcp**: block GSD_WORKFLOW_BRIDGE_TEST_DISABLE from secure_env_collect
+- **mcp**: address PR #2187 review findings
+- **vscode**: address PR #2179 review findings
+- **legacy-import**: handle same milestone IDs with different unique id
+- **vscode**: harden Copilot project read tools
+- **vscode**: constrain Copilot project reads
+- **gsd**: add GPT-6 Astra Copilot support
+- **gsd**: recover milestone completion status from summaries
+- **gsd**: honor auto_push at closeout when git.isolation is none (#2156)
+- **native**: allow deletion while the SQLite identity lock is held on Windows (#2183)
+- **gsd**: detect same-version resource drift via live fingerprint (#2163)
+- **gsd**: fix streaming render starvation and CTRL+O flash (#2124)
+- **gsd**: prevent UAT schema errors from poisoning retries (#2017)
+- **pi-agent-core**: preserve isError from resolved tool results (#2016)
+- **legacy-import**: handle contradictory task field in summary guard (#2152)
+- **gsd**: refuse no-create opens of a deleted DB path before any handle exists (#2181)
+- **gsd**: register out-of-band CONTEXT.md as a DB artifact at handoff (#2169)
+- **gsd**: pause with blocker escalation at the verify gate instead of wedging (#2168)
+- **gsd**: stop infinite redispatch when a retry-bound unit's dispatch fails (#2167)
+- **gsd**: pause with cause on schema-rejected completions in the durable path (#2166)
+- **gsd**: route execute-task git-commit retries through verification-retry (#2164)
+- **hermes**: link gsd-mcp-server and emit version bounds in generated config (#2151)
+- **vscode**: preserve opened sidebar sections across webview refresh (#2155)
+- **pi-agent-core**: continue and surface max_tokens truncation instead of ending silently (#2161)
+- **gsd**: stop classifying database snapshot wording as browser-required (#2162)
+- **scripts**: suggest a valid Codex review command in pr-risk-check (#2160)
+- **gsd**: drop unfixable compat-marker keys instead of quarantining the marker (#2147)
+- **gsd**: stop doctor env_git_remote false 'unreachable' on healthy repos (#2146)
+- **gsd**: keep blank lines truly empty in pushIndented PLAN.md output (#2145)
+- **gsd**: isolate project snapshot DB handle (#2172)
+- **gsd**: close Codex review findings on gsd_project_snapshot (#2175)
+
+### Changed
+- **gsd**: delete dead planner-handoff module (#2149)
+
 ## [1.18.0] - 2026-09-04
 
 ### Added
