@@ -129,26 +129,21 @@ export function runSegmentWalker(
 ): void {
 	const blocks = host.streamingMessage.content;
 
-	// Cache buildDesiredSegmentsForMessage result — the segment structure
-	// only changes when contentBlocks.length changes (new content blocks
-	// arrive). During streaming of the same block, the structure is stable
-	// and we skip the O(n) iteration over all blocks.
+	// NOTE: _desiredSegmentsCache is intentionally disabled — it causes
+	// stale text length during streaming, resulting in blocked incremental
+	// updates. Benchmark showed zero measurable CPU benefit for cache ON
+	// vs OFF (both ~1-2%). Keeping cache OFF for correct streaming;
+	// re-enable later with a proper invalidation strategy.
 	const blockCount = blocks.length;
 	let desired: ReturnType<typeof buildDesiredSegmentsForMessage>;
 	let shouldPruneProvisionalPreToolProse = false;
-	if (
-		rs._desiredSegmentsCache?.count === blockCount
-		&& rs._desiredSegmentsCache?.hideThinkingBlock === host.hideThinkingBlock
-	) {
-		desired = rs._desiredSegmentsCache.segments;
-	} else {
+	{
 		const { shouldPrune: pruneFlag } =
 			getProvisionalPreToolPrunePlan(host.streamingMessage);
 		shouldPruneProvisionalPreToolProse = pruneFlag;
 		desired = buildDesiredSegmentsForMessage(host.streamingMessage, {
 			hideThinkingBlock: host.hideThinkingBlock,
 		});
-		rs._desiredSegmentsCache = { count: blockCount, hideThinkingBlock: host.hideThinkingBlock, segments: desired };
 	}
 	desired = filterRedundantDiscussTextRuns(desired, blocks);
 
