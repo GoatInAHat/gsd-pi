@@ -25,6 +25,7 @@ import {
 	decideSchemaOverloadBreaker,
 	narrowedSchemaRetryInstruction,
 } from "./schema-overload-convergence.js";
+import { abortOriginFromSignal } from "./types.js";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -303,7 +304,9 @@ async function runLoop(
 
 			if (message.stopReason === "error" || message.stopReason === "aborted") {
 				await emit({ type: "turn_end", message, toolResults: [] });
-				await emit({ type: "agent_end", messages: newMessages });
+				const abortOrigin =
+					abortOriginFromSignal(signal) ?? (message.stopReason === "error" ? "error" : undefined);
+				await emit({ type: "agent_end", messages: newMessages, ...(abortOrigin ? { abortOrigin } : {}) });
 				return;
 			}
 
@@ -417,7 +420,7 @@ async function runLoop(
 					newMessages.push(stopMessage);
 					currentContext.messages.push(stopMessage);
 					await emit({ type: "turn_end", message: stopMessage, toolResults: [] });
-					await emit({ type: "agent_end", messages: newMessages });
+					await emit({ type: "agent_end", messages: newMessages, abortOrigin: abortOriginFromSignal(signal) ?? "error" });
 					return;
 				}
 			}
@@ -435,7 +438,7 @@ async function runLoop(
 				newMessages.push(stopMessage);
 				currentContext.messages.push(stopMessage);
 				await emit({ type: "turn_end", message: stopMessage, toolResults: [] });
-				await emit({ type: "agent_end", messages: newMessages });
+				await emit({ type: "agent_end", messages: newMessages, abortOrigin: abortOriginFromSignal(signal) ?? "error" });
 				return;
 			}
 
@@ -494,7 +497,7 @@ async function runLoop(
 					currentContext.messages.push(stopMessage);
 					await emit({ type: "turn_end", message: stopMessage, toolResults: [] });
 				}
-				await emit({ type: "agent_end", messages: newMessages });
+				await emit({ type: "agent_end", messages: newMessages, abortOrigin: abortOriginFromSignal(signal) ?? "programmatic" });
 				return;
 			}
 
@@ -513,7 +516,8 @@ async function runLoop(
 		break;
 	}
 
-	await emit({ type: "agent_end", messages: newMessages });
+	const abortOrigin = abortOriginFromSignal(signal);
+	await emit({ type: "agent_end", messages: newMessages, ...(abortOrigin ? { abortOrigin } : {}) });
 }
 
 /**
