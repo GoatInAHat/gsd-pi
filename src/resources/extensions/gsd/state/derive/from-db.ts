@@ -49,6 +49,7 @@ import {
   getRequestedMilestoneLock,
 } from './db-open.js';
 import { resolveMilestoneValidationVerdict } from '../../milestone-validation-verdict.js';
+import { isMilestoneLifecycleAdopted } from '../../db/milestone-closeout-readiness.js';
 
 const isStatusDone = isClosedStatus;
 
@@ -370,12 +371,14 @@ async function handleAllSlicesDone(
   // All roadmap slices are done (enforced by caller) and verdict is
   // needs-remediation — remediation cannot progress without new slices.
   // Return blocked instead of re-dispatching validate-milestone (#4506).
+  const allowLegacyVerdictOverride = !isMilestoneLifecycleAdopted(activeMilestone.id);
+
   if (verdict === 'needs-attention') {
     return buildDerivedState(
       context,
       'blocked',
       `Resolve ${activeMilestone.id} validation attention before proceeding.`,
-      { blockers: [formatNeedsAttentionBlocker(activeMilestone.id)] },
+      { blockers: [formatNeedsAttentionBlocker(activeMilestone.id, allowLegacyVerdictOverride)] },
     );
   }
 
@@ -384,7 +387,7 @@ async function handleAllSlicesDone(
       context,
       'blocked',
       `Resolve ${activeMilestone.id} remediation before proceeding.`,
-      { blockers: [formatNeedsRemediationBlocker(activeMilestone.id)] },
+      { blockers: [formatNeedsRemediationBlocker(activeMilestone.id, allowLegacyVerdictOverride)] },
     );
   }
 
