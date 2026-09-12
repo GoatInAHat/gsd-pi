@@ -171,6 +171,7 @@ export const MODEL_CAPABILITY_TIER: Record<string, ComplexityTier> = {
   "gemini-3-5-flash": "light",
   "gemini-3-6-flash": "light",
   "gemini-3-7-flash": "light",
+  "gemini-3-8-flash": "light",             // models.dev 2026-09 refresh: same class/pricing as Gemini 3.7 Flash
 
   // Standard-tier models
   "claude-sonnet-4": "standard",
@@ -194,6 +195,7 @@ export const MODEL_CAPABILITY_TIER: Record<string, ComplexityTier> = {
   "claude-opus-4-8": "heavy",
   "claude-opus-5": "heavy",
   "claude-fable-5": "heavy",
+  "claude-fable-5-1": "heavy",             // models.dev 2026-09 refresh: Fable 5.1 point release, same class/pricing as Fable 5
   "claude-3-opus-latest": "heavy",
   "gpt-4-turbo": "heavy",
   "gpt-5": "heavy",
@@ -235,6 +237,7 @@ const MODEL_COST_PER_1K_INPUT: Record<string, number> = {
   "claude-opus-4-8": 0.005,
   "claude-opus-5": 0.005,
   "claude-fable-5": 0.010,
+  "claude-fable-5-1": 0.010,
   "gpt-4o-mini": 0.00015,
   "gpt-4o": 0.0025,
   "gpt-4-1": 0.002,
@@ -269,6 +272,7 @@ const MODEL_COST_PER_1K_INPUT: Record<string, number> = {
   "gemini-3-5-flash": 0.0015,
   "gemini-3-6-flash": 0.00075,
   "gemini-3-7-flash": 0.00075,
+  "gemini-3-8-flash": 0.00075,
   "deepseek-chat": 0.00014,
   "grok-4-5": 0.002,
   "grok-4-6": 0.002,
@@ -288,6 +292,8 @@ export const MODEL_CAPABILITY_PROFILES: Record<string, ModelCapabilities> = {
   "claude-opus-4-8":              { coding: 97, debugging: 92, research: 87, reasoning: 97, speed: 30, longContext: 85, instruction: 92 },
   "claude-opus-5":                { coding: 97, debugging: 92, research: 87, reasoning: 97, speed: 30, longContext: 85, instruction: 92 },
   "claude-fable-5":               { coding: 97, debugging: 92, research: 87, reasoning: 97, speed: 30, longContext: 85, instruction: 92 },
+  // models.dev 2026-09 refresh: Fable 5.1 shares Fable 5's class and pricing; no published eval deltas yet.
+  "claude-fable-5-1":             { coding: 97, debugging: 92, research: 87, reasoning: 97, speed: 30, longContext: 85, instruction: 92 },
   "claude-sonnet-4":              { coding: 85, debugging: 80, research: 75, reasoning: 80, speed: 60, longContext: 75, instruction: 85 },
   "claude-sonnet-4-5":            { coding: 85, debugging: 80, research: 75, reasoning: 80, speed: 60, longContext: 75, instruction: 85 },
   "claude-sonnet-4-6":            { coding: 85, debugging: 80, research: 75, reasoning: 80, speed: 60, longContext: 75, instruction: 85 },
@@ -345,6 +351,8 @@ export const MODEL_CAPABILITY_PROFILES: Record<string, ModelCapabilities> = {
   "gemini-3-5-flash":             { coding: 62, debugging: 55, research: 60, reasoning: 58, speed: 92, longContext: 75, instruction: 72 },
   "gemini-3-6-flash":             { coding: 66, debugging: 58, research: 64, reasoning: 62, speed: 93, longContext: 88, instruction: 74 },
   "gemini-3-7-flash":             { coding: 68, debugging: 60, research: 66, reasoning: 64, speed: 93, longContext: 88, instruction: 75 },
+  // models.dev 2026-09 refresh: Gemini 3.8 Flash shares 3.7 Flash's class and pricing; no published eval deltas yet.
+  "gemini-3-8-flash":             { coding: 68, debugging: 60, research: 66, reasoning: 64, speed: 93, longContext: 88, instruction: 75 },
 
   // ── DeepSeek ───────────────────────────────────────────────────────────────
   "deepseek-chat":                { coding: 75, debugging: 65, research: 55, reasoning: 70, speed: 70, longContext: 55, instruction: 65 },

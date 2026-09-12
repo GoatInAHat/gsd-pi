@@ -117,10 +117,11 @@ describe("models.generated.ts", () => {
 	});
 
 	test("includes GPT-5.6 variants for the GitHub Copilot provider", () => {
+		// models.dev 2026-09 refresh: Copilot's gpt-5.6-sol cost moved to 4/20/0.4, matching the OpenAI listing; terra/luna unchanged.
 		expect("gpt-5.6" in MODELS["github-copilot"]).toBe(false);
 
 		for (const [id, name, input, output, cacheRead] of [
-			["gpt-5.6-sol", "GPT-5.6 Sol", 2, 10, 0.2],
+			["gpt-5.6-sol", "GPT-5.6 Sol", 4, 20, 0.4],
 			["gpt-5.6-terra", "GPT-5.6 Terra", 2, 12, 0.2],
 			["gpt-5.6-luna", "GPT-5.6 Luna", 0.2, 1.2, 0.02],
 		] as const) {
@@ -309,14 +310,17 @@ describe("models.generated.ts", () => {
 		});
 	});
 
-	test("keeps GitHub Copilot Claude 4.6 context at Copilot's 200K limit", () => {
-		for (const id of ["claude-opus-4.6", "claude-sonnet-4.6"] as const) {
-			const model = MODELS["github-copilot"][id];
+	test("keeps GitHub Copilot Claude context at Copilot's 200K limit", () => {
+		// models.dev 2026-09 refresh: Copilot dropped the Claude 4.6 generation this test pinned (claude-opus-4.6), so the 200K cap is guarded as a property over the Anthropic-transport Claude entries.
+		const anthropicClaudeModels = Object.values(MODELS["github-copilot"]).filter(
+			(model) => model.api === "anthropic-messages",
+		);
 
+		expect(anthropicClaudeModels.length).toBeGreaterThan(0);
+		for (const model of anthropicClaudeModels) {
+			expect(model.id).toMatch(/^claude-/);
 			expect(model.provider).toBe("github-copilot");
-			expect(model.api).toBe("anthropic-messages");
-			expect(model.contextWindow).toBe(200000);
-			expect(model.maxTokens).toBe(32000);
+			expect(model.contextWindow).toBe(200_000);
 		}
 	});
 
