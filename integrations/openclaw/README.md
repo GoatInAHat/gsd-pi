@@ -2,7 +2,7 @@
 
 [OpenClaw](https://docs.openclaw.ai) plugin integrating [GSD Pi](https://github.com/open-gsd/gsd-pi) as a structured delivery engine. Plugin id `open-gsd-openclaw`, npm package `@opengsd/open-gsd-openclaw`.
 
-The plugin declares GSD's MCP server and automatically synchronizes local GSD projects into OpenClaw's native project registry, TaskFlow, and optional Workboard. A Gateway service observes filesystem and session events. Registration and synchronization run in code, without skill instructions, agent bookkeeping, polling timers, or scheduled prompts. GSD owns execution and recovery.
+The plugin serves GSD's existing web UI in **Control UI → Portals**, declares GSD's MCP server, and automatically synchronizes local GSD projects into OpenClaw's native project registry, TaskFlow, and optional Workboard. Gateway services own the web host and observe filesystem and session events. Registration and synchronization run in code, without skill instructions, agent bookkeeping, polling timers, or scheduled prompts. GSD owns execution and recovery.
 
 ## Install
 
@@ -38,6 +38,30 @@ openclaw gateway restart
 
 Once Workboard is enabled, GSD cards appear automatically. No GSD plugin configuration is needed. Existing projects are reconciled when the Gateway starts, including when Workboard is enabled later.
 
+## Native web UI portal
+
+On Gateway startup the plugin opens a native portal titled **GSD**, then starts the existing GSD web host on IPv4 loopback with that portal's `PUBLIC_URL` and the selected `PORT`. Open **Control UI → Portals → GSD**. The app starts at its project picker; selecting a project uses GSD's own UI and APIs. Merely starting the portal does not start a coding run or select another builder's project.
+
+The GSD installation is resolved from `mcp.servers.gsd.env.GSD_CLI_PATH`, or `gsd` on PATH. Packaged installs use `dist/web/standalone/server.js`. Source checkouts use their installed Next.js development server when the standalone build is absent. Build a production host with `pnpm run build:web-host` in the GSD checkout. The plugin does not install dependencies or build assets during Gateway startup.
+
+Optional overrides belong under `plugins.entries.open-gsd-openclaw.config.webUi`:
+
+```json
+{
+  "enabled": true,
+  "packageRoot": "/absolute/path/to/gsd-pi",
+  "port": 43120
+}
+```
+
+All fields are optional. `enabled` defaults to true; the default port is available and dynamically selected. Set `enabled: false` to disable web hosting without disabling MCP or synchronization. Remove overrides to restore defaults.
+
+The plugin owns only its child process and portal. It does not call `gsd --web`, open a browser, replace GSD's web-instance registry, or stop another server. Daemon mode keeps the host alive when a tab closes. Plugin service stop/reload terminates its child and closes its portal; a new Gateway lifetime creates a fresh portal. Closing a portal in the dashboard closes its proxy, not the host; restart the plugin service to recreate it. Failed startup closes the owned proxy and reports service failure rather than announcing a working UI.
+
+The web host relies on native portal access control instead of a second application token, and binds only to `127.0.0.1`. Portal bearer URLs remain Gateway-owned and are not persisted or logged by the plugin. The public authenticated Gateway SDK client requests `operator.read` for `portal.list` and `operator.write` for open/close; it does not use the restricted in-process Gateway facade. These are operator-local services, not remote MCP/worker path translation.
+
+Native portals use a separate listener port and origin. HTTP, Next assets, WebSockets and SSE pass through the native proxy without a custom base path. An HTTPS reverse proxy or tunnel exposing only the main Gateway port does **not** automatically expose portal ports. The dashboard checks reachability before embedding; if it offers retry guidance, the portal's separate listener needs a reachable route. A token-free `publicUrl` alone is not an authenticated launch link. See [OpenClaw Portals](https://docs.openclaw.ai/gateway/portals).
+
 ## Automatic discovery and synchronization
 
 The integration discovers projects from GSD's existing `projects/*/repo-meta.json` registry under `GSD_STATE_DIR` or `GSD_HOME` (normally `~/.gsd`). It also observes OpenClaw agent workspaces, existing/bound session directories, and GSD tool calls for legacy projects with a local `.gsd` directory. Unknown legacy folders outside those sources are not scanned. Deleted or inaccessible locations remain unavailable; they are not completion evidence.
@@ -52,7 +76,7 @@ Workboard status reflects the **workflow phase**: planning is `todo`, execution/
 
 Flows belong to the configured default agent's main session, which is the operator view for these host-local projects. Heartbeat receives current project facts through a native context-contribution hook. Significant state changes also enqueue factual system events and request a native heartbeat wake. This supplies data automatically; it does not inject a recovery procedure or modify the user's heartbeat instructions. Heartbeat enablement, delivery policy, and model availability remain OpenClaw settings.
 
-[TaskFlow](https://docs.openclaw.ai/automation/taskflow) persists state but does not schedule or restart executions. [Tasks](https://docs.openclaw.ai/automation/tasks) is an execution ledger, and native automations own scheduled work. Merely writing a card or flow does not make the heartbeat a supervisor. This integration does not create recurring jobs, supervise processes, or restart GSD. GSD retains its existing timeouts and sanctioned recovery. A silent hang that produces no event cannot be detected by this event-driven adapter.
+[TaskFlow](https://docs.openclaw.ai/automation/taskflow) persists state but does not schedule or restart executions. [Tasks](https://docs.openclaw.ai/automation/tasks) is an execution ledger, and native automations own scheduled work. Merely writing a card or flow does not make the heartbeat a supervisor. This integration does not create recurring jobs or supervise or restart GSD coding executions. GSD retains its existing timeouts and sanctioned recovery. A silent hang that produces no event cannot be detected by this event-driven adapter.
 
 Cancelling a TaskFlow cancels synchronization of that observation flow; it does **not** stop an external GSD process. Use `gsd_cancel` to stop execution and GSD's status/results to confirm it. The adapter never launches, cancels, or resumes coding work in response to a board move or flow cancellation. Cancelled flow records remain cancelled while retained by OpenClaw (terminal flows are normally pruned after seven days).
 
@@ -102,6 +126,14 @@ OPENCLAW_BIN=/path/to/openclaw pnpm --filter @opengsd/open-gsd-openclaw test
 ```
 
 Tests require OpenClaw 2026.9.2, built GSD core/MCP packages, and Git. They create temporary state, a temporary Git repository, and a local Gateway, and clean them up. They do not use the operator's OpenClaw configuration, connect channels, or make model calls.
+
+The opt-in live portal proof uses the selected local Gateway and a fresh headless browser. It opens a temporary native portal, verifies token protection, the real GSD picker/assets/API and folder-browser interaction, then removes its portal and web host. It does not select a project or start coding. It requires Playwright in the GSD checkout and Chrome (`CHROME_BIN` overrides the executable), and writes token-free receipts under `validation/`:
+
+```bash
+OPENCLAW_BIN=/path/to/openclaw GSD_PORTAL_PACKAGE_ROOT=/path/to/gsd-pi node integrations/openclaw/test/portal-live.mjs
+```
+
+This local browser check does not establish remote HTTPS dashboard ingress or activation of new plugin code in a running Gateway.
 
 Offline package inspection:
 

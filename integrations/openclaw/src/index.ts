@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { ProjectEvents } from "./discovery.js";
 import { CONTROLLER, ProjectSync, state } from "./sync.js";
+import { GsdPortalService } from "./portals.js";
 import type { Flows, PluginApi } from "./types.js";
 
 const GATEWAY_SCOPES: Record<string, string[]> = {
@@ -16,6 +17,9 @@ const GATEWAY_SCOPES: Record<string, string[]> = {
   // admin client is required to attach any discovered local project path.
   "workboard.cards.create": ["operator.admin"],
   "workboard.cards.update": ["operator.admin"],
+  "portal.list": ["operator.read"],
+  "portal.open": ["operator.write"],
+  "portal.close": ["operator.write"],
 };
 
 export function gatewayScopes(method: string): string[] {
@@ -27,8 +31,31 @@ export function gatewayScopes(method: string): string[] {
 export default definePluginEntry({
   id: "open-gsd-openclaw",
   name: "Open GSD",
-  description: "GSD Pi over MCP with automatic native project, TaskFlow, and Workboard synchronization",
+  description: "GSD web UI in native Portals, MCP tools, and automatic project, TaskFlow, and Workboard synchronization",
   register(api: PluginApi) {
+    let portal: GsdPortalService | undefined;
+    api.registerService({
+      id: "gsd-web-portal",
+      reload: { configPrefixes: ["mcp.servers.gsd", "plugins.entries.open-gsd-openclaw"] },
+      start(context) {
+        const reportFailure = () => {
+          context.serviceHealth?.reportFailure(new Error("GSD web portal unavailable"));
+          api.logger.warn("GSD web portal unavailable; check the GSD web host installation and Gateway portal access.");
+        };
+        portal = new GsdPortalService({
+          config: context.config.plugins?.entries?.["open-gsd-openclaw"]?.config?.webUi,
+          env: { ...process.env, ...context.config.mcp?.servers?.gsd?.env },
+          request: (method, params) => callGatewayFromCli(method, { timeout: "10000", json: true }, params,
+            { progress: false, scopes: gatewayScopes(method) }),
+          onError: reportFailure,
+        });
+        void portal.start().then(() => context.serviceHealth?.clearFailure(), reportFailure);
+      },
+      async stop() {
+        await portal?.stop();
+        portal = undefined;
+      },
+    });
     let events: ProjectEvents | undefined;
     let sync: ProjectSync | undefined;
     let flows: Flows | undefined;

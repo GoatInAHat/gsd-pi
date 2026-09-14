@@ -61,7 +61,10 @@ test('packed plugin automatically synchronizes projects, TaskFlow and Workboard 
   await writeFile(configPath, JSON.stringify({
     gateway: { mode: 'local', auth: { mode: 'token', token }, controlUi: { enabled: false } },
     agents: { defaults: { workspace: repo, model: { primary: 'anthropic/claude-sonnet-4-5' }, heartbeat: { every: '0m' } } },
-    plugins: { allow: ['open-gsd-openclaw', 'workboard'], entries: { workboard: { enabled: true } } },
+    plugins: { allow: ['open-gsd-openclaw', 'workboard'], entries: {
+      workboard: { enabled: true },
+      'open-gsd-openclaw': { config: { webUi: { enabled: false } } },
+    } },
     mcp: { servers: { gsd: {
       command: process.execPath,
       args: [join(repoDir, 'packages/mcp-server/bin/gsd-mcp-server.js')],
