@@ -30,6 +30,9 @@ test('heartbeat receives factual project context without a skill or scheduled pr
     config: cfg, logger: { warn: (message) => warnings.push(message) },
     registerService: (value) => { service = value; },
     on: (name, handler) => hooks.set(name, handler),
+    // The real Gateway API surface the web tab registers against; both are no-ops here.
+    registerHttpRoute: () => {},
+    registerControlUiDescriptor: () => {},
     runtime: {
       tasks: { managedFlows: { bindSession: () => ({ list: () => records }) } },
       agent: { resolveAgentWorkspaceDir: () => root, session: { listSessionEntries: () => [] } },

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { ProjectEvents } from "./discovery.js";
 import { CONTROLLER, ProjectSync, state } from "./sync.js";
 import { GsdPortalService } from "./portals.js";
+import { registerWebTab } from "./webtab.js";
 import type { Flows, PluginApi } from "./types.js";
 
 const GATEWAY_SCOPES: Record<string, string[]> = {
@@ -34,6 +35,8 @@ export default definePluginEntry({
   description: "GSD web UI in native Portals, MCP tools, and automatic project, TaskFlow, and Workboard synchronization",
   register(api: PluginApi) {
     let portal: GsdPortalService | undefined;
+    let webTabPort: number | undefined;
+    registerWebTab(api, () => webTabPort);
     api.registerService({
       id: "gsd-web-portal",
       reload: { configPrefixes: ["mcp.servers.gsd", "plugins.entries.open-gsd-openclaw"] },
@@ -49,11 +52,15 @@ export default definePluginEntry({
             { progress: false, scopes: gatewayScopes(method) }),
           onError: reportFailure,
         });
-        void portal.start().then(() => context.serviceHealth?.clearFailure(), reportFailure);
+        void portal.start().then(() => {
+          webTabPort = portal?.webPort;
+          context.serviceHealth?.clearFailure();
+        }, reportFailure);
       },
       async stop() {
         await portal?.stop();
         portal = undefined;
+        webTabPort = undefined;
       },
     });
     let events: ProjectEvents | undefined;

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { GSD_WEB_BASE_PATH } from "./webtab.js";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { createServer } from "node:net";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
@@ -112,7 +113,8 @@ async function reservePort(requested?: number): Promise<number> {
 }
 
 async function probe(url: string, signal: AbortSignal): Promise<boolean> {
-  const response = await fetch(`${url}/api/boot`, {
+  // The host is built with the tab route as its Next basePath, so root paths 404.
+  const response = await fetch(`${url}${GSD_WEB_BASE_PATH}/api/boot`, {
     signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
     headers: { Accept: "application/json", "Accept-Encoding": "identity" },
     redirect: "error",
@@ -161,6 +163,12 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 export class GsdPortalService {
   private run?: PortalRun;
   private readonly deps: PortalDependencies;
+  private currentPort?: number;
+
+  /** Loopback port of the running GSD web host; undefined while stopped. */
+  get webPort(): number | undefined {
+    return this.currentPort;
+  }
 
   constructor(private readonly options: GsdPortalOptions) {
     this.deps = { spawn, reservePort, probe, terminate, readyTimeoutMs: 180_000, pollMs: 250, ...options.deps };
@@ -186,6 +194,7 @@ export class GsdPortalService {
     const run = this.run;
     if (!run) return;
     run.stopping = true;
+    this.currentPort = undefined;
     run.abort.abort();
     await run.startup?.catch(() => {});
     await this.cleanup(run);
@@ -197,6 +206,7 @@ export class GsdPortalService {
     const env = { ...(this.options.env ?? process.env) };
     const launch = resolveWebLaunch(config, env);
     const port = await this.deps.reservePort(config.port);
+    this.currentPort = port;
     run.abort.signal.throwIfAborted();
     const listed = await this.options.request("portal.list", {});
     if (!Array.isArray(listed.portals)) throw new Error("GSD portal could not verify existing native portals.");
@@ -206,7 +216,9 @@ export class GsdPortalService {
     }
     run.abort.signal.throwIfAborted();
     const openedAt = Date.now();
-    const registration = { port, title: "GSD", description: "GSD native web workspace", path: "/" };
+    // The proxy forwards the full request path and the portal URL carries this path,
+    // matching the basePath the web host was built with.
+    const registration = { port, title: "GSD", description: "GSD native web workspace", path: GSD_WEB_BASE_PATH };
     let portal: Record<string, any>;
     try {
       portal = await this.options.request("portal.open", registration);
@@ -241,6 +253,7 @@ export class GsdPortalService {
       HOSTNAME: LOOPBACK, PORT: String(port), GSD_WEB_HOST: LOOPBACK, GSD_WEB_PORT: String(port),
       GSD_WEB_PACKAGE_ROOT: launch.packageRoot, GSD_WEB_HOST_KIND: launch.kind,
       GSD_WEB_NO_AUTH: "1", GSD_WEB_DAEMON_MODE: "1", PUBLIC_URL: portal.publicUrl,
+      GSD_WEB_BASE_PATH,
       NODE_ENV: launch.kind === "source-dev" ? "development" : "production",
     });
     if (launch.kind === "source-dev") env.NEXT_PUBLIC_GSD_DEV = "1";
