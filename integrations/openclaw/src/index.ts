@@ -36,7 +36,7 @@ export default definePluginEntry({
   register(api: PluginApi) {
     let portal: GsdPortalService | undefined;
     let webTabPort: number | undefined;
-    registerWebTab(api, () => webTabPort);
+    registerWebTab(api, () => portal?.webPort ?? webTabPort);
     api.registerService({
       id: "gsd-web-portal",
       reload: { configPrefixes: ["mcp.servers.gsd", "plugins.entries.open-gsd-openclaw"] },
