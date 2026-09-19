@@ -75,10 +75,12 @@ interface DocumentLike {
 }
 
 export const EMBED_ALLOWED_OPERATIONS: readonly string[] = [
+  "workspace.bootstrap",
   "preferences.read",
   "projects.list",
   "directories.list",
   "preferences.selectRoot",
+  "preferences.setDevRoot",
   "files.delete",
   "workspace.events.subscribe",
   "workspace.events.unsubscribe",

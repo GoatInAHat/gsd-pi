@@ -52,7 +52,7 @@ export interface FrameRequest {
 
 export interface FrameResponse {
   protocol: string
-  type: string
+  type: typeof RESPONSE_TYPE
   generation: number
   requestId: string
   ok: boolean
@@ -93,7 +93,7 @@ export function isEmbeddedMode(win?: EmbeddedTransportWindow & { location?: { se
 
 export interface FrameEventMessage {
   protocol: string
-  type: string
+  type: typeof EVENT_TYPE
   generation: number
   subscriptionId: string
   seq: number

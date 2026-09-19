@@ -919,7 +919,7 @@ export function FilesView() {
     const { path, type } = deleteConfirm
     try {
       const res = embeddedModeActive()
-        ? await embeddedApiFetch(`/api/files?root=${activeRoot}&path=${encodeURIComponent(path)}`, { method: "DELETE" })
+        ? await embeddedApiFetch(buildProjectUrl(`/api/files?root=${activeRoot}&path=${encodeURIComponent(path)}`, projectCwd), { method: "DELETE" })
         : await fetch(
             buildProjectUrl(`/api/files?root=${activeRoot}&path=${encodeURIComponent(path)}`, projectCwd),
             { method: "DELETE" },

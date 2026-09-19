@@ -20,6 +20,7 @@ export type EmbeddedStartupState = "standalone" | "embedded-ready" | "embedded-u
 /** The fixed operation set the embedded frame may request. The parent
  * wrapper and the app startup MUST use this same list. */
 export const EMBEDDED_ALLOWED_OPERATIONS: readonly string[] = [
+  "workspace.bootstrap",
   "preferences.read",
   "projects.list",
   "directories.list",
@@ -89,6 +90,14 @@ interface RouteMapping {
 
 const ROUTE_MAP: RouteMapping[] = [
   {
+    // Legacy GET boot starts the selected workspace. The named operation is
+    // admitted as operator.write on the server, separately from subscriptions.
+    method: "GET",
+    pattern: /^\/api\/boot$/,
+    operation: "workspace.bootstrap",
+    buildArgs: (url) => ({ project: url.searchParams.get("project") }),
+  },
+  {
     method: "GET",
     pattern: /^\/api\/preferences$/,
     operation: "preferences.read",
@@ -140,12 +149,18 @@ const ROUTE_MAP: RouteMapping[] = [
     method: "DELETE",
     pattern: /^\/api\/files$/,
     operation: "files.delete",
-    buildArgs: (url) => ({ root: url.searchParams.get("root") ?? url.searchParams.get("project"), path: url.searchParams.get("path") }),
+    // root selects the file tree; project is the independent project identity.
+    // Missing identity must stay missing so the server can deny it.
+    buildArgs: (url) => ({ root: url.searchParams.get("root"), project: url.searchParams.get("project"), path: url.searchParams.get("path") }),
   },
 ]
 
 export function mapRouteToOperation(method: string, path: string, bodyText: string | null): { operation: string; args: unknown } | undefined {
   const url = new URL("http://embedded.invalid" + path)
+  // Workspace callers already include the configured deployment base path.
+  // Strip only that exact prefix; unrelated paths still fail closed.
+  const base = process.env.NEXT_PUBLIC_BASE_PATH ?? ""
+  if (base && url.pathname.startsWith(base + "/")) url.pathname = url.pathname.slice(base.length)
   for (const mapping of ROUTE_MAP) {
     if (mapping.method !== method) continue
     if (!mapping.pattern.test(url.pathname)) continue
