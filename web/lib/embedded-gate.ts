@@ -26,6 +26,7 @@ export const EMBEDDED_ALLOWED_OPERATIONS: readonly string[] = [
   "directories.list",
   "preferences.selectRoot",
   "preferences.setDevRoot",
+  "files.read",
   "files.delete",
   "workspace.events.subscribe",
   "workspace.events.unsubscribe",
@@ -144,6 +145,13 @@ const ROUTE_MAP: RouteMapping[] = [
         return { devRoot: undefined }
       }
     },
+  },
+  {
+    method: "GET",
+    pattern: /^\/api\/files$/,
+    operation: "files.read",
+    // No path lists the tree; a path reads content within that selected tree.
+    buildArgs: (url) => ({ root: url.searchParams.get("root"), project: url.searchParams.get("project"), path: url.searchParams.get("path") }),
   },
   {
     method: "DELETE",

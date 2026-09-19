@@ -292,3 +292,28 @@ test("bootstrap and file selectors never infer project identity from root", () =
     operation: "files.delete", args: { root: null, project: "/approved/p", path: "STATE.md" },
   })
 })
+
+
+test("Files GET tree/content preserves the selector and explicit project independently", () => {
+  const previousBase = process.env.NEXT_PUBLIC_BASE_PATH
+  process.env.NEXT_PUBLIC_BASE_PATH = "/plugins/open-gsd-openclaw/web"
+  try {
+    const prefix = process.env.NEXT_PUBLIC_BASE_PATH
+    assert.deepEqual(mapRouteToOperation("GET", `${prefix}/api/files?root=gsd&project=%2Fapproved%2Fp`, null), {
+      operation: "files.read", args: { root: "gsd", project: "/approved/p", path: null },
+    })
+    assert.deepEqual(mapRouteToOperation("GET", `${prefix}/api/files?root=project&project=%2Fapproved%2Fp&path=src%2Fread%20me.md`, null), {
+      operation: "files.read", args: { root: "project", project: "/approved/p", path: "src/read me.md" },
+    })
+    assert.deepEqual(mapRouteToOperation("GET", `${prefix}/api/files?root=gsd`, null), {
+      operation: "files.read", args: { root: "gsd", project: null, path: null },
+    })
+    assert.equal(mapRouteToOperation("GET", "/other/api/files?root=gsd&project=%2Fapproved%2Fp", null), undefined)
+    for (const method of ["POST", "PUT", "PATCH"]) {
+      assert.equal(mapRouteToOperation(method, `${prefix}/api/files?project=%2Fapproved%2Fp`, "{}"), undefined)
+    }
+  } finally {
+    if (previousBase === undefined) delete process.env.NEXT_PUBLIC_BASE_PATH
+    else process.env.NEXT_PUBLIC_BASE_PATH = previousBase
+  }
+})

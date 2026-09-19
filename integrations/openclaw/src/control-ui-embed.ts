@@ -81,6 +81,7 @@ export const EMBED_ALLOWED_OPERATIONS: readonly string[] = [
   "directories.list",
   "preferences.selectRoot",
   "preferences.setDevRoot",
+  "files.read",
   "files.delete",
   "workspace.events.subscribe",
   "workspace.events.unsubscribe",

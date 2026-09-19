@@ -122,6 +122,11 @@ const httpCases: HttpScenario[] = [
   { operation: "directories.list", path: `/api/browse-directories?path=${encodeURIComponent(project)}`, args: { root: null, path: project } },
   { operation: "preferences.selectRoot", path: "/api/switch-root", method: "POST", body: { devRoot: project }, args: { devRoot: project } },
   { operation: "preferences.setDevRoot", path: "/api/preferences", method: "PUT", body: { devRoot: project }, args: { devRoot: project } },
+  // FilesView.fetchTree and openFileTab use these two GET shapes.
+  ...["project", "gsd"].flatMap((root) => [
+    { operation: "files.read", path: buildProjectPath(`/api/files?root=${root}`, project), args: { root, project, path: null } },
+    { operation: "files.read", path: buildProjectPath(`/api/files?root=${root}&path=notes%2Fread%20me.md`, project), args: { root, project, path: "notes/read me.md" } },
+  ]),
   ...["project", "gsd"].map((root) => ({
     operation: "files.delete", path: buildProjectPath(`/api/files?root=${root}&path=notes%2Fdraft.md`, project), method: "DELETE",
     args: { root, project, path: "notes/draft.md" },

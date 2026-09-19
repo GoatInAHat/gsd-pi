@@ -12,7 +12,7 @@
  * before every emission and late replies dropped.
  */
 
-import { realpathSync } from "node:fs"
+import { lstatSync, realpathSync } from "node:fs"
 import { isAbsolute, join, resolve, sep } from "node:path"
 import type { GatewayRequestHandlerOptions, OpenClawPluginApi } from "openclaw/plugin-sdk/core"
 
@@ -45,6 +45,7 @@ export interface UiMethodApi {
 const GSD_UI_BASE_PATH = "/plugins/open-gsd-openclaw/web"
 const DAEMON_TIMEOUT_MS = 10_000
 const DAEMON_MAX_BYTES = 1_048_576
+const FILE_CONTENT_MAX_BYTES = 256 * 1024
 const STREAM_LEASE_MS = 600_000
 const MAX_SUBSCRIPTIONS_PER_CONNECTION = 16
 const GSD_UI_EVENT = "gsd.ui.event"
@@ -272,6 +273,60 @@ export function registerGsdUiMethods(
       return payload
     }),
     { scope: "operator.write", profileAccess: "required" },
+  )
+
+  api.registerGatewayMethod(
+    "gsd.ui.files.read",
+    (opts) => guard(opts, async () => {
+      const projectId = paramString(opts.params, "projectId")
+      const projectIdentity = paramString(opts.params, "project")
+      if (!projectId && !projectIdentity) throw frame("GSD_UI_MISSING_PARAM", "missing project identity")
+      const { project, denied } = requireApprovedProject({ projectId, project: projectIdentity }, opts.client)
+      if (denied) throw denied
+      const root = paramString(opts.params, "root")
+      if (root !== "project" && root !== "gsd") throw frame("GSD_UI_INVALID_ROOT", "root must be project or gsd")
+      if (opts.params.path != null && typeof opts.params.path !== "string") {
+        throw frame("GSD_UI_INVALID_PATH", "path must be a string")
+      }
+      const path = paramString(opts.params, "path")
+      if (path && (isAbsolute(path) || path.startsWith("\\") || path.includes(".."))) {
+        throw frame("GSD_UI_PATH_ESCAPE", "path must be relative within the selected root")
+      }
+      const selectedRoot = root === "project" ? project.canonicalRoot : join(project.canonicalRoot, ".gsd")
+      if (root === "gsd" && !path) {
+        try {
+          // lstat distinguishes an absent .gsd tree from a dangling symlink.
+          lstatSync(selectedRoot)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return { tree: [] }
+          throw error
+        }
+      }
+      // Tree listing also needs this check: the daemon follows its root itself.
+      if (!containsCanonically(project.canonicalRoot, selectedRoot)) {
+        throw frame("GSD_UI_PATH_ESCAPE", "selected root escapes the approved project")
+      }
+      if (path) {
+        const target = resolve(selectedRoot, path)
+        if (target === selectedRoot || !containsCanonically(project.canonicalRoot, target) ||
+            !containsCanonically(selectedRoot, target)) {
+          throw frame("GSD_UI_PATH_ESCAPE", "path escapes the selected approved root")
+        }
+      }
+      const payload = await daemonFetch(
+        `/api/files?root=${root}&project=${encodeURIComponent(project.canonicalRoot)}${path ? `&path=${encodeURIComponent(path)}` : ""}`,
+      ) as Record<string, unknown>
+      if (!path) {
+        if (!Array.isArray(payload.tree)) throw frame("GSD_UI_INVALID_FILES", "invalid file tree payload")
+        return { tree: payload.tree }
+      }
+      if (typeof payload.content !== "string") throw frame("GSD_UI_INVALID_FILES", "invalid file content payload")
+      if (Buffer.byteLength(payload.content, "utf8") > FILE_CONTENT_MAX_BYTES) {
+        throw frame("GSD_UI_FILE_TOO_LARGE", "file content exceeds size bound")
+      }
+      return { content: payload.content }
+    }),
+    { scope: "operator.read", profileAccess: "required" },
   )
 
   api.registerGatewayMethod(

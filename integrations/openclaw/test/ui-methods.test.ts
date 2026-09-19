@@ -53,10 +53,10 @@ function stubDaemonFetch(body: unknown = { stubbed: true }) {
   return { calls, restore: () => { globalThis.fetch = original } }
 }
 
-test("eleven methods registered; respond contract with ErrorShape third argument", async () => {
+test("twelve methods registered; respond contract with ErrorShape third argument", async () => {
   const { api, registered } = recordingApi()
   registerGsdUiMethods(api, () => 33277)
-  assert.equal(registered.size, 11)
+  assert.equal(registered.size, 12)
   for (const [method, entry] of registered) {
     assert.ok(method.startsWith("gsd.ui."), method)
     assert.equal(entry.opts?.profileAccess, "required", method)
@@ -564,4 +564,126 @@ test("admission observes policy updates after registration and defaults back to 
     assert.equal((await call(method.handler, opts))[0].ok, false)
     assert.equal(daemon.calls.length, 1)
   } finally { daemon.restore(); rmSync(root, { recursive: true, force: true }) }
+})
+
+
+test("file reads bind tree and content requests to approved selectors with read scope", async () => {
+  const root = temporaryProject()
+  mkdirSync(join(root, ".gsd"))
+  writeFileSync(join(root, ".gsd", "STATE.md"), "state")
+  writeFileSync(join(root, "read me.md"), "project")
+  const { api, registered } = recordingApi()
+  registerGsdUiMethods(api, () => 33277, { projects: [{ projectId: "p1", canonicalRoot: root }] })
+  const method = registered.get("gsd.ui.files.read")!
+  assert.ok(method, "file GET must have its own named server operation")
+  assert.deepEqual(method.opts, { scope: "operator.read", profileAccess: "required" })
+  try {
+    for (const selector of ["project", "gsd"]) {
+      for (const path of [undefined, "", selector === "gsd" ? "STATE.md" : "read me.md"]) {
+        const payload = path ? { content: "file content" } : { tree: [{ name: "entry", type: "file" }] }
+        const daemon = stubDaemonFetch(payload)
+        try {
+          const responses = await call(method.handler, { params: { project: root, root: selector, path }, client: adminClient() })
+          assert.deepEqual(responses, [{ ok: true, payload, error: undefined }])
+          assert.equal(daemon.calls.length, 1)
+          const requested = new URL(daemon.calls[0].url)
+          assert.equal(requested.origin, "http://127.0.0.1:33277")
+          assert.equal(requested.pathname, "/plugins/open-gsd-openclaw/web/api/files")
+          assert.equal(requested.searchParams.get("root"), selector)
+          assert.equal(requested.searchParams.get("project"), root)
+          assert.equal(requested.searchParams.get("path"), path || null)
+          assert.equal(daemon.calls[0].init?.method ?? "GET", "GET")
+        } finally { daemon.restore() }
+      }
+    }
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test("file reads deny missing identity, unauthorized clients, policy withdrawal, and path escapes before fetch", async () => {
+  const root = temporaryProject()
+  const outside = temporaryProject()
+  mkdirSync(join(root, ".gsd"))
+  writeFileSync(join(root, "file.txt"), "project")
+  writeFileSync(join(outside, "outside.txt"), "outside")
+  symlinkSync(outside, join(root, "escape"))
+  symlinkSync(join(root, "file.txt"), join(root, ".gsd", "outside-selected-root"))
+  const config: EmbeddedProjectsConfig = { projects: [{ projectId: "p1", canonicalRoot: root }] }
+  const { api, registered } = recordingApi()
+  registerGsdUiMethods(api, () => 33277, config)
+  const method = registered.get("gsd.ui.files.read")!
+  assert.ok(method)
+  const daemon = stubDaemonFetch({ tree: [] })
+  try {
+    for (const params of [
+      { root: "project" },
+      { project: outside, root: "project" },
+      { project: root, root: root },
+      { project: root, root: "project", path: 123 },
+      { project: root, root: "project", path: "../outside" },
+      { project: root, root: "project", path: "." },
+      { project: root, root: "project", path: join(root, "file.txt") },
+      { project: root, root: "project", path: "escape/outside.txt" },
+      { project: root, root: "gsd", path: "outside-selected-root" },
+    ]) {
+      const responses = await call(method.handler, { params, client: adminClient() })
+      assert.equal(responses[0].ok, false, JSON.stringify(params))
+    }
+    for (const client of [null, { connId: "forged" }, adminClient({ invalidated: true })]) {
+      assert.equal((await call(method.handler, { params: { root: "project", project: root, admin: true }, client }))[0].ok, false)
+    }
+    config.projects = []
+    assert.equal((await call(method.handler, { params: { root: "project", project: root }, client: adminClient() }))[0].ok, false)
+    assert.equal(daemon.calls.length, 0)
+  } finally { daemon.restore(); rmSync(root, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }) }
+})
+
+test("file reads return an empty absent .gsd tree but deny external or dangling .gsd links", async () => {
+  const root = temporaryProject()
+  const outside = temporaryProject()
+  const { api, registered } = recordingApi()
+  registerGsdUiMethods(api, () => 33277, { projects: [{ projectId: "p1", canonicalRoot: root }] })
+  const method = registered.get("gsd.ui.files.read")!
+  assert.ok(method)
+  const daemon = stubDaemonFetch({ tree: [] })
+  try {
+    const opts = { params: { project: root, root: "gsd" }, client: adminClient() }
+    assert.deepEqual(await call(method.handler, opts), [{ ok: true, payload: { tree: [] }, error: undefined }])
+    symlinkSync(outside, join(root, ".gsd"))
+    assert.equal((await call(method.handler, opts))[0].ok, false)
+    rmSync(join(root, ".gsd"))
+    symlinkSync(join(outside, "missing"), join(root, ".gsd"))
+    assert.equal((await call(method.handler, opts))[0].ok, false)
+    assert.equal(daemon.calls.length, 0)
+  } finally { daemon.restore(); rmSync(root, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }) }
+})
+
+test("file reads reject malformed DTOs and enforce raw JSON and UTF-8 content bounds", async () => {
+  const root = temporaryProject()
+  writeFileSync(join(root, "file.txt"), "file")
+  const { api, registered } = recordingApi()
+  registerGsdUiMethods(api, () => 33277, { projects: [{ projectId: "p1", canonicalRoot: root }] })
+  const method = registered.get("gsd.ui.files.read")!
+  assert.ok(method)
+  try {
+    for (const [path, payload, pattern] of [
+      [undefined, { content: "wrong shape" }, /invalid file tree/],
+      ["file.txt", { content: 123 }, /invalid file content/],
+      ["file.txt", { content: "é".repeat(131073) }, /file content exceeds size bound/],
+      [undefined, { tree: [], padding: "é".repeat(524289) }, /response exceeds size bound/],
+    ] as const) {
+      const daemon = stubDaemonFetch(payload)
+      try {
+        const responses = await call(method.handler, { params: { project: root, root: "project", path }, client: adminClient() })
+        assert.equal(responses[0].ok, false)
+        assert.match(responses[0].error?.message ?? "", pattern)
+      } finally { daemon.restore() }
+    }
+    const content = "é".repeat(131072)
+    const daemon = stubDaemonFetch({ content })
+    try {
+      const responses = await call(method.handler, { params: { projectId: "p1", root: "project", path: "file.txt" }, client: adminClient() })
+      assert.equal(responses[0].ok, true, responses[0].error?.message)
+      assert.deepEqual(responses[0].payload, { content })
+    } finally { daemon.restore() }
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })
