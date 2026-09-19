@@ -124,16 +124,24 @@ export async function authFetch(input: RequestInfo | URL, init?: RequestInit): P
     headers.set("Authorization", `Bearer ${token}`)
   }
 
-  const target = typeof input === "string" ? withBasePath(input) : input
+  // Request and URL inputs keep their own credentials policy: a Request
+  // constructed with credentials carries it unless init explicitly overrides
+  // (fetch init members present in init replace the Request members), so no
+  // init is synthesized for them and headers only attach when a token exists.
+  if (typeof input !== "string") {
+    if (init) return token ? fetch(input, { ...init, headers }) : fetch(input, init)
+    return token ? fetch(input, { headers }) : fetch(input)
+  }
+  const target = withBasePath(input)
   let credentials = init?.credentials
-  if (!credentials && typeof input === "string" && input.startsWith("/") && !input.startsWith("//")) {
+  if (!credentials && input.startsWith("/") && !input.startsWith("//")) {
     // First-party root-relative API paths run credentialed so the Control UI
     // plugin tab opaque sandbox attaches the scoped gateway cookies.
-    // Absolute and non-root-relative inputs keep the caller credentials
+    // Absolute and non-root-relative strings keep the caller credentials
     // mode, and explicit init.credentials always wins.
     credentials = "include"
   }
-  return fetch(target, credentials ? { ...init, headers, credentials } : { ...init, headers })
+  return credentials ? fetch(target, { ...init, headers, credentials }) : fetch(target, { ...init, headers })
 }
 
 /**

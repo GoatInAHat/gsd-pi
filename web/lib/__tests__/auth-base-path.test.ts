@@ -74,3 +74,46 @@ test("authFetch does not enable credentials for protocol-relative or relative in
     assert.equal(stub.calls[1].init?.credentials, undefined)
   } finally { stub.restore() }
 })
+
+test("authFetch preserves Request credentials policy when no init is passed", async () => {
+  const stub = stubFetch()
+  try {
+    const req = new Request("https://example.test/api", { credentials: "omit" })
+    await authFetch(req)
+    assert.equal(stub.calls.length, 1)
+    assert.equal(stub.calls[0].input, req)
+    assert.equal(stub.calls[0].init, undefined)
+  } finally { stub.restore() }
+})
+
+test("authFetch passes caller init through for Request inputs without adding credentials", async () => {
+  const stub = stubFetch()
+  try {
+    const req = new Request("https://example.test/api", { method: "POST" })
+    await authFetch(req, { method: "POST", body: "x" })
+    assert.equal(stub.calls[0].init?.credentials, undefined)
+    assert.equal(stub.calls[0].init?.body, "x")
+  } finally { stub.restore() }
+})
+
+test("authFetch no-token flow stays Authorization-free", async () => {
+  const stub = stubFetch()
+  try {
+    await authFetch("/api/projects")
+    const headers = stub.calls[0].init?.headers as Headers
+    assert.equal(headers instanceof Headers, true)
+    assert.equal(headers.has("Authorization"), false)
+  } finally { stub.restore() }
+})
+
+test("authFetch preserves POST body and headers for first-party strings", async () => {
+  const stub = stubFetch()
+  try {
+    await authFetch("/api/switch-root", { method: "POST", body: JSON.stringify({ root: "/tmp" }), headers: { "Content-Type": "application/json" } })
+    assert.equal(stub.calls[0].init?.method, "POST")
+    assert.equal(stub.calls[0].init?.body, JSON.stringify({ root: "/tmp" }))
+    assert.equal(stub.calls[0].init?.credentials, "include")
+    const headers = stub.calls[0].init?.headers as Headers
+    assert.equal(headers.get("Content-Type"), "application/json")
+  } finally { stub.restore() }
+})
