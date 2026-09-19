@@ -1,28 +1,26 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import {
-  createEmbeddedOperationClient,
+  negotiateEmbeddedTransport,
   isEmbeddedMode,
-  readChannelNonce,
-  EMBEDDED_RESPONSE_MESSAGE,
+  EMBEDDED_PROTOCOL,
+  BIND_TYPE,
+  BIND_ACK_TYPE,
+  REQUEST_TYPE,
+  RESPONSE_TYPE,
 } from "../embedded-transport.ts"
 
-const NONCE = "abcdefgh12345678_abcdefgh12345678"
+type AnyPort = { postMessage(message: unknown): void; close(): void; start?(): void; onmessage: ((event: { data: unknown }) => void) | null; addEventListener(type: string, listener: (event: { data: unknown }) => void): void; removeEventListener(type: string, listener: (event: { data: unknown }) => void): void }
 
-function fakeWindow(origin: string) {
-  const listeners: Array<(event: { data: unknown; source?: unknown; origin?: string }) => void> = []
-  const posted: Array<{ message: unknown; targetOrigin: string }> = []
-  const parent = {
-    postMessage: (message: unknown, targetOrigin: string) => {
-      posted.push({ message, targetOrigin })
-    },
-  }
+function fakeWindow(origin: string, marker: boolean) {
+  const listeners: Array<(event: { data: unknown; source?: unknown; origin?: string; ports?: unknown[] }) => void> = []
+  const parent = { postMessage: () => {} }
   const win = {
     origin,
-    location: { search: "?__gsd_channel=" + NONCE },
-    addEventListener: (_type: string, listener: (event: { data: unknown; source?: unknown; origin?: string }) => void) => listeners.push(listener),
-    removeEventListener: (_type: string, listener: (event: { data: unknown; source?: unknown; origin?: string }) => void) => {
-      const i = listeners.indexOf(listener)
+    location: { search: marker ? "?__gsd_embedded=1" : "" },
+    addEventListener: (_t: string, l: (event: { data: unknown; source?: unknown; origin?: string; ports?: unknown[] }) => void) => listeners.push(l),
+    removeEventListener: (_t: string, l: (event: { data: unknown; source?: unknown; origin?: string; ports?: unknown[] }) => void) => {
+      const i = listeners.indexOf(l)
       if (i >= 0) listeners.splice(i, 1)
     },
     parent,
@@ -31,147 +29,47 @@ function fakeWindow(origin: string) {
   return {
     win,
     parent,
-    posted,
-    dispatch: (data: unknown, opts?: { source?: unknown; eventOrigin?: string }) => {
+    dispatch: (data: unknown, opts?: { source?: unknown; eventOrigin?: string; ports?: unknown[] }) => {
       const source = opts && "source" in opts ? opts.source : parent
       const eventOrigin = opts?.eventOrigin ?? "https://parent.test"
-      for (const l of [...listeners]) l({ data, source, origin: eventOrigin })
+      const ports = opts?.ports ?? []
+      for (const l of [...listeners]) l({ data, source, origin: eventOrigin, ports })
     },
     listenerCount: () => listeners.length,
   }
 }
 
-function makeClient(h: ReturnType<typeof fakeWindow>, extra?: Parameters<typeof createEmbeddedOperationClient>[0]) {
-  return createEmbeddedOperationClient({ window: h.win, allowedOperations: ["preferences.get", "projects.list"], nonce: NONCE, ...extra })
+function waitForMessage(port: AnyPort): Promise<any> {
+  return new Promise((resolve) => {
+    port.onmessage = (event) => {
+      port.onmessage = null
+      resolve(event.data)
+    }
+    if (typeof port.start === "function") port.start()
+  })
 }
 
-test("embedded mode is detected only for opaque origins", () => {
-  assert.equal(isEmbeddedMode(fakeWindow("null").win), true)
-  assert.equal(isEmbeddedMode(fakeWindow("https://x.test").win), false)
-})
-
-test("channel nonce is read and validated from location", () => {
-  assert.equal(readChannelNonce(fakeWindow("null").win), NONCE)
-  const short = fakeWindow("null")
-  short.win.location = { search: "?__gsd_channel=short" }
-  assert.equal(readChannelNonce(short.win), undefined)
-})
-
-test("non-allowlisted operations fail closed without posting", async () => {
-  const h = fakeWindow("null")
-  const client = makeClient(h)
-  await assert.rejects(() => client.request("evil.op"), /not allowed/)
-  assert.equal(h.posted.length, 0)
-  client.dispose()
-})
-
-test("allowlisted request posts nonce-bound message and resolves on parent response", async () => {
-  const h = fakeWindow("null")
-  const client = makeClient(h)
-  const promise = client.request("preferences.get", { detail: true })
-  assert.equal(h.posted.length, 1)
-  assert.equal(h.posted[0].targetOrigin, "*")
-  const message = h.posted[0].message as { type: string; id: number; nonce: string; name: string; args?: unknown }
-  assert.equal(message.nonce, NONCE)
-  assert.equal(message.name, "preferences.get")
-  assert.deepEqual(message.args, { detail: true })
-  h.dispatch({ type: EMBEDDED_RESPONSE_MESSAGE, id: message.id, nonce: NONCE, ok: true, result: { launchCwd: null } })
-  const result = (await promise) as { launchCwd: string | null }
-  assert.equal(result.launchCwd, null)
-  client.dispose()
-})
-
-test("responses with wrong nonce or unknown ids are ignored", async () => {
-  const h = fakeWindow("null")
-  const client = makeClient(h)
-  const promise = client.request("preferences.get")
-  const message = h.posted[0].message as { id: number }
-  h.dispatch({ type: EMBEDDED_RESPONSE_MESSAGE, id: message.id, nonce: "wrongwrongwrong12_wrongwrongwrong12", ok: true, result: 1 })
-  h.dispatch({ type: EMBEDDED_RESPONSE_MESSAGE, id: 9999, nonce: NONCE, ok: true, result: 2 })
-  h.dispatch({ type: EMBEDDED_RESPONSE_MESSAGE, id: message.id, nonce: NONCE, ok: true, result: 3 })
-  const result = await promise
-  assert.equal(result, 3)
-  client.dispose()
-})
-
-test("responses from a non-parent source are ignored", async () => {
-  const h = fakeWindow("null")
-  const client = makeClient(h)
-  const promise = client.request("preferences.get")
-  const message = h.posted[0].message as { id: number }
-  const stranger = { postMessage: () => {} }
-  h.dispatch({ type: EMBEDDED_RESPONSE_MESSAGE, id: message.id, nonce: NONCE, ok: true, result: "spoofed" }, { source: stranger })
-  h.dispatch({ type: EMBEDDED_RESPONSE_MESSAGE, id: message.id, nonce: NONCE, ok: true, result: "spoofed" }, { source: null })
-  h.dispatch({ type: EMBEDDED_RESPONSE_MESSAGE, id: message.id, nonce: NONCE, ok: true, result: "real" })
-  const result = await promise
-  assert.equal(result, "real")
-  client.dispose()
-})
-
-test("responses with an unexpected parent origin are ignored when one is configured", async () => {
-  const h = fakeWindow("null")
-  const client = makeClient(h, { expectedParentOrigin: "https://expected.test" })
-  const promise = client.request("preferences.get")
-  const message = h.posted[0].message as { id: number }
-  h.dispatch({ type: EMBEDDED_RESPONSE_MESSAGE, id: message.id, nonce: NONCE, ok: true, result: "spoofed" }, { eventOrigin: "https://other.test" })
-  h.dispatch({ type: EMBEDDED_RESPONSE_MESSAGE, id: message.id, nonce: NONCE, ok: true, result: "real" }, { eventOrigin: "https://expected.test" })
-  const result = await promise
-  assert.equal(result, "real")
-  client.dispose()
-})
-
-test("parent silence times out and late responses are ignored", async () => {
-  const h = fakeWindow("null")
-  const client = makeClient(h, { timeoutMs: 25 })
-  const promise = client.request("preferences.get")
-  const message = h.posted[0].message as { id: number }
-  await assert.rejects(() => promise, /timed out/)
-  h.dispatch({ type: EMBEDDED_RESPONSE_MESSAGE, id: message.id, nonce: NONCE, ok: true, result: "late" })
-  client.dispose()
-})
-
-test("pending cap rejects excess requests while the parent is silent", async () => {
-  const h = fakeWindow("null")
-  const client = makeClient(h, { timeoutMs: 60_000, maxPending: 1 })
-  const first = client.request("preferences.get")
-  await assert.rejects(() => client.request("projects.list"), /pending cap/)
-  client.dispose()
-  await assert.rejects(() => first, /disposed/)
-})
-
-test("postMessage throw rejects the request and drains the pending entry", async () => {
-  const h = fakeWindow("null")
-  const client = makeClient(h, { maxPending: 1 })
-  const originalPostMessage = h.parent.postMessage
-  h.parent.postMessage = () => {
-    const error = new Error("could not be cloned")
-    error.name = "DataCloneError"
-    throw error
+async function bind(h: ReturnType<typeof fakeWindow>, generation = 7, opts?: Parameters<typeof negotiateEmbeddedTransport>[0]) {
+  const channel = new MessageChannel() as unknown as { port1: AnyPort; port2: AnyPort }
+  const negotiation = negotiateEmbeddedTransport({ window: h.win, allowedOperations: ["preferences.get", "projects.list"], ...opts })
+  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation }, { ports: [channel.port2] })
+  const client = await negotiation
+  // The child posts a bind-ack before the negotiation promise resolves;
+  // drain it so subsequent waitForMessage calls observe requests only.
+  const ack = await waitForMessage(channel.port1)
+  if (ack && ack.type === BIND_ACK_TYPE) {
+    // drained
   }
-  await assert.rejects(() => client.request("preferences.get", { uncloneable: Symbol("x") }), /could not be cloned/)
-  h.parent.postMessage = originalPostMessage
-  const promise = client.request("preferences.get")
-  h.dispatch({ type: EMBEDDED_RESPONSE_MESSAGE, id: (h.posted[0].message as { id: number }).id, nonce: NONCE, ok: true, result: "ok" })
-  assert.equal(await promise, "ok")
-  client.dispose()
-})
+  return { client, parentPort: channel.port1, generation }
+}
 
-test("dispose rejects pending requests and removes the listener", async () => {
-  const h = fakeWindow("null")
-  const client = makeClient(h, { timeoutMs: 60_000 })
-  const promise = client.request("preferences.get")
-  assert.equal(h.listenerCount(), 1)
-  client.dispose()
-  await assert.rejects(() => promise, /disposed/)
-  assert.equal(h.listenerCount(), 0)
-  await assert.rejects(() => client.request("preferences.get"), /disposed/)
-})
-
-
-test("top-level opaque document without a distinct parent is not embedded mode", () => {
+test("strict embedded detection requires opaque origin, distinct parent, and marker", () => {
+  assert.equal(isEmbeddedMode(fakeWindow("null", true).win), true)
+  assert.equal(isEmbeddedMode(fakeWindow("null", false).win), false)
+  assert.equal(isEmbeddedMode(fakeWindow("https://x.test", true).win), false)
   const topLevel: { origin: string; location: { search: string }; addEventListener: () => void; removeEventListener: () => void; parent: unknown; postMessage: () => void } = {
     origin: "null",
-    location: { search: "?__gsd_channel=" + NONCE },
+    location: { search: "?__gsd_embedded=1" },
     addEventListener: () => {},
     removeEventListener: () => {},
     parent: null,
@@ -179,13 +77,126 @@ test("top-level opaque document without a distinct parent is not embedded mode",
   }
   topLevel.parent = topLevel
   assert.equal(isEmbeddedMode(topLevel as never), false)
-  const embedded = fakeWindow("null")
-  assert.equal(isEmbeddedMode(embedded.win), true)
 })
 
-
-test("constructor rejects an invalid channel nonce", () => {
-  const h = fakeWindow("null")
-  assert.throws(() => createEmbeddedOperationClient({ window: h.win, allowedOperations: ["preferences.get"], nonce: "short" }), /invalid embedded channel nonce/)
+test("valid parent bind resolves a client and sends a bind-ack over the port", async () => {
+  const h = fakeWindow("null", true)
+  const channel = new MessageChannel() as unknown as { port1: AnyPort; port2: AnyPort }
+  const negotiation = negotiateEmbeddedTransport({ window: h.win, allowedOperations: ["preferences.get"] })
+  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: 7 }, { ports: [channel.port2] })
+  const client = await negotiation
+  const ackMessage = await waitForMessage(channel.port1)
+  assert.equal(ackMessage.protocol, EMBEDDED_PROTOCOL)
+  assert.equal(ackMessage.type, BIND_ACK_TYPE)
+  assert.equal(ackMessage.generation, 7)
+  assert.equal(h.listenerCount(), 0)
+  client.dispose()
 })
 
+test("binds from a non-parent source or wrong protocol are ignored and negotiation expires", async () => {
+  const h = fakeWindow("null", true)
+  const negotiation = negotiateEmbeddedTransport({ window: h.win, allowedOperations: ["preferences.get"], negotiationTimeoutMs: 25 })
+  const stranger = { postMessage: () => {} }
+  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: 1 }, { source: stranger, ports: [new MessageChannel().port1] })
+  h.dispatch({ protocol: "other/9", type: BIND_TYPE, generation: 1 })
+  await assert.rejects(() => negotiation, /negotiation timed out/)
+})
+
+test("duplicate bind after settlement is ignored and the established client keeps working", async () => {
+  const h = fakeWindow("null", true)
+  const { client, parentPort } = await bind(h)
+  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: 99 }, { ports: [new MessageChannel().port1] })
+  const promise = client.request("preferences.get")
+  const request = await waitForMessage(parentPort)
+  parentPort.postMessage({ protocol: EMBEDDED_PROTOCOL, type: RESPONSE_TYPE, generation: request.generation, requestId: request.requestId, ok: true, result: "still-works" })
+  assert.equal(await promise, "still-works")
+  client.dispose()
+})
+
+test("allowlisted request carries the contract envelope and resolves on response", async () => {
+  const h = fakeWindow("null", true)
+  const { client, parentPort } = await bind(h, 42)
+  const promise = client.request("preferences.get", { detail: true })
+  const request = await waitForMessage(parentPort)
+  assert.equal(request.protocol, EMBEDDED_PROTOCOL)
+  assert.equal(request.type, REQUEST_TYPE)
+  assert.equal(request.generation, 42)
+  assert.equal(typeof request.requestId, "string")
+  assert.notEqual(request.requestId.length, 0)
+  assert.equal(request.operation, "preferences.get")
+  assert.deepEqual(request.args, { detail: true })
+  parentPort.postMessage({ protocol: EMBEDDED_PROTOCOL, type: RESPONSE_TYPE, generation: 42, requestId: request.requestId, ok: true, result: { launchCwd: null } })
+  const result = (await promise) as { launchCwd: string | null }
+  assert.equal(result.launchCwd, null)
+  client.dispose()
+})
+
+test("non-allowlisted operations fail closed without port traffic", async () => {
+  const h = fakeWindow("null", true)
+  const { client, parentPort, ...rest } = await bind(h)
+  let sawTraffic = false
+  parentPort.onmessage = () => {
+    sawTraffic = true
+  }
+  await assert.rejects(() => client.request("evil.op"), /not allowed/)
+  await new Promise((r) => setTimeout(r, 10))
+  assert.equal(sawTraffic, false)
+  client.dispose()
+})
+
+test("responses with a stale generation are ignored", async () => {
+  const h = fakeWindow("null", true)
+  const { client, parentPort } = await bind(h, 5)
+  const promise = client.request("preferences.get")
+  const request = await waitForMessage(parentPort)
+  parentPort.postMessage({ protocol: EMBEDDED_PROTOCOL, type: RESPONSE_TYPE, generation: 4, requestId: request.requestId, ok: true, result: "stale" })
+  parentPort.postMessage({ protocol: EMBEDDED_PROTOCOL, type: RESPONSE_TYPE, generation: 5, requestId: request.requestId, ok: true, result: "current" })
+  assert.equal(await promise, "current")
+  client.dispose()
+})
+
+test("parent silence times out as unknown result and late responses are ignored", async () => {
+  const h = fakeWindow("null", true)
+  const { client, parentPort } = await bind(h, 3, { requestTimeoutMs: 25 })
+  const promise = client.request("preferences.get")
+  const request = await waitForMessage(parentPort)
+  await assert.rejects(() => promise, /timed out: unknown result/)
+  parentPort.postMessage({ protocol: EMBEDDED_PROTOCOL, type: RESPONSE_TYPE, generation: 3, requestId: request.requestId, ok: true, result: "late" })
+  await new Promise((r) => setTimeout(r, 10))
+  client.dispose()
+})
+
+test("pending cap rejects excess requests under a silent parent", async () => {
+  const h = fakeWindow("null", true)
+  const { client } = await bind(h, 3, { requestTimeoutMs: 60_000, maxPending: 1 })
+  const first = client.request("preferences.get")
+  await assert.rejects(() => client.request("projects.list"), /pending cap/)
+  client.dispose()
+  await assert.rejects(() => first, /disposed/)
+})
+
+test("dispose rejects pending requests and closes the channel", async () => {
+  const h = fakeWindow("null", true)
+  const { client } = await bind(h, 3, { requestTimeoutMs: 60_000 })
+  const promise = client.request("preferences.get")
+  client.dispose()
+  await assert.rejects(() => promise, /disposed/)
+  await assert.rejects(() => client.request("preferences.get"), /disposed/)
+})
+
+test("a port whose postMessage throws rejects the request and drains pending", async () => {
+  const h = fakeWindow("null", true)
+  const throwingPort = {
+    postMessage: () => {
+      throw new Error("could not be cloned")
+    },
+    close: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }
+  const negotiation = negotiateEmbeddedTransport({ window: h.win, allowedOperations: ["preferences.get"], maxPending: 1 })
+  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: 1 }, { ports: [throwingPort] })
+  const client = await negotiation
+  await assert.rejects(() => client.request("preferences.get"), /could not be cloned/)
+  client.dispose()
+})
