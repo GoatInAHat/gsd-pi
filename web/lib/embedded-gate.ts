@@ -11,7 +11,6 @@
 import {
   detectEmbeddedChannel,
   negotiateEmbeddedTransport,
-  EMBEDDED_MARKER_QUERY,
   type EmbeddedOperationClient,
   type FrameEventMessage,
 } from "./embedded-transport.ts"
@@ -20,6 +19,7 @@ export type EmbeddedStartupState = "standalone" | "embedded-ready" | "embedded-u
 
 let cachedTransport: EmbeddedOperationClient | null = null
 let startupPromise: Promise<EmbeddedStartupState> | null = null
+let gateGeneration = 0
 
 export function embeddedModeActive(): boolean {
   if (typeof window === "undefined") return false
@@ -27,7 +27,8 @@ export function embeddedModeActive(): boolean {
 }
 
 /** Bounded startup: standalone resolves immediately; embedded negotiates once
- * and never falls back to direct HTTP. */
+ * and never falls back to direct HTTP. A reset during negotiation invalidates
+ * the in-flight completion - it is disposed, never installed. */
 export function embeddedStartup(options?: {
   allowedOperations?: Iterable<string>
   negotiate?: (opts: { allowedOperations: Iterable<string> }) => Promise<EmbeddedOperationClient>
@@ -36,8 +37,14 @@ export function embeddedStartup(options?: {
   if (startupPromise) return startupPromise
   const allowed = options?.allowedOperations ?? []
   const negotiate = options?.negotiate ?? ((opts) => negotiateEmbeddedTransport({ ...opts, window: window as never }))
+  const generation = gateGeneration
   startupPromise = negotiate({ allowedOperations: allowed })
     .then((client) => {
+      if (generation !== gateGeneration) {
+        // Stale completion after reset/shutdown: dispose it, never install it.
+        client.dispose()
+        return "embedded-unavailable" as const
+      }
       cachedTransport = client
       return "embedded-ready" as const
     })
@@ -49,8 +56,10 @@ export function getEmbeddedTransport(): EmbeddedOperationClient | null {
   return cachedTransport
 }
 
-/** Testing seam: reset the singleton. */
+/** Testing and shutdown seam: resets the singleton and invalidates any
+ * in-flight negotiation via the generation counter. */
 export function resetEmbeddedGate(): void {
+  gateGeneration += 1
   cachedTransport?.dispose()
   cachedTransport = null
   startupPromise = null
@@ -87,10 +96,14 @@ const ROUTE_MAP: RouteMapping[] = [
     pattern: /^\/api\/switch-root$/,
     operation: "preferences.selectRoot",
     buildArgs: (_url, bodyText) => {
+      // Validated DTO: only the known devRoot field crosses; arbitrary JSON
+      // from the request body is never forwarded wholesale.
       try {
-        return bodyText ? JSON.parse(bodyText) : {}
+        const parsed = bodyText ? JSON.parse(bodyText) : {}
+        const devRoot = typeof (parsed as { devRoot?: unknown })?.devRoot === "string" ? (parsed as { devRoot: string }).devRoot : undefined
+        return { devRoot }
       } catch {
-        return {}
+        return { devRoot: undefined }
       }
     },
   },
@@ -143,7 +156,13 @@ export function embeddedShutdown(): void {
   resetEmbeddedGate()
 }
 
-/** EventSource-compatible adapter over subscription operations. */
+/** EventSource-compatible adapter over subscription operations.
+ *
+ * Validated readiness: nothing is delivered before an exact subscriptionId
+ * arrives from the subscribe reply; non-matching subscriptionIds never
+ * deliver. close() releases the backend subscription, and a late subscribe
+ * reply after close also releases rather than leaking. Subscribe failures
+ * tear down the event handler and surface onerror. */
 export class EmbeddedEventSourceAdapter {
   onopen: (() => void) | null = null
   onmessage: ((event: { data: string }) => void) | null = null
@@ -151,55 +170,98 @@ export class EmbeddedEventSourceAdapter {
   private closed = false
   private subscriptionId: string | null = null
   private unsubscribeEvents: () => void
+  private transportRef: EmbeddedOperationClient
+  private operationRef: string
 
   constructor(transport: EmbeddedOperationClient, operation: string, args: unknown) {
+    this.transportRef = transport
+    this.operationRef = operation
     this.unsubscribeEvents = transport.onEvent((message: FrameEventMessage) => {
-      if (this.closed) return
-      if (this.subscriptionId !== null && message.subscriptionId !== this.subscriptionId) return
+      if (this.closed || this.subscriptionId === null) return
+      if (message.subscriptionId !== this.subscriptionId) return
       if (message.event === undefined) return
       this.onmessage?.({ data: typeof message.event === "string" ? message.event : JSON.stringify(message.event) })
     })
     transport.request(operation, args).then(
       (result) => {
-        if (this.closed) return
-        this.subscriptionId = (result as { subscriptionId?: string } | null)?.subscriptionId ?? null
+        const id = (result as { subscriptionId?: unknown } | null)?.subscriptionId
+        if (typeof id !== "string") {
+          this.teardown()
+          if (!this.closed) this.onerror?.()
+          return
+        }
+        if (this.closed) {
+          // Late subscribe reply after close: the backend holds a live
+          // subscription that must still be released.
+          this.releaseBackend(id)
+          return
+        }
+        this.subscriptionId = id
         this.onopen?.()
       },
       () => {
+        this.teardown()
         if (!this.closed) this.onerror?.()
       },
     )
   }
 
+  private releaseBackend(subscriptionId: string): void {
+    const unsubscribeOperation = this.operationRef.replace(/\.subscribe$/, ".unsubscribe")
+    void this.transportRef.request(unsubscribeOperation, { subscriptionId }).catch(() => {
+      // best-effort release; server-side lease retirement covers crashes
+    })
+  }
+
+  private teardown(): void {
+    this.unsubscribeEvents()
+  }
+
   close(): void {
     if (this.closed) return
     this.closed = true
-    this.unsubscribeEvents()
+    this.teardown()
+    if (this.subscriptionId !== null) this.releaseBackend(this.subscriptionId)
   }
 }
 
-const STREAM_MAP: Array<{ pattern: RegExp; operation: string; buildArgs: (url: URL) => unknown }> = [
+function normalizeStreamUrl(rawUrl: string): { pathname: string; searchParams: URLSearchParams } | undefined {
+  try {
+    const url = new URL(rawUrl, "http://embedded.invalid")
+    let pathname = url.pathname
+    const base = process.env.NEXT_PUBLIC_BASE_PATH ?? ""
+    if (base && pathname.startsWith(base)) pathname = pathname.slice(base.length)
+    return { pathname, searchParams: url.searchParams }
+  } catch {
+    return undefined
+  }
+}
+
+const STREAM_MAP: Array<{ pattern: RegExp; operation: string; buildArgs: (params: URLSearchParams) => unknown }> = [
   {
-    pattern: /^\/api\/session\/events/,
+    pattern: /^\/api\/session\/events$/,
     operation: "workspace.events.subscribe",
-    buildArgs: (url) => ({ project: url.searchParams.get("project") }),
+    buildArgs: (params) => ({ project: params.get("project") }),
   },
   {
-    pattern: /^\/api\/terminal\/stream/,
+    // Output subscription only: terminalId identifies an existing terminal.
+    // Creation (with command) is a separate reviewed operation, never here.
+    pattern: /^\/api\/terminal\/stream$/,
     operation: "terminal.output.subscribe",
-    buildArgs: (url) => ({ terminalId: url.searchParams.get("id"), command: url.searchParams.get("command") }),
+    buildArgs: (params) => ({ terminalId: params.get("id") }),
   },
 ]
 
 export function embeddedEventSourceForUrl(url: string): EmbeddedEventSourceAdapter | undefined {
   const transport = getEmbeddedTransport()
   if (!transport) return undefined
-  const path = url.split("?")[0]
+  const normalized = normalizeStreamUrl(url)
+  if (!normalized) return undefined
   for (const mapping of STREAM_MAP) {
-    if (!mapping.pattern.test(path)) continue
-    return new EmbeddedEventSourceAdapter(transport, mapping.operation, mapping.buildArgs(new URL("http://embedded.invalid" + url)))
+    if (!mapping.pattern.test(normalized.pathname)) continue
+    return new EmbeddedEventSourceAdapter(transport, mapping.operation, mapping.buildArgs(normalized.searchParams))
   }
   return undefined
 }
 
-export { EMBEDDED_MARKER_QUERY }
+export { EMBEDDED_MARKER_QUERY } from "./embedded-transport.ts"

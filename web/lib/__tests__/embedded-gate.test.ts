@@ -52,8 +52,8 @@ test("known routes map to named operations with parsed args", () => {
     { operation: "projects.list", args: { root: "/home/x", detail: true } },
   )
   assert.deepEqual(
-    mapRouteToOperation("POST", "/api/switch-root", JSON.stringify({ root: "/home/y" })),
-    { operation: "preferences.selectRoot", args: { root: "/home/y" } },
+    mapRouteToOperation("POST", "/api/switch-root", JSON.stringify({ devRoot: "/home/y", extra: "dropped" })),
+    { operation: "preferences.selectRoot", args: { devRoot: "/home/y" } },
   )
   assert.deepEqual(
     mapRouteToOperation("DELETE", "/api/files?root=%2Fhome%2Fx&path=src", null),
@@ -178,5 +178,102 @@ test("stream URL mapping returns undefined without a transport; beacon suppressi
     assert.equal(shouldSuppressShutdownBeacon(), false)
   } finally {
     restoreStandalone()
+  }
+})
+
+
+test("reset during negotiation disposes the stale completion and never installs it", async () => {
+  const restore = stubWindow(true)
+  try {
+    let resolveNegotiation!: (client: unknown) => void
+    const disposed: number[] = []
+    const slowClient = { request: async () => ({}), onEvent: () => () => {}, dispose: () => { disposed.push(1) } }
+    const negotiation = embeddedStartup({ allowedOperations: [], negotiate: () => new Promise((r) => { resolveNegotiation = r }) as never })
+    resetEmbeddedGate()
+    resolveNegotiation(slowClient)
+    assert.equal(await negotiation, "embedded-unavailable")
+    assert.equal(getEmbeddedTransport(), null)
+    assert.equal(disposed.length, 1)
+  } finally {
+    restore()
+    resetEmbeddedGate()
+  }
+})
+
+test("adapter delivers nothing before the subscribe reply establishes readiness", async () => {
+  const fake = fakeTransport()
+  let resolveSubscribe!: (value: unknown) => void
+  fake.client.request = (async () => new Promise((r) => { resolveSubscribe = r })) as never
+  const received: string[] = []
+  const adapter = new EmbeddedEventSourceAdapter(fake.client, "workspace.events.subscribe", {})
+  adapter.onmessage = (ev) => { received.push(ev.data) }
+  fake.emit({ protocol: EMBEDDED_PROTOCOL, type: EVENT_TYPE, generation: 1, subscriptionId: "sub-9", seq: 1, event: { kind: "early" } })
+  await new Promise((r) => setTimeout(r, 5))
+  assert.deepEqual(received, [])
+  resolveSubscribe({ subscriptionId: "sub-9" })
+  await new Promise((r) => setTimeout(r, 5))
+  fake.emit({ protocol: EMBEDDED_PROTOCOL, type: EVENT_TYPE, generation: 1, subscriptionId: "sub-9", seq: 2, event: { kind: "late" } })
+  await new Promise((r) => setTimeout(r, 5))
+  assert.deepEqual(received, [JSON.stringify({ kind: "late" })])
+  adapter.close()
+})
+
+test("subscribe failure surfaces onerror and detaches the event handler", async () => {
+  const fake = fakeTransport()
+  fake.client.request = (async () => {
+    throw new Error("denied")
+  }) as never
+  let errored = false
+  const received: string[] = []
+  const adapter = new EmbeddedEventSourceAdapter(fake.client, "workspace.events.subscribe", {})
+  adapter.onerror = () => { errored = true }
+  adapter.onmessage = (ev) => { received.push(ev.data) }
+  await new Promise((r) => setTimeout(r, 5))
+  assert.equal(errored, true)
+  fake.emit({ protocol: EMBEDDED_PROTOCOL, type: EVENT_TYPE, generation: 1, subscriptionId: "sub-x", seq: 1, event: "zombie" })
+  await new Promise((r) => setTimeout(r, 5))
+  assert.deepEqual(received, [])
+})
+
+test("close releases the backend subscription and late replies release too", async () => {
+  const fake = fakeTransport({ subscriptionId: "sub-7" })
+  const adapter = new EmbeddedEventSourceAdapter(fake.client, "workspace.events.subscribe", {})
+  await new Promise((r) => setTimeout(r, 5))
+  adapter.close()
+  assert.deepEqual(fake.requests.map((r) => r.operation), ["workspace.events.subscribe", "workspace.events.unsubscribe"])
+  assert.deepEqual(fake.requests[1].args, { subscriptionId: "sub-7" })
+
+  const fake2 = fakeTransport()
+  let resolveSubscribe!: (value: unknown) => void
+  fake2.client.request = (async (operation: string, args?: unknown) => {
+    fake2.requests.push({ operation, args })
+    return new Promise((r) => { resolveSubscribe = r })
+  }) as never
+  let opened = false
+  const adapter2 = new EmbeddedEventSourceAdapter(fake2.client, "terminal.output.subscribe", {})
+  adapter2.onopen = () => { opened = true }
+  adapter2.close()
+  resolveSubscribe({ subscriptionId: "sub-late" })
+  await new Promise((r) => setTimeout(r, 5))
+  assert.equal(opened, false)
+  assert.deepEqual(fake2.requests.map((r) => r.operation), ["terminal.output.subscribe", "terminal.output.unsubscribe"])
+  assert.deepEqual(fake2.requests[1].args, { subscriptionId: "sub-late" })
+})
+
+test("stream mapping normalizes absolute base-pathed URLs and keeps create out of subscribe", async () => {
+  const restore = stubWindow(true)
+  try {
+    process.env.NEXT_PUBLIC_BASE_PATH = "/plugins/open-gsd-openclaw/web"
+    const fake = fakeTransport({ subscriptionId: "s" })
+    await embeddedStartup({ allowedOperations: [], negotiate: async () => fake.client })
+    const adapter = embeddedEventSourceForUrl("http://127.0.0.1:33277/plugins/open-gsd-openclaw/web/api/terminal/stream?id=t1&command=rm")
+    assert.notEqual(adapter, undefined)
+    await new Promise((r) => setTimeout(r, 5))
+    assert.deepEqual(fake.requests, [{ operation: "terminal.output.subscribe", args: { terminalId: "t1" } }])
+    adapter?.close()
+  } finally {
+    delete process.env.NEXT_PUBLIC_BASE_PATH
+    restore()
+    resetEmbeddedGate()
   }
 })
