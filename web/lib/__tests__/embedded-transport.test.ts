@@ -184,19 +184,64 @@ test("dispose rejects pending requests and closes the channel", async () => {
   await assert.rejects(() => client.request("preferences.get"), /disposed/)
 })
 
-test("a port whose postMessage throws rejects the request and drains pending", async () => {
+test("a request postMessage throw rejects the request and drains pending after a healthy ack", async () => {
   const h = fakeWindow("null", true)
-  const throwingPort = {
+  let calls = 0
+  const flakyPort = {
     postMessage: () => {
-      throw new Error("could not be cloned")
+      calls += 1
+      if (calls >= 2) throw new Error("could not be cloned")
     },
     close: () => {},
     addEventListener: () => {},
     removeEventListener: () => {},
   }
   const negotiation = negotiateEmbeddedTransport({ window: h.win, allowedOperations: ["preferences.get"], maxPending: 1 })
-  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: 1 }, { ports: [throwingPort] })
+  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: 1 }, { ports: [flakyPort] })
   const client = await negotiation
   await assert.rejects(() => client.request("preferences.get"), /could not be cloned/)
+  client.dispose()
+})
+
+test("bind acknowledgement failure rejects the negotiation instead of resolving a broken client", async () => {
+  const h = fakeWindow("null", true)
+  const deadPort = {
+    postMessage: () => {
+      throw new Error("port closed")
+    },
+    close: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }
+  const negotiation = negotiateEmbeddedTransport({ window: h.win, allowedOperations: ["preferences.get"] })
+  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: 1 }, { ports: [deadPort] })
+  await assert.rejects(() => negotiation, /port closed/)
+})
+
+test("binds with multiple transferred ports are rejected and negotiation expires", async () => {
+  const h = fakeWindow("null", true)
+  const negotiation = negotiateEmbeddedTransport({ window: h.win, allowedOperations: ["preferences.get"], negotiationTimeoutMs: 25 })
+  const first = new MessageChannel()
+  const second = new MessageChannel()
+  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: 1 }, { ports: [first.port2, second.port2] })
+  await assert.rejects(() => negotiation, /negotiation timed out/)
+})
+
+test("binds with a non-number generation are rejected and negotiation expires", async () => {
+  const h = fakeWindow("null", true)
+  const negotiation = negotiateEmbeddedTransport({ window: h.win, allowedOperations: ["preferences.get"], negotiationTimeoutMs: 25 })
+  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: "7" }, { ports: [new MessageChannel().port2] })
+  await assert.rejects(() => negotiation, /negotiation timed out/)
+})
+
+test("responses without a boolean ok or string requestId are ignored", async () => {
+  const h = fakeWindow("null", true)
+  const { client, parentPort } = await bind(h, 9)
+  const promise = client.request("preferences.get")
+  const request = await waitForMessage(parentPort)
+  parentPort.postMessage({ protocol: EMBEDDED_PROTOCOL, type: RESPONSE_TYPE, generation: 9, requestId: request.requestId, ok: "yes", result: "bad" })
+  parentPort.postMessage({ protocol: EMBEDDED_PROTOCOL, type: RESPONSE_TYPE, generation: 9, requestId: 42, ok: true, result: "bad2" })
+  parentPort.postMessage({ protocol: EMBEDDED_PROTOCOL, type: RESPONSE_TYPE, generation: 9, requestId: request.requestId, ok: true, result: "good" })
+  assert.equal(await promise, "good")
   client.dispose()
 })

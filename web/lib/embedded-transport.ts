@@ -130,7 +130,7 @@ export function negotiateEmbeddedTransport(options: {
       () => finish(() => rejectNegotiation(new Error("embedded transport negotiation timed out"))),
       options.negotiationTimeoutMs ?? DEFAULT_NEGOTIATION_TIMEOUT_MS,
     )
-    function makeClient(port: EmbeddedPortLike, generation: number): EmbeddedOperationClient {
+    function makeClient(port: EmbeddedPortLike, generation: number, onDispose?: () => void): EmbeddedOperationClient {
       const pending = new Map<string, PendingEntry>()
       let disposed = false
       const settle = (requestId: string, entry: PendingEntry, run: (entry: PendingEntry) => void) => {
@@ -142,6 +142,7 @@ export function negotiateEmbeddedTransport(options: {
       const portListener = (event: MessageEvent) => {
         const data = event.data as FrameResponse | undefined
         if (!data || data.protocol !== EMBEDDED_PROTOCOL || data.type !== RESPONSE_TYPE || data.generation !== generation) return
+        if (typeof data.requestId !== "string" || typeof data.ok !== "boolean") return
         const entry = pending.get(data.requestId)
         if (!entry) return
         if (data.ok) settle(data.requestId, entry, (e) => e.resolve(data.result))
@@ -184,6 +185,7 @@ export function negotiateEmbeddedTransport(options: {
             settle(requestId, entry, (e) => e.reject(new Error("embedded transport disposed")))
           }
           pending.clear()
+          onDispose?.()
         },
       }
     }
@@ -193,26 +195,53 @@ export function negotiateEmbeddedTransport(options: {
       const data = event.data as BindMessage | undefined
       if (!data || data.protocol !== EMBEDDED_PROTOCOL || data.type !== BIND_TYPE) return
       const ports = (event as unknown as { ports?: unknown[] }).ports
-      const port = ports && ports.length > 0 ? (ports[0] as EmbeddedPortLike) : undefined
-      if (!port) return
-      if (settled) {
-        // Duplicate bind from the parent: close the extra port, keep the
-        // already-established channel untouched.
-        try {
-          port.close()
-        } catch {
-          // port already closed
+      const closeAll = (list: unknown) => {
+        if (!Array.isArray(list)) return
+        for (const candidate of list) {
+          try {
+            ;(candidate as EmbeddedPortLike).close()
+          } catch {
+            // already closed
+          }
         }
+      }
+      if (!Array.isArray(ports) || ports.length !== 1) {
+        closeAll(ports)
+        return
+      }
+      const port = ports[0] as EmbeddedPortLike | undefined
+      if (!port || typeof port.postMessage !== "function" || typeof port.close !== "function") {
+        closeAll(ports)
+        return
+      }
+      if (typeof data.generation !== "number" || !Number.isFinite(data.generation)) {
+        closeAll(ports)
+        return
+      }
+      if (settled) {
+        closeAll(ports)
         return
       }
       settled = true
       clearTimeout(negotiationTimer)
       w.removeEventListener("message", listener)
-      const client = makeClient(port, data.generation)
+      // Narrow guard retained through client disposal: any later bind attempt
+      // from the parent has its transferred ports closed; the established
+      // channel is untouched.
+      const guard = (guardEvent: MessageEvent) => {
+        if (guardEvent.source !== w.parent) return
+        const guardData = guardEvent.data as BindMessage | undefined
+        if (!guardData || guardData.protocol !== EMBEDDED_PROTOCOL || guardData.type !== BIND_TYPE) return
+        closeAll((guardEvent as unknown as { ports?: unknown[] }).ports)
+      }
+      w.addEventListener("message", guard)
+      const client = makeClient(port, data.generation, () => w.removeEventListener("message", guard))
       try {
         port.postMessage({ protocol: EMBEDDED_PROTOCOL, type: BIND_ACK_TYPE, generation: data.generation })
-      } catch {
-        // parent will observe a dead port through its own lifecycle checks
+      } catch (error) {
+        client.dispose()
+        rejectNegotiation(error instanceof Error ? error : new Error("embedded transport bind acknowledgement failed"))
+        return
       }
       resolveNegotiation(client)
     }
