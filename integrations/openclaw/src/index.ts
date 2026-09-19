@@ -34,6 +34,7 @@ export function gatewayScopes(method: string): OperatorScope[] {
 }
 
 let embeddedProjectsConfigRef: import("./ui-methods.js").EmbeddedProjectsConfig | undefined
+let gsdUiHandles: ReturnType<typeof registerGsdUiMethods> | undefined
 
 const gsdPluginEntry = definePluginEntry({
   id: "open-gsd-openclaw",
@@ -45,7 +46,7 @@ const gsdPluginEntry = definePluginEntry({
     // The config ref is refreshed by the gsd-web-portal service start.
     const embeddedProjectsConfig: import("./ui-methods.js").EmbeddedProjectsConfig = {}
     embeddedProjectsConfigRef = embeddedProjectsConfig
-    registerGsdUiMethods(api as unknown as import("./ui-methods.js").UiMethodApi, () => portal?.webPort ?? webTabPort, embeddedProjectsConfig)
+    gsdUiHandles = registerGsdUiMethods(api as unknown as import("./ui-methods.js").UiMethodApi, () => portal?.webPort ?? webTabPort, embeddedProjectsConfig)
     let portal: GsdPortalService | undefined;
     let webTabPort: number | undefined;
     registerWebTab(api, () => portal?.webPort ?? webTabPort);
@@ -57,15 +58,22 @@ const gsdPluginEntry = definePluginEntry({
           context.serviceHealth?.reportFailure(new Error("GSD web portal unavailable"));
           api.logger.warn("GSD web portal unavailable; check the GSD web host installation and Gateway portal access.");
         };
+        // Policy is REPLACED on every start/reload - including explicit
+        // empty removal, so withdrawn projects lose their grants.
         const embeddedConfig = context.config.plugins?.entries?.["open-gsd-openclaw"]?.config as { embeddedProjects?: unknown } | undefined
-        if (embeddedProjectsConfigRef && embeddedConfig?.embeddedProjects && typeof embeddedConfig.embeddedProjects === "object") {
-          const source = embeddedConfig.embeddedProjects as { adminOnly?: unknown; projects?: unknown }
-          embeddedProjectsConfigRef.adminOnly = source.adminOnly === true
-          embeddedProjectsConfigRef.projects = Array.isArray(source.projects)
-            ? source.projects.filter((p): p is { projectId: string; canonicalRoot: string } =>
-                typeof (p as { projectId?: unknown })?.projectId === "string" &&
-                typeof (p as { canonicalRoot?: unknown })?.canonicalRoot === "string")
-            : []
+        if (embeddedProjectsConfigRef) {
+          const source = embeddedConfig?.embeddedProjects as { adminOnly?: unknown; projects?: unknown } | undefined
+          if (source && typeof source === "object") {
+            embeddedProjectsConfigRef.adminOnly = source.adminOnly !== false
+            embeddedProjectsConfigRef.projects = Array.isArray(source.projects)
+              ? source.projects.filter((p): p is { projectId: string; canonicalRoot: string } =>
+                  typeof (p as { projectId?: unknown })?.projectId === "string" &&
+                  typeof (p as { canonicalRoot?: unknown })?.canonicalRoot === "string")
+              : []
+          } else {
+            embeddedProjectsConfigRef.adminOnly = true
+            embeddedProjectsConfigRef.projects = []
+          }
         }
         portal = new GsdPortalService({
           config: context.config.plugins?.entries?.["open-gsd-openclaw"]?.config?.webUi,
@@ -80,6 +88,8 @@ const gsdPluginEntry = definePluginEntry({
         }, reportFailure);
       },
       async stop() {
+        // Release every live gsd.ui subscription before the host goes down.
+        gsdUiHandles?.disposeAll()
         await portal?.stop();
         portal = undefined;
         webTabPort = undefined;
@@ -183,7 +193,29 @@ Object.defineProperty(gsdPluginEntry, toolPluginMetadataSymbol, {
     name: "Open GSD",
     description: "GSD web UI in native Portals, MCP tools, and automatic project, TaskFlow, and Workboard synchronization",
     activation: { onStartup: true },
-    configSchema: { type: "object", properties: {}, additionalProperties: false },
+    configSchema: {
+      type: "object",
+      properties: {
+        webUi: { type: "object" },
+        embeddedProjects: {
+          type: "object",
+          properties: {
+            adminOnly: { type: "boolean" },
+            projects: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: { projectId: { type: "string" }, canonicalRoot: { type: "string" } },
+                required: ["projectId", "canonicalRoot"],
+                additionalProperties: false,
+              },
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+      additionalProperties: false,
+    },
     tools: [],
   },
   enumerable: false,

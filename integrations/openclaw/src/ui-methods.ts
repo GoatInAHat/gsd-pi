@@ -104,8 +104,19 @@ export function registerGsdUiMethods(
       signal: AbortSignal.timeout(DAEMON_TIMEOUT_MS),
     })
     if (!res.ok) throw new Error(`GSD route ${route} returned ${res.status}`)
-    const text = await res.text()
-    if (text.length > DAEMON_MAX_BYTES) throw new Error("GSD response exceeds size bound")
+    if (!res.body) throw new Error("GSD response has no body")
+    // Byte bound enforced WHILE reading, never after full buffering.
+    const bodyReader = res.body.getReader()
+    let received = 0
+    const chunks: Uint8Array[] = []
+    for (;;) {
+      const { done, value } = await bodyReader.read()
+      if (done) break
+      received += value?.length ?? 0
+      if (received > DAEMON_MAX_BYTES) throw new Error("GSD response exceeds size bound")
+      if (value) chunks.push(value)
+    }
+    const text = await new Blob(chunks).text()
     const parsed = JSON.parse(text) as unknown
     if (typeof parsed !== "object" || parsed === null) throw new Error("GSD response is not a JSON object")
     return parsed
@@ -137,7 +148,13 @@ export function registerGsdUiMethods(
     }
     const projectId = paramString(params, "projectId")
     const root = paramString(params, "root") ?? paramString(params, "project")
-    const project = findApproved(config, { projectId, root })
+    let project = findApproved(config, { projectId, root })
+    if (!project && !projectId && !root) {
+      // No explicit context: pin to the single approved project when exactly
+      // one exists - never to an arbitrary first entry of many.
+      const all = approvedProjects(config)
+      if (all.length === 1) project = all[0]
+    }
     if (!project) return { project: undefined as never, denied: frame("GSD_UI_NO_APPROVED_PROJECT", "no approved project matches") }
     if (!canonicalRootIsCurrent(project.canonicalRoot)) {
       return { project: undefined as never, denied: frame("GSD_UI_ROOT_IDENTITY_CHANGED", "approved root canonical identity changed") }
@@ -162,7 +179,16 @@ export function registerGsdUiMethods(
 
   api.registerGatewayMethod(
     "gsd.ui.preferences.read",
-    (opts) => guard(opts, () => daemonFetch("/api/preferences")),
+    (opts) =>
+      guard(opts, async () => {
+        // Admin-only surface: admission is enforced consistently here too.
+        const denied = admissionDenied(opts.client)
+        if (denied) {
+          const separator = denied.indexOf("|")
+          throw frame(denied.slice(0, separator), denied.slice(separator + 1))
+        }
+        return daemonFetch("/api/preferences")
+      }),
     { scope: "operator.read", profileAccess: "required" },
   )
 
@@ -186,6 +212,8 @@ export function registerGsdUiMethods(
         if (denied) throw denied
         const rawPath = paramString(opts.params, "path")
         // Daemon paths are absolute; normalize either form before containment.
+        // Path-only browse is pinned to the admitted project when exactly one
+        // is approved; multiple approved projects require explicit context.
         const target = rawPath ? (isAbsolute(rawPath) ? rawPath : join(project.canonicalRoot, rawPath)) : project.canonicalRoot
         if (!containsCanonically(project.canonicalRoot, target)) throw frame("GSD_UI_PATH_ESCAPE", "path escapes the approved root")
         return daemonFetch(`/api/browse-directories?path=${encodeURIComponent(target)}`)
@@ -202,6 +230,19 @@ export function registerGsdUiMethods(
         const { project, denied } = requireApprovedProject({ root: devRoot }, opts.client)
         if (denied) throw denied
         return daemonFetch("/api/switch-root", { method: "POST", body: JSON.stringify({ devRoot: project.canonicalRoot }) })
+      }),
+    { scope: "operator.write", profileAccess: "required" },
+  )
+
+  api.registerGatewayMethod(
+    "gsd.ui.preferences.setDevRoot",
+    (opts) =>
+      guard(opts, async () => {
+        const devRoot = paramString(opts.params, "devRoot")
+        if (!devRoot) throw frame("GSD_UI_MISSING_PARAM", "missing devRoot")
+        const { project, denied } = requireApprovedProject({ root: devRoot }, opts.client)
+        if (denied) throw denied
+        return daemonFetch("/api/preferences", { method: "PUT", body: JSON.stringify({ devRoot: project.canonicalRoot }) })
       }),
     { scope: "operator.write", profileAccess: "required" },
   )
@@ -231,6 +272,8 @@ export function registerGsdUiMethods(
     subscriptionId: string
     seq: number
     removeConnectionListener: () => void
+    connectionSignal: AbortSignal
+    broadcast: (event: string, payload: unknown, connIds: ReadonlySet<string>) => void
   }
   const subscriptions = new Map<string, SubscriptionRecord>()
 
@@ -241,6 +284,14 @@ export function registerGsdUiMethods(
     clearTimeout(record.lease)
     record.removeConnectionListener()
     record.controller.abort()
+    // Targeted closure notice: only a still-live connection hears it.
+    if (!record.connectionSignal.aborted) {
+      try {
+        record.broadcast(GSD_UI_EVENT, { type: GSD_UI_EVENT, subscriptionId, closed: true, reason }, new Set([record.connId]))
+      } catch {
+        // connection already gone
+      }
+    }
   }
 
   const startSubscription = (opts: UiHandlerOptions, streamRoute: (project: ApprovedProject) => string): void => {
@@ -279,6 +330,8 @@ export function registerGsdUiMethods(
       subscriptionId,
       seq: 0,
       removeConnectionListener: () => connectionSignal.removeEventListener("abort", onConnectionAbort),
+      connectionSignal,
+      broadcast,
     }
     subscriptions.set(subscriptionId, record)
     connectionSignal.addEventListener("abort", onConnectionAbort, { once: true })
@@ -299,11 +352,17 @@ export function registerGsdUiMethods(
         fail("GSD_UI_HOST_UNAVAILABLE", "GSD web host unavailable")
         return
       }
+      let initialResponded = false
       try {
+        // Admission deadline: cleared once headers arrive so a healthy
+        // stream is governed ONLY by the lifetime lease afterwards.
+        const admission = new AbortController()
+        const admissionTimer = setTimeout(() => admission.abort(), DAEMON_TIMEOUT_MS)
         const res = await fetch(base + route, {
           redirect: "manual",
-          signal: AbortSignal.any([record.controller.signal, AbortSignal.timeout(DAEMON_TIMEOUT_MS)]),
+          signal: AbortSignal.any([record.controller.signal, admission.signal]),
         })
+        clearTimeout(admissionTimer)
         if (!res.ok || !res.body) {
           release(subscriptionId, `stream route returned ${res.status}`)
           if (res.status === 409) fail("GSD_UI_NOT_STARTED", "workspace or terminal not started; start it first")
@@ -311,6 +370,7 @@ export function registerGsdUiMethods(
           return
         }
         if (subscriptions.get(subscriptionId) !== record) return // closed before reply
+        initialResponded = true
         opts.respond(true, { subscriptionId })
         const reader = res.body.getReader()
         const decoder = new TextDecoder()
@@ -343,8 +403,11 @@ export function registerGsdUiMethods(
         }
         release(subscriptionId, "stream ended")
       } catch {
-        if (subscriptions.get(subscriptionId) === record) {
-          release(subscriptionId, "stream failed")
+        const stillLive = subscriptions.get(subscriptionId) === record
+        release(subscriptionId, "stream failed")
+        if (stillLive && !initialResponded) {
+          initialResponded = true
+          opts.respond(false, undefined, frame("GSD_UI_STREAM_ERROR", "stream admission failed"))
         }
       }
     })()
@@ -363,7 +426,7 @@ export function registerGsdUiMethods(
       startSubscription(opts, (project) => {
         const terminalId = paramString(opts.params, "terminalId")
         if (!terminalId) throw frame("GSD_UI_MISSING_PARAM", "missing terminalId")
-        return `/api/terminal/stream?id=${encodeURIComponent(terminalId)}`
+        return `/api/terminal/stream?id=${encodeURIComponent(terminalId)}&project=${encodeURIComponent(project.canonicalRoot)}`
       }),
     { scope: "operator.read", profileAccess: "required" },
   )

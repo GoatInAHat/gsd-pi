@@ -141,7 +141,9 @@ export function createGsdEmbedPlugin(options: GsdEmbedOptions): unknown {
           }
 
           const releaseSubscription = (subscriptionId: string, unsubscribeOp: string) => {
-            void options.request(unsubscribeOp, { subscriptionId } as Record<string, unknown>).catch(() => {
+            // Exact fully qualified registered method name - never unprefixed.
+            const method = unsubscribeOp.startsWith("gsd.ui.") ? unsubscribeOp : "gsd.ui." + unsubscribeOp
+            void options.request(method, { subscriptionId } as Record<string, unknown>).catch(() => {
               // best-effort release; server lease retirement covers crashes
             })
           }
@@ -187,9 +189,10 @@ export function createGsdEmbedPlugin(options: GsdEmbedOptions): unknown {
                     const subscriptionId = (result as { subscriptionId?: unknown } | null)?.subscriptionId
                     if (typeof subscriptionId === "string" && message.operation.endsWith(".subscribe")) {
                       const unsubscribeOp = message.operation.replace(/\.subscribe$/, ".unsubscribe")
-                      if (generation !== localGeneration) {
-                        // Late subscribe after a generation change: release
-                        // THAT exact backend subscription, do not adopt it.
+                      if (disposed || generation !== localGeneration) {
+                        // Late subscribe after disposal or a generation
+                        // change: release THAT exact backend subscription,
+                        // never adopt it into the abandoned ownership map.
                         releaseSubscription(subscriptionId, unsubscribeOp)
                         return
                       }
@@ -254,6 +257,9 @@ export function createGsdEmbedPlugin(options: GsdEmbedOptions): unknown {
           const teardown = () => {
             if (disposed) return
             disposed = true
+            // Invalidate the generation so pending completions cannot adopt
+            // subscriptions into an abandoned ownership map.
+            generation += 1
             retireChannel()
             documentNonce = null
             unsubscribeHostEvents?.()

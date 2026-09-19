@@ -269,7 +269,7 @@ test("stream mapping normalizes absolute base-pathed URLs and keeps create out o
     const adapter = embeddedEventSourceForUrl("http://127.0.0.1:33277/plugins/open-gsd-openclaw/web/api/terminal/stream?id=t1&command=rm")
     assert.notEqual(adapter, undefined)
     await new Promise((r) => setTimeout(r, 5))
-    assert.deepEqual(fake.requests, [{ operation: "terminal.output.subscribe", args: { terminalId: "t1" } }])
+    assert.deepEqual(fake.requests, [{ operation: "terminal.output.subscribe", args: { terminalId: "t1", project: null } }])
     adapter?.close()
   } finally {
     delete process.env.NEXT_PUBLIC_BASE_PATH

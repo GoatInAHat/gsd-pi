@@ -53,6 +53,9 @@ function setup(requestImpl?: (method: string, params: unknown) => Promise<unknow
   }
   const requests: Array<{ method: string; params: unknown }> = []
   const request = requestImpl ?? (async (method: string, params: unknown) => {
+    // Strict host stub: rejects unknown Gateway method names, mirroring the
+    // real host - a mis-qualified automatic unsubscribe would throw here.
+    if (!method.startsWith("gsd.ui.")) throw new Error(`unknown Gateway method: ${method}`)
     requests.push({ method, params })
     return { answered: method }
   })
@@ -224,8 +227,23 @@ test("per-mount subscription ownership: only owned ids forward; closed events re
       setTimeout(() => resolve(false), 15)
     })
     assert.equal(afterCloseHeard, false, "released subscription must not forward")
-  } finally {
+    // Establish a LIVE subscription, then retire: the automatic release must
+    // fire the fully qualified unsubscribe for it on the strict host.
+    const sub2Reply = waitForPortMessage(port)
+    port.postMessage({ protocol: GSD_EMBED_PROTOCOL, type: GSD_EMBED_REQUEST_TYPE, generation: 1, requestId: "s2", operation: "workspace.events.subscribe", args: {} })
+    const sub2 = await sub2Reply
+    assert.equal(sub2.ok, true)
+    assert.equal(sub2.result.subscriptionId, "owned-2")
+    // Retire the channel while owning a subscription: the automatic release
+    // must call the FULLY QUALIFIED unsubscribe method on the strict host.
     ;(h.mountResult as { dispose: () => void }).dispose()
+    await new Promise((r) => setTimeout(r, 10))
+    const unsubCalls = h.requests.filter((rq) => rq.method.includes("unsubscribe"))
+    assert.ok(unsubCalls.length >= 1, "retirement must release owned subscriptions")
+    for (const rq of unsubCalls) {
+      assert.ok(rq.method.startsWith("gsd.ui."), `unqualified method: ${rq.method}`)
+    }
+  } finally {
     h.restore()
   }
 })

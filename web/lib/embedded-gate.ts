@@ -24,6 +24,7 @@ export const EMBEDDED_ALLOWED_OPERATIONS: readonly string[] = [
   "projects.list",
   "directories.list",
   "preferences.selectRoot",
+  "preferences.setDevRoot",
   "files.delete",
   "workspace.events.subscribe",
   "workspace.events.unsubscribe",
@@ -103,9 +104,23 @@ const ROUTE_MAP: RouteMapping[] = [
     method: "GET",
     pattern: /^\/api\/browse-directories$/,
     operation: "directories.list",
-    buildArgs: (url) => ({ root: url.searchParams.get("root"), path: url.searchParams.get("path") }),
+    buildArgs: (url) => ({ root: url.searchParams.get("root") ?? url.searchParams.get("project"), path: url.searchParams.get("path") }),
   },
   {
+    method: "PUT",
+    pattern: /^\/api\/preferences$/,
+    operation: "preferences.setDevRoot",
+    buildArgs: (_url, bodyText) => {
+      // Validated DTO: only the known devRoot field crosses.
+      try {
+        const parsed = bodyText ? JSON.parse(bodyText) : {}
+        const devRoot = typeof (parsed as { devRoot?: unknown })?.devRoot === "string" ? (parsed as { devRoot: string }).devRoot : undefined
+        return { devRoot }
+      } catch {
+        return { devRoot: undefined }
+      }
+    },
+  },  {
     method: "POST",
     pattern: /^\/api\/switch-root$/,
     operation: "preferences.selectRoot",
@@ -125,7 +140,7 @@ const ROUTE_MAP: RouteMapping[] = [
     method: "DELETE",
     pattern: /^\/api\/files$/,
     operation: "files.delete",
-    buildArgs: (url) => ({ root: url.searchParams.get("root"), path: url.searchParams.get("path") }),
+    buildArgs: (url) => ({ root: url.searchParams.get("root") ?? url.searchParams.get("project"), path: url.searchParams.get("path") }),
   },
 ]
 
@@ -269,7 +284,7 @@ const STREAM_MAP: Array<{ pattern: RegExp; operation: string; buildArgs: (params
     // Creation (with command) is a separate reviewed operation, never here.
     pattern: /^\/api\/terminal\/stream$/,
     operation: "terminal.output.subscribe",
-    buildArgs: (params) => ({ terminalId: params.get("id") }),
+    buildArgs: (params) => ({ terminalId: params.get("id"), project: params.get("project") }),
   },
 ]
 

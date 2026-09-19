@@ -56,14 +56,16 @@ function stubDaemonFetch(body: unknown = { stubbed: true }) {
 test("nine methods registered; respond contract with ErrorShape third argument", async () => {
   const { api, registered } = recordingApi()
   registerGsdUiMethods(api, () => 33277)
-  assert.equal(registered.size, 9)
+  assert.equal(registered.size, 10)
   for (const [method, entry] of registered) {
     assert.ok(method.startsWith("gsd.ui."), method)
     assert.equal(entry.opts?.profileAccess, "required", method)
   }
   const daemon = stubDaemonFetch()
   try {
-    const responses = await call(registered.get("gsd.ui.preferences.read")!.handler)
+    const adminDenied = await call(registered.get("gsd.ui.preferences.read")!.handler)
+    assert.equal(adminDenied[0].ok, false, "preferences.read must enforce admin admission")
+    const responses = await call(registered.get("gsd.ui.preferences.read")!.handler, { client: adminClient() })
     assert.deepEqual(responses, [{ ok: true, payload: { stubbed: true }, error: undefined }])
     assert.equal(daemon.calls[0].url, "http://127.0.0.1:33277/plugins/open-gsd-openclaw/web/api/preferences")
   } finally {
@@ -166,7 +168,7 @@ test("subscriptions: policy-gated, non-starting route, exact-recipient broadcast
   }) as typeof fetch
   try {
     const deniedNoProject = await call(registered.get("gsd.ui.workspace.events.subscribe")!.handler, {
-      params: {},
+      params: { project: "/nonexistent-root" },
       client,
       context,
     })
@@ -236,7 +238,43 @@ test("subscription admission failures answer the RPC with an explicit error", as
 test("daemon unavailability responds with an error frame", async () => {
   const { api, registered } = recordingApi()
   registerGsdUiMethods(api, () => undefined)
-  const responses = await call(registered.get("gsd.ui.preferences.read")!.handler)
+  const responses = await call(registered.get("gsd.ui.preferences.read")!.handler, { client: adminClient() })
   assert.equal(responses[0].ok, false)
   assert.match(responses[0].error?.message ?? "", /unavailable/)
+})
+
+
+test("setDevRoot proxies PUT preferences with the admitted canonical root", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "gsd-sdr-")))
+  const config: EmbeddedProjectsConfig = { adminOnly: true, projects: [{ projectId: "p1", canonicalRoot: root }] }
+  const { api, registered } = recordingApi()
+  registerGsdUiMethods(api, () => 33277, config)
+  const daemon = stubDaemonFetch()
+  try {
+    const res = await call(registered.get("gsd.ui.preferences.setDevRoot")!.handler, { params: { devRoot: root }, client: adminClient() })
+    assert.equal(res[0].ok, true, res[0].error?.message)
+    assert.equal(daemon.calls[0].init?.method, "PUT")
+    assert.equal(daemon.calls[0].init?.body, JSON.stringify({ devRoot: root }))
+    assert.ok(daemon.calls[0].url.endsWith("/api/preferences"))
+  } finally {
+    daemon.restore()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("path-only browse pins to the single approved project; closed event reaches the connection on unsubscribe", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "gsd-pin-")))
+  mkdirSync(join(root, "src"), { recursive: true })
+  const config: EmbeddedProjectsConfig = { adminOnly: true, projects: [{ projectId: "p1", canonicalRoot: root }] }
+  const { api, registered } = recordingApi()
+  registerGsdUiMethods(api, () => 33277, config)
+  const daemon = stubDaemonFetch()
+  try {
+    const dirs = await call(registered.get("gsd.ui.directories.list")!.handler, { params: { path: "src" }, client: adminClient() })
+    assert.equal(dirs[0].ok, true, dirs[0].error?.message)
+    assert.ok(daemon.calls[0].url.includes("path=" + encodeURIComponent(join(root, "src"))))
+  } finally {
+    daemon.restore()
+    rmSync(root, { recursive: true, force: true })
+  }
 })
