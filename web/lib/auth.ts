@@ -96,6 +96,22 @@ export function authHeaders(extra?: Record<string, string>): Record<string, stri
   return headers
 }
 
+/** Deployment base path (inlined at build time by Next from NEXT_PUBLIC_BASE_PATH).
+ * Empty for unprefixed standalone/dev launches. */
+const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? ""
+
+/** Prefix a root-relative path with the deployment base path.
+ *
+ * Applies when the web app is mounted under a prefix (e.g. the OpenClaw
+ * Control UI plugin tab). Already-prefixed inputs, absolute URLs,
+ * protocol-relative URLs, and non-root-relative paths pass through
+ * unchanged, so callers may pass any request target safely. */
+export function withBasePath(path: string, base: string = BASE_PATH): string {
+  if (!base || typeof path !== "string" || !path.startsWith("/") || path.startsWith("//")) return path
+  if (path === base || path.startsWith(base + "/")) return path
+  return base + path
+}
+
 /**
  * Wrapper around `fetch()` that injects the auth token when one is available.
  * The server remains authoritative for unauthenticated requests: token-protected
@@ -108,7 +124,8 @@ export async function authFetch(input: RequestInfo | URL, init?: RequestInit): P
     headers.set("Authorization", `Bearer ${token}`)
   }
 
-  return fetch(input, { ...init, headers })
+  const target = typeof input === "string" ? withBasePath(input) : input
+  return fetch(target, { ...init, headers })
 }
 
 /**
@@ -117,8 +134,9 @@ export async function authFetch(input: RequestInfo | URL, init?: RequestInit): P
  */
 export function appendAuthParam(url: string): string {
   const token = getAuthToken()
-  if (!token) return url
+  const target = withBasePath(url)
+  if (!token) return target
 
-  const separator = url.includes("?") ? "&" : "?"
-  return `${url}${separator}_token=${token}`
+  const separator = target.includes("?") ? "&" : "?"
+  return `${target}${separator}_token=${token}`
 }

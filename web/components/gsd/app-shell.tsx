@@ -30,7 +30,7 @@ import { ScopeBadge } from "@/components/gsd/scope-badge"
 import { Badge } from "@/components/ui/badge"
 import { ProjectsPanel, ProjectSelectionGate } from "@/components/gsd/projects-view"
 import { UpdateBanner } from "@/components/gsd/update-banner"
-import { getAuthToken, authFetch } from "@/lib/auth"
+import { authFetch, getAuthToken, withBasePath } from "@/lib/auth"
 
 const KNOWN_VIEWS = new Set(["dashboard", "power", "chat", "roadmap", "files", "activity", "visualize"])
 
@@ -280,14 +280,14 @@ function WorkspaceChrome() {
     return (
       <div className="flex h-dvh flex-col items-center justify-center gap-6 bg-background p-8 text-center">
         <Image
-          src="/logo-black.svg"
+          src={withBasePath("/logo-black.svg")}
           alt="GSD-Pi Web"
           width={57}
           height={16}
           className="shrink-0 h-4 w-auto dark:hidden"
         />
         <Image
-          src="/logo-white.svg"
+          src={withBasePath("/logo-white.svg")}
           alt="GSD-Pi Web"
           width={57}
           height={16}
@@ -335,14 +335,14 @@ function WorkspaceChrome() {
           </button>
           <div className="flex items-center gap-2">
             <Image
-              src="/logo-black.svg"
+              src={withBasePath("/logo-black.svg")}
               alt="GSD-Pi Web"
               width={57}
               height={16}
               className="shrink-0 h-4 w-auto dark:hidden"
             />
             <Image
-              src="/logo-white.svg"
+              src={withBasePath("/logo-white.svg")}
               alt="GSD-Pi Web"
               width={57}
               height={16}
