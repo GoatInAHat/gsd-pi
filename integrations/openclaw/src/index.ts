@@ -1,6 +1,6 @@
 import { toolPluginMetadataSymbol } from "openclaw/plugin-sdk/tool-plugin"
 import { registerGsdUiMethods } from "./ui-methods.js"
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { buildJsonPluginConfigSchema, definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { buildAgentMainSessionKey } from "openclaw/plugin-sdk/routing";
@@ -36,10 +36,47 @@ export function gatewayScopes(method: string): OperatorScope[] {
 let embeddedProjectsConfigRef: import("./ui-methods.js").EmbeddedProjectsConfig | undefined
 let gsdUiHandles: ReturnType<typeof registerGsdUiMethods> | undefined
 
+// Keep runtime validation and generated authoring metadata on the same schema.
+const configSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    webUi: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        enabled: { type: "boolean", description: "Serve the existing GSD web UI in native OpenClaw Portals (default true)." },
+        packageRoot: { type: "string", minLength: 1, description: "Local GSD installation root; otherwise resolved from GSD_CLI_PATH or gsd on PATH." },
+        port: { type: "integer", minimum: 1, maximum: 65535, description: "Optional loopback web host port; otherwise an available port is selected." },
+      },
+    },
+    embeddedProjects: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        adminOnly: { type: "boolean" },
+        projects: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              projectId: { type: "string", minLength: 1 },
+              canonicalRoot: { type: "string", minLength: 1 },
+            },
+            required: ["projectId", "canonicalRoot"],
+          },
+        },
+      },
+    },
+  },
+};
+
 const gsdPluginEntry = definePluginEntry({
   id: "open-gsd-openclaw",
   name: "Open GSD",
   description: "GSD web UI in native Portals, MCP tools, and automatic project, TaskFlow, and Workboard synchronization",
+  configSchema: buildJsonPluginConfigSchema(configSchema),
   register(api: PluginApi) {
     // gsd.ui.* embedded-frame methods: individually registered, profile
     // required, approved-project policy default deny until configured.
@@ -193,29 +230,7 @@ Object.defineProperty(gsdPluginEntry, toolPluginMetadataSymbol, {
     name: "Open GSD",
     description: "GSD web UI in native Portals, MCP tools, and automatic project, TaskFlow, and Workboard synchronization",
     activation: { onStartup: true },
-    configSchema: {
-      type: "object",
-      properties: {
-        webUi: { type: "object" },
-        embeddedProjects: {
-          type: "object",
-          properties: {
-            adminOnly: { type: "boolean" },
-            projects: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: { projectId: { type: "string" }, canonicalRoot: { type: "string" } },
-                required: ["projectId", "canonicalRoot"],
-                additionalProperties: false,
-              },
-            },
-          },
-          additionalProperties: false,
-        },
-      },
-      additionalProperties: false,
-    },
+    configSchema,
     tools: [],
   },
   enumerable: false,
