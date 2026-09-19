@@ -17,6 +17,20 @@ import {
 
 export type EmbeddedStartupState = "standalone" | "embedded-ready" | "embedded-unavailable"
 
+/** The fixed operation set the embedded frame may request. The parent
+ * wrapper and the app startup MUST use this same list. */
+export const EMBEDDED_ALLOWED_OPERATIONS: readonly string[] = [
+  "preferences.read",
+  "projects.list",
+  "directories.list",
+  "preferences.selectRoot",
+  "files.delete",
+  "workspace.events.subscribe",
+  "workspace.events.unsubscribe",
+  "terminal.output.subscribe",
+  "terminal.output.unsubscribe",
+]
+
 let cachedTransport: EmbeddedOperationClient | null = null
 let startupPromise: Promise<EmbeddedStartupState> | null = null
 let gateGeneration = 0
@@ -35,7 +49,7 @@ export function embeddedStartup(options?: {
 }): Promise<EmbeddedStartupState> {
   if (!embeddedModeActive()) return Promise.resolve("standalone")
   if (startupPromise) return startupPromise
-  const allowed = options?.allowedOperations ?? []
+  const allowed = options?.allowedOperations ?? EMBEDDED_ALLOWED_OPERATIONS
   const negotiate = options?.negotiate ?? ((opts) => negotiateEmbeddedTransport({ ...opts, window: window as never }))
   const generation = gateGeneration
   startupPromise = negotiate({ allowedOperations: allowed })

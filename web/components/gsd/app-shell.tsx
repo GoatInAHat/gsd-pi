@@ -1,6 +1,7 @@
 "use client"
 
 import Image from "next/image"
+import { embeddedStartup } from "@/lib/embedded-gate"
 import { shouldSuppressShutdownBeacon, embeddedShutdown } from "@/lib/embedded-gate"
 import dynamic from "next/dynamic"
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react"
@@ -595,6 +596,31 @@ export function GSDAppShell() {
   // Must happen before any API calls fire.
   getAuthToken()
 
+  // Embedded startup gate: the opaque plugin-tab frame must complete bounded
+  // transport negotiation BEFORE any store boot, authFetch, or EventSource
+  // work. Denied or absent negotiation renders a bounded unavailable state -
+  // never a fallback to direct HTTP. Standalone resolves immediately.
+  const [embeddedReady, setEmbeddedReady] = useState<boolean | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void embeddedStartup().then((state) => {
+      if (!cancelled) setEmbeddedReady(state !== "embedded-unavailable")
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  if (embeddedReady === null) return null
+  if (embeddedReady === false) {
+    return (
+      <div style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", padding: "2rem", textAlign: "center" }}>
+        <div>
+          <h2 style={{ fontSize: "1.1rem", fontWeight: 600, marginBottom: "0.5rem" }}>GSD is embedded without an authenticated transport</h2>
+          <p style={{ color: "#888", fontSize: "0.875rem" }}>This view requires the Control UI plugin connection. Reload the dashboard tab to retry.</p>
+        </div>
+      </div>
+    )
+  }
   return (
     <ProjectStoreManagerProvider>
       <ProjectAwareWorkspace />

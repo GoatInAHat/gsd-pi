@@ -1,3 +1,4 @@
+import { registerGsdUiMethods } from "./ui-methods.js"
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
@@ -29,11 +30,19 @@ export function gatewayScopes(method: string): string[] {
   return scopes;
 }
 
+let embeddedProjectsConfigRef: import("./ui-methods.js").EmbeddedProjectsConfig | undefined
+
 export default definePluginEntry({
   id: "open-gsd-openclaw",
   name: "Open GSD",
   description: "GSD web UI in native Portals, MCP tools, and automatic project, TaskFlow, and Workboard synchronization",
   register(api: PluginApi) {
+    // gsd.ui.* embedded-frame methods: individually registered, profile
+    // required, approved-project policy default deny until configured.
+    // The config ref is refreshed by the gsd-web-portal service start.
+    const embeddedProjectsConfig: import("./ui-methods.js").EmbeddedProjectsConfig = {}
+    embeddedProjectsConfigRef = embeddedProjectsConfig
+    registerGsdUiMethods(api as unknown as import("./ui-methods.js").UiMethodApi, () => portal?.webPort ?? webTabPort, embeddedProjectsConfig)
     let portal: GsdPortalService | undefined;
     let webTabPort: number | undefined;
     registerWebTab(api, () => portal?.webPort ?? webTabPort);
@@ -45,6 +54,16 @@ export default definePluginEntry({
           context.serviceHealth?.reportFailure(new Error("GSD web portal unavailable"));
           api.logger.warn("GSD web portal unavailable; check the GSD web host installation and Gateway portal access.");
         };
+        const embeddedConfig = context.config.plugins?.entries?.["open-gsd-openclaw"]?.config as { embeddedProjects?: unknown } | undefined
+        if (embeddedProjectsConfigRef && embeddedConfig?.embeddedProjects && typeof embeddedConfig.embeddedProjects === "object") {
+          const source = embeddedConfig.embeddedProjects as { adminOnly?: unknown; projects?: unknown }
+          embeddedProjectsConfigRef.adminOnly = source.adminOnly === true
+          embeddedProjectsConfigRef.projects = Array.isArray(source.projects)
+            ? source.projects.filter((p): p is { projectId: string; canonicalRoot: string } =>
+                typeof (p as { projectId?: unknown })?.projectId === "string" &&
+                typeof (p as { canonicalRoot?: unknown })?.canonicalRoot === "string")
+            : []
+        }
         portal = new GsdPortalService({
           config: context.config.plugins?.entries?.["open-gsd-openclaw"]?.config?.webUi,
           env: { ...process.env, ...context.config.mcp?.servers?.gsd?.env },

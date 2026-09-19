@@ -47,7 +47,8 @@
     "build": {
       "openclawVersion": "2026.9.2",
       "pluginSdkVersion": "2026.9.2"
-    }
+    },
+    "controlUi": "dist/control-ui-embed.js"
   },
   "scripts": {
     "build": "node ../../scripts/clean-package-dist.cjs && tsc -p tsconfig.json --incremental false",

@@ -21,6 +21,7 @@ export const BIND_TYPE = "gsd-ui-bind"
 export const BIND_ACK_TYPE = "gsd-ui-bind-ack"
 export const REQUEST_TYPE = "gsd-ui-request"
 export const EVENT_TYPE = "gsd-ui-event"
+export const READY_TYPE = "gsd-ui-ready"
 export const RESPONSE_TYPE = "gsd-ui-response"
 
 export const DEFAULT_NEGOTIATION_TIMEOUT_MS = 30_000
@@ -269,5 +270,12 @@ export function negotiateEmbeddedTransport(options: {
       resolveNegotiation(client)
     }
     w.addEventListener("message", listener)
+    // Announce readiness to the exact parent window: no data, no authority -
+    // only a signal that this frame is listening, closing the load race.
+    try {
+      ;(w.parent as { postMessage(message: unknown, origin: string): void }).postMessage({ protocol: EMBEDDED_PROTOCOL, type: READY_TYPE }, "*")
+    } catch {
+      // parent unreachable; negotiation expires on its own timer
+    }
   })
 }
