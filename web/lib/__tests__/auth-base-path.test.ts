@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { withBasePath } from "../auth.ts"
+import { withBasePath, authFetch } from "../auth.ts"
 
 const B = "/plugins/open-gsd-openclaw/web"
 
@@ -27,4 +27,50 @@ test("withBasePath passes through non-root-relative inputs", () => {
 
 test("withBasePath is identity without a base path", () => {
   assert.equal(withBasePath("/api/x", ""), "/api/x")
+})
+
+function stubFetch() {
+  const calls: Array<{ input: unknown; init?: RequestInit }> = []
+  const original = globalThis.fetch
+  globalThis.fetch = ((input: unknown, init?: RequestInit) => {
+    calls.push({ input, init })
+    return Promise.resolve(new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }))
+  }) as typeof fetch
+  return { calls, restore: () => { globalThis.fetch = original } }
+}
+
+test("authFetch sends credentials include for first-party root-relative paths", async () => {
+  const stub = stubFetch()
+  try {
+    await authFetch("/api/projects")
+    assert.equal(stub.calls.length, 1)
+    assert.equal(stub.calls[0].input, "/api/projects")
+    assert.equal(stub.calls[0].init?.credentials, "include")
+  } finally { stub.restore() }
+})
+
+test("authFetch preserves explicit credentials overrides", async () => {
+  const stub = stubFetch()
+  try {
+    await authFetch("/api/projects", { credentials: "omit" })
+    assert.equal(stub.calls[0].init?.credentials, "omit")
+  } finally { stub.restore() }
+})
+
+test("authFetch does not enable credentials for absolute external URLs", async () => {
+  const stub = stubFetch()
+  try {
+    await authFetch("https://external.example/api")
+    assert.equal(stub.calls[0].init?.credentials, undefined)
+  } finally { stub.restore() }
+})
+
+test("authFetch does not enable credentials for protocol-relative or relative inputs", async () => {
+  const stub = stubFetch()
+  try {
+    await authFetch("//cdn.example.com/x")
+    await authFetch("relative/path")
+    assert.equal(stub.calls[0].init?.credentials, undefined)
+    assert.equal(stub.calls[1].init?.credentials, undefined)
+  } finally { stub.restore() }
 })

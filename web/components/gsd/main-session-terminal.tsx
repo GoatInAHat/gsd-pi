@@ -201,7 +201,7 @@ export function MainSessionTerminal({ className, fontSize, projectCwd }: MainSes
           streamUrl.searchParams.set("rows", String(preferredSize.rows))
         }
 
-        const es = new EventSource(appendAuthParam(streamUrl.toString()))
+        const es = new EventSource(appendAuthParam(streamUrl.toString()), { withCredentials: true })
         eventSourceRef.current = es
         setConnectionState((current) => (current === "connected" ? current : "connecting"))
 

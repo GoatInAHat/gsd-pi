@@ -125,7 +125,15 @@ export async function authFetch(input: RequestInfo | URL, init?: RequestInit): P
   }
 
   const target = typeof input === "string" ? withBasePath(input) : input
-  return fetch(target, { ...init, headers })
+  let credentials = init?.credentials
+  if (!credentials && typeof input === "string" && input.startsWith("/") && !input.startsWith("//")) {
+    // First-party root-relative API paths run credentialed so the Control UI
+    // plugin tab opaque sandbox attaches the scoped gateway cookies.
+    // Absolute and non-root-relative inputs keep the caller credentials
+    // mode, and explicit init.credentials always wins.
+    credentials = "include"
+  }
+  return fetch(target, credentials ? { ...init, headers, credentials } : { ...init, headers })
 }
 
 /**

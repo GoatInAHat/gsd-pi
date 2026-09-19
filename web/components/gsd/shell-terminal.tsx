@@ -280,7 +280,7 @@ function TerminalInstance({
       for (const arg of commandArgs ?? []) {
         streamUrl.searchParams.append("arg", arg)
       }
-      const es = new EventSource(appendAuthParam(streamUrl.toString()))
+      const es = new EventSource(appendAuthParam(streamUrl.toString()), { withCredentials: true })
       eventSourceRef.current = es
 
       es.onmessage = (event) => {

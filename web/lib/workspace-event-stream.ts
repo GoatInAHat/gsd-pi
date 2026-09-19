@@ -31,7 +31,7 @@ export class WorkspaceEventStream {
 
   constructor(
     handlers: WorkspaceEventStreamHandlers,
-    createEventSource: WorkspaceEventSourceFactory = (url) => new EventSource(url),
+    createEventSource: WorkspaceEventSourceFactory = (url) => new EventSource(url, { withCredentials: true }),
   ) {
     this.handlers = handlers
     this.createEventSource = createEventSource
