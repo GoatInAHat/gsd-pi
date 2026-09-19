@@ -20,6 +20,7 @@ export const EMBEDDED_MARKER_QUERY = "__gsd_embedded"
 export const BIND_TYPE = "gsd-ui-bind"
 export const BIND_ACK_TYPE = "gsd-ui-bind-ack"
 export const REQUEST_TYPE = "gsd-ui-request"
+export const EVENT_TYPE = "gsd-ui-event"
 export const RESPONSE_TYPE = "gsd-ui-response"
 
 export const DEFAULT_NEGOTIATION_TIMEOUT_MS = 30_000
@@ -89,8 +90,18 @@ export function isEmbeddedMode(win?: EmbeddedTransportWindow & { location?: { se
   return detectEmbeddedChannel(win).embedded
 }
 
+export interface FrameEventMessage {
+  protocol: string
+  type: string
+  generation: number
+  subscriptionId: string
+  seq: number
+  event?: unknown
+}
+
 export interface EmbeddedOperationClient {
   request(operation: string, args?: unknown): Promise<unknown>
+  onEvent(handler: (message: FrameEventMessage) => void): () => void
   dispose(): void
 }
 
@@ -132,6 +143,7 @@ export function negotiateEmbeddedTransport(options: {
     )
     function makeClient(port: EmbeddedPortLike, generation: number, onDispose?: () => void): EmbeddedOperationClient {
       const pending = new Map<string, PendingEntry>()
+      const eventHandlers = new Set<(message: FrameEventMessage) => void>()
       let disposed = false
       const settle = (requestId: string, entry: PendingEntry, run: (entry: PendingEntry) => void) => {
         clearTimeout(entry.timer)
@@ -140,8 +152,14 @@ export function negotiateEmbeddedTransport(options: {
         run(entry)
       }
       const portListener = (event: MessageEvent) => {
-        const data = event.data as FrameResponse | undefined
-        if (!data || data.protocol !== EMBEDDED_PROTOCOL || data.type !== RESPONSE_TYPE || data.generation !== generation) return
+        const data = event.data as FrameResponse | FrameEventMessage | undefined
+        if (!data || data.protocol !== EMBEDDED_PROTOCOL || data.generation !== generation) return
+        if (data.type === EVENT_TYPE) {
+          if (typeof (data as FrameEventMessage).subscriptionId !== "string" || typeof (data as FrameEventMessage).seq !== "number") return
+          for (const handler of [...eventHandlers]) handler(data as FrameEventMessage)
+          return
+        }
+        if (data.type !== RESPONSE_TYPE) return
         if (typeof data.requestId !== "string" || typeof data.ok !== "boolean") return
         const entry = pending.get(data.requestId)
         if (!entry) return
@@ -151,6 +169,10 @@ export function negotiateEmbeddedTransport(options: {
       if (typeof port.start === "function") port.start()
       port.addEventListener("message", portListener)
       return {
+        onEvent(handler: (message: FrameEventMessage) => void): () => void {
+          eventHandlers.add(handler)
+          return () => eventHandlers.delete(handler)
+        },
         request(operation: string, args?: unknown): Promise<unknown> {
           if (disposed) return Promise.reject(new Error("embedded transport disposed"))
           if (!allowed.has(operation)) return Promise.reject(new Error("embedded operation not allowed: " + operation))
@@ -185,6 +207,7 @@ export function negotiateEmbeddedTransport(options: {
             settle(requestId, entry, (e) => e.reject(new Error("embedded transport disposed")))
           }
           pending.clear()
+          eventHandlers.clear()
           onDispose?.()
         },
       }
