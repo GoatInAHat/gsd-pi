@@ -56,8 +56,8 @@ test("known routes map to named operations with parsed args", () => {
     { operation: "preferences.selectRoot", args: { devRoot: "/home/y" } },
   )
   assert.deepEqual(
-    mapRouteToOperation("DELETE", "/api/files?root=%2Fhome%2Fx&path=src", null),
-    { operation: "files.delete", args: { root: "/home/x", path: "src" } },
+    mapRouteToOperation("DELETE", "/api/files?root=project&project=%2Fhome%2Fx&path=src", null),
+    { operation: "files.delete", args: { root: "project", project: "/home/x", path: "src" } },
   )
 })
 
@@ -276,4 +276,19 @@ test("stream mapping normalizes absolute base-pathed URLs and keeps create out o
     restore()
     resetEmbeddedGate()
   }
+})
+
+test("bootstrap and file selectors never infer project identity from root", () => {
+  assert.deepEqual(mapRouteToOperation("GET", "/api/boot?project=%2Fapproved%2Fp", null), {
+    operation: "workspace.bootstrap", args: { project: "/approved/p" },
+  })
+  assert.deepEqual(mapRouteToOperation("GET", "/api/boot?root=%2Fapproved%2Fp", null), {
+    operation: "workspace.bootstrap", args: { project: null },
+  })
+  assert.deepEqual(mapRouteToOperation("DELETE", "/api/files?root=gsd&path=STATE.md", null), {
+    operation: "files.delete", args: { root: "gsd", project: null, path: "STATE.md" },
+  })
+  assert.deepEqual(mapRouteToOperation("DELETE", "/api/files?project=%2Fapproved%2Fp&path=STATE.md", null), {
+    operation: "files.delete", args: { root: null, project: "/approved/p", path: "STATE.md" },
+  })
 })
