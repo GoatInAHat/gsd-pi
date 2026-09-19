@@ -98,6 +98,8 @@ export interface FrameEventMessage {
   subscriptionId: string
   seq: number
   event?: unknown
+  closed?: boolean
+  reason?: string
 }
 
 export interface EmbeddedOperationClient {

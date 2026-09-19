@@ -193,6 +193,13 @@ export class EmbeddedEventSourceAdapter {
     this.unsubscribeEvents = transport.onEvent((message: FrameEventMessage) => {
       if (this.closed || this.subscriptionId === null) return
       if (message.subscriptionId !== this.subscriptionId) return
+      if (message.closed === true) {
+        // Server closure: explicit disconnected state, local teardown -
+        // never leave the UI appearing live with no events arriving.
+        this.teardown()
+        this.onerror?.()
+        return
+      }
       if (message.event === undefined) return
       this.onmessage?.({ data: typeof message.event === "string" ? message.event : JSON.stringify(message.event) })
     })

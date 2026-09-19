@@ -133,7 +133,14 @@ export function createGsdEmbedPlugin(options: GsdEmbedOptions): unknown {
           let bound = false
           let generation = 0
           let port: PortLike | null = null
-          let loadCount = 0
+          // readySinceLoad pairs each load with the ready ping that PRECEDED it
+          // (child scripts run before load fires): the active generation
+          // survives its own load; a load with no pending ready retires the
+          // stale channel; duplicate ready within one document is ignored.
+          let readySinceLoad = false
+          // Per-mount subscription ownership: only subscriptionIds established
+          // through THIS mount are forwarded.
+          const ownedSubscriptions = new Set<string>()
           let disposed = false
 
           const respond = (requestId: string, ok: boolean, payload: unknown, error?: string) => {
@@ -152,6 +159,8 @@ export function createGsdEmbedPlugin(options: GsdEmbedOptions): unknown {
             const data = event as { type?: string; subscriptionId?: unknown; seq?: unknown; event?: unknown; closed?: unknown; reason?: unknown } | undefined
             if (!data || data.type !== GSD_UI_HOST_EVENT_NAME) return
             if (typeof data.subscriptionId !== "string") return
+            if (!ownedSubscriptions.has(data.subscriptionId)) return
+            if (data.closed === true) ownedSubscriptions.delete(data.subscriptionId)
             port.postMessage({
               protocol: GSD_EMBED_PROTOCOL,
               type: GSD_EMBED_EVENT_TYPE,
@@ -164,6 +173,7 @@ export function createGsdEmbedPlugin(options: GsdEmbedOptions): unknown {
           }
 
           const retireChannel = () => {
+            ownedSubscriptions.clear()
             try {
               port?.close()
             } catch {
@@ -190,7 +200,10 @@ export function createGsdEmbedPlugin(options: GsdEmbedOptions): unknown {
                 .request("gsd.ui." + message.operation, message.args ?? {})
                 .then(
                   (result) => {
-                    if (generation === localGeneration) respond(message.requestId, true, result)
+                    if (generation !== localGeneration) return
+                    respond(message.requestId, true, result)
+                    const subscriptionId = (result as { subscriptionId?: unknown } | null)?.subscriptionId
+                    if (typeof subscriptionId === "string" && message.operation.endsWith(".subscribe")) ownedSubscriptions.add(subscriptionId)
                   },
                   (error: unknown) => {
                     if (generation === localGeneration) respond(message.requestId, false, undefined, error instanceof Error ? error.message : String(error))
@@ -211,8 +224,8 @@ export function createGsdEmbedPlugin(options: GsdEmbedOptions): unknown {
             const data = event.data as { protocol?: string; type?: string } | undefined
             if (!data || data.protocol !== GSD_EMBED_PROTOCOL) return
             if (data.type === GSD_EMBED_READY_TYPE) {
-              // A ready ping always (re)binds: initial bind, or rebind after a
-              // document reload retired the previous channel.
+              if (readySinceLoad) return
+              readySinceLoad = true
               bindChannel()
               return
             }
@@ -238,8 +251,12 @@ export function createGsdEmbedPlugin(options: GsdEmbedOptions): unknown {
           // channel and wait for the new document's ready ping. The FIRST load
           // fires before any bind exists, so it never closes a channel.
           iframe.addEventListener?.("load", () => {
-            loadCount += 1
-            if (loadCount > 1 && !disposed) retireChannel()
+            if (disposed) return
+            if (readySinceLoad) {
+              readySinceLoad = false
+              return
+            }
+            if (bound) retireChannel()
           })
 
           const unsubscribeHostEvents = options.onEvent
@@ -250,6 +267,7 @@ export function createGsdEmbedPlugin(options: GsdEmbedOptions): unknown {
             if (disposed) return
             disposed = true
             retireChannel()
+            ownedSubscriptions.clear()
             unsubscribeHostEvents?.()
             ;(globalThis as unknown as { removeEventListener(t: string, l: unknown): void }).removeEventListener("message", windowListener)
             try {

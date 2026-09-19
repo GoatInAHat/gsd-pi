@@ -250,6 +250,11 @@ function loadNodePty(): LoadedNodePty {
   );
 }
 
+/** Non-starting existence check: true only when the session exists AND is alive. */
+export function hasSession(sessionId: string): boolean {
+  const existing = getSessions().get(sessionId);
+  return Boolean(existing?.alive);
+}
 export function getOrCreateSession(sessionId: string, projectCwd?: string, command?: string, commandArgs: string[] = []): PtySession {
   ensureProcessCleanupHandlers();
   if (!isAllowedTerminalCommand(command)) {
