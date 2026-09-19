@@ -94,7 +94,7 @@ export function createGsdEmbedPlugin(options: GsdEmbedOptions): unknown {
     id: GSD_EMBED_PLUGIN_ID,
     activate(host: EmbedHost) {
       const page = {
-        id: "gsd",
+        id: "open-gsd-openclaw-web",
         label: "GSD",
         mount: (container: EmbedContainerLike, context: { signal: AbortSignal }) => {
           const doc = (container.ownerDocument ?? (globalThis as { document?: DocumentLike }).document) as DocumentLike
@@ -277,7 +277,7 @@ export function createGsdEmbedPlugin(options: GsdEmbedOptions): unknown {
         },
       }
       ;(host.ui as unknown as { registerPage(page: unknown): void }).registerPage(page)
-      ;(host.ui as unknown as { registerNavigation?(item: unknown): void }).registerNavigation?.({ id: "gsd", label: "GSD", page: { id: "gsd" } })
+      ;(host.ui as unknown as { registerNavigation?(item: unknown): void }).registerNavigation?.({ id: "open-gsd-openclaw-web", label: "GSD", page: { id: "open-gsd-openclaw-web" } })
     },
   })
 }

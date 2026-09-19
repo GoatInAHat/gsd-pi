@@ -33,9 +33,6 @@ export function gatewayScopes(method: string): OperatorScope[] {
   return scopes;
 }
 
-let embeddedProjectsConfigRef: import("./ui-methods.js").EmbeddedProjectsConfig | undefined
-let gsdUiHandles: ReturnType<typeof registerGsdUiMethods> | undefined
-
 // Keep runtime validation and generated authoring metadata on the same schema.
 const configSchema = {
   type: "object",
@@ -80,10 +77,10 @@ const gsdPluginEntry = definePluginEntry({
   register(api: PluginApi) {
     // gsd.ui.* embedded-frame methods: individually registered, profile
     // required, approved-project policy default deny until configured.
-    // The config ref is refreshed by the gsd-web-portal service start.
+    // Cached modules can register into multiple registries. Each registration
+    // owns the policy its handlers capture and the subscriptions its service stops.
     const embeddedProjectsConfig: import("./ui-methods.js").EmbeddedProjectsConfig = {}
-    embeddedProjectsConfigRef = embeddedProjectsConfig
-    gsdUiHandles = registerGsdUiMethods(api as unknown as import("./ui-methods.js").UiMethodApi, () => portal?.webPort ?? webTabPort, embeddedProjectsConfig)
+    const gsdUiHandles = registerGsdUiMethods(api as unknown as import("./ui-methods.js").UiMethodApi, () => portal?.webPort ?? webTabPort, embeddedProjectsConfig)
     let portal: GsdPortalService | undefined;
     let webTabPort: number | undefined;
     registerWebTab(api, () => portal?.webPort ?? webTabPort);
@@ -98,19 +95,17 @@ const gsdPluginEntry = definePluginEntry({
         // Policy is REPLACED on every start/reload - including explicit
         // empty removal, so withdrawn projects lose their grants.
         const embeddedConfig = context.config.plugins?.entries?.["open-gsd-openclaw"]?.config as { embeddedProjects?: unknown } | undefined
-        if (embeddedProjectsConfigRef) {
-          const source = embeddedConfig?.embeddedProjects as { adminOnly?: unknown; projects?: unknown } | undefined
-          if (source && typeof source === "object") {
-            embeddedProjectsConfigRef.adminOnly = source.adminOnly !== false
-            embeddedProjectsConfigRef.projects = Array.isArray(source.projects)
-              ? source.projects.filter((p): p is { projectId: string; canonicalRoot: string } =>
-                  typeof (p as { projectId?: unknown })?.projectId === "string" &&
-                  typeof (p as { canonicalRoot?: unknown })?.canonicalRoot === "string")
-              : []
-          } else {
-            embeddedProjectsConfigRef.adminOnly = true
-            embeddedProjectsConfigRef.projects = []
-          }
+        const source = embeddedConfig?.embeddedProjects as { adminOnly?: unknown; projects?: unknown } | undefined
+        if (source && typeof source === "object") {
+          embeddedProjectsConfig.adminOnly = source.adminOnly !== false
+          embeddedProjectsConfig.projects = Array.isArray(source.projects)
+            ? source.projects.filter((p): p is { projectId: string; canonicalRoot: string } =>
+                typeof (p as { projectId?: unknown })?.projectId === "string" &&
+                typeof (p as { canonicalRoot?: unknown })?.canonicalRoot === "string")
+            : []
+        } else {
+          embeddedProjectsConfig.adminOnly = true
+          embeddedProjectsConfig.projects = []
         }
         portal = new GsdPortalService({
           config: context.config.plugins?.entries?.["open-gsd-openclaw"]?.config?.webUi,
@@ -126,7 +121,7 @@ const gsdPluginEntry = definePluginEntry({
       },
       async stop() {
         // Release every live gsd.ui subscription before the host goes down.
-        gsdUiHandles?.disposeAll()
+        gsdUiHandles.disposeAll()
         await portal?.stop();
         portal = undefined;
         webTabPort = undefined;

@@ -127,6 +127,10 @@ test("loader contract: plugin id, label, navigation, dispose-shaped mount result
   try {
     assert.equal(h.pluginId, GSD_EMBED_PLUGIN_ID)
     assert.equal(h.pluginId, "open-gsd-openclaw")
+    assert.equal(h.registeredPage!.id, "open-gsd-openclaw-web")
+    assert.equal(h.registeredNav!.id, "open-gsd-openclaw-web")
+    assert.equal(h.registeredNav!.page.id, "open-gsd-openclaw-web")
+    assert.equal(h.iframe.src, "/plugins/open-gsd-openclaw/web/?__gsd_embedded=1")
     assert.equal(h.registeredPage!.label, "GSD")
     assert.equal(h.registeredNav!.label, "GSD")
     assert.equal(typeof (h.mountResult as { dispose?: () => void }).dispose, "function")
