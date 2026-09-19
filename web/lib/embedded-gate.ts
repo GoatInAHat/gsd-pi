@@ -264,4 +264,32 @@ export function embeddedEventSourceForUrl(url: string): EmbeddedEventSourceAdapt
   return undefined
 }
 
+export interface ModeAwareEventSourceLike {
+  onopen: (() => void) | null
+  onmessage: ((event: { data: string }) => void) | null
+  onerror: (() => void) | null
+  close(): void
+}
+
+class UnmappedEmbeddedEventSource implements ModeAwareEventSourceLike {
+  onopen = null
+  onmessage = null
+  onerror: (() => void) | null = null
+  constructor() {
+    setTimeout(() => this.onerror?.(), 0)
+  }
+  close() {}
+}
+
+/** Standalone keeps the real credentialed EventSource; embedded mode uses
+ * the subscription adapter, and unmapped stream URLs FAIL CLOSED - never a
+ * direct EventSource. */
+export function createModeAwareEventSource(url: string): ModeAwareEventSourceLike {
+  if (embeddedModeActive()) {
+    const adapter = embeddedEventSourceForUrl(url)
+    if (adapter) return adapter
+    return new UnmappedEmbeddedEventSource()
+  }
+  return new EventSource(url, { withCredentials: true }) as unknown as ModeAwareEventSourceLike
+}
 export { EMBEDDED_MARKER_QUERY } from "./embedded-transport.ts"

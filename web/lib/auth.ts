@@ -1,3 +1,5 @@
+import { embeddedApiFetch, embeddedModeActive } from "./embedded-gate.ts"
+
 /**
  * Client-side auth token management.
  *
@@ -118,6 +120,11 @@ export function withBasePath(path: string, base: string = BASE_PATH): string {
  * launches return 401, while explicit no-auth launches accept the same request.
  */
 export async function authFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  // Embedded mode routes first-party string requests through the named-
+  // operation transport gate; unknown routes fail closed inside it.
+  if (typeof input === "string" && embeddedModeActive()) {
+    return embeddedApiFetch(input, init)
+  }
   const token = getAuthToken()
   const headers = new Headers(init?.headers)
   if (token && !headers.has("Authorization")) {

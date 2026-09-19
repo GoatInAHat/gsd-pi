@@ -1,6 +1,7 @@
 "use client"
 
 import Image from "next/image"
+import { shouldSuppressShutdownBeacon, embeddedShutdown } from "@/lib/embedded-gate"
 import dynamic from "next/dynamic"
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react"
 import { Menu, X } from "lucide-react"
@@ -646,6 +647,11 @@ function ProjectAwareWorkspace() {
       }
       // sendBeacon cannot set custom headers, so pass the auth token as a
       // query parameter instead (the proxy accepts `_token` as a fallback).
+      if (shouldSuppressShutdownBeacon()) {
+        // Embedded mode never sends the shutdown beacon; close the adapter only.
+        embeddedShutdown()
+        return
+      }
       const token = getAuthToken()
       const url = token ? `/api/shutdown?_token=${token}` : "/api/shutdown"
       navigator.sendBeacon(url, "")

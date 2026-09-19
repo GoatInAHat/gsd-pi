@@ -117,3 +117,50 @@ test("authFetch preserves POST body and headers for first-party strings", async 
     assert.equal(headers.get("Content-Type"), "application/json")
   } finally { stub.restore() }
 })
+
+import { embeddedStartup, resetEmbeddedGate } from "../embedded-gate.ts"
+
+function embeddedWindow(): () => void {
+  const g = globalThis as unknown as { window?: unknown }
+  g.window = {
+    origin: "null",
+    location: { search: "?__gsd_embedded=1" },
+    parent: { postMessage: () => {} },
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    postMessage: () => {},
+  }
+  return () => {
+    delete g.window
+  }
+}
+
+test("authFetch routes first-party strings through the embedded gate and never direct fetch", async () => {
+  const restore = embeddedWindow()
+  try {
+    const directFetchCalls: unknown[] = []
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = ((input: unknown, init?: RequestInit) => {
+      directFetchCalls.push({ input, init })
+      return Promise.resolve(new Response("{}", { status: 200 }))
+    }) as typeof fetch
+    await embeddedStartup({
+      allowedOperations: ["preferences.read"],
+      negotiate: async () => ({
+        request: async () => ({ embedded: true }),
+        onEvent: () => () => {},
+        dispose: () => {},
+      }),
+    })
+    const res = await authFetch("/api/preferences")
+    assert.equal(res.status, 200)
+    assert.deepEqual(await res.json(), { embedded: true })
+    assert.equal(directFetchCalls.length, 0)
+    const unmapped = await authFetch("/api/not-mapped")
+    assert.equal(unmapped.status, 501)
+    globalThis.fetch = originalFetch
+  } finally {
+    restore()
+    resetEmbeddedGate()
+  }
+})
