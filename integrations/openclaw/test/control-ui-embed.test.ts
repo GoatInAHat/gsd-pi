@@ -139,12 +139,11 @@ test("document generation SURVIVES its own load; load without ready retires; dup
   const h = setup()
   try {
     // Real child order: ready fires BEFORE its own load event.
-    h.dispatchToWrapper({ protocol: GSD_EMBED_PROTOCOL, type: GSD_EMBED_READY_TYPE })
+    h.dispatchToWrapper({ protocol: GSD_EMBED_PROTOCOL, type: GSD_EMBED_READY_TYPE, nonce: "doc-alpha" })
     assert.equal(h.postMessagesToFrame.length, 1)
     const port1 = framePortAt(h, 0)
-    // Duplicate ready while one is already pending (the real race window:
-    // between ready and its load) is ignored - no rebind, no kill.
-    h.dispatchToWrapper({ protocol: GSD_EMBED_PROTOCOL, type: GSD_EMBED_READY_TYPE })
+    // Duplicate ready with the SAME nonce is ignored - no rebind, no kill.
+    h.dispatchToWrapper({ protocol: GSD_EMBED_PROTOCOL, type: GSD_EMBED_READY_TYPE, nonce: "doc-alpha" })
     assert.equal(h.postMessagesToFrame.length, 1)
     h.fireLoad()
     // The channel that announced ready survives its own load.
@@ -153,20 +152,19 @@ test("document generation SURVIVES its own load; load without ready retires; dup
     const response = await reply
     assert.equal(response.ok, true)
     assert.equal(h.requests.length, 1)
-    // A load with NO pending ready (the document was replaced and has not run
-    // yet) retires the stale channel.
+    // Load ordering is irrelevant to identity: fireLoad never retires.
     h.fireLoad()
-    const staleHeard = await new Promise<boolean>((resolve) => {
-      port1.onmessage = () => resolve(true)
-      port1.postMessage({ protocol: GSD_EMBED_PROTOCOL, type: GSD_EMBED_REQUEST_TYPE, generation: 1, requestId: "stale", operation: "preferences.read" })
-      setTimeout(() => resolve(false), 20)
-    })
-    assert.equal(staleHeard, false, "retired channel must not respond")
+    const afterLoadReply = waitForPortMessage(port1)
+    port1.postMessage({ protocol: GSD_EMBED_PROTOCOL, type: GSD_EMBED_REQUEST_TYPE, generation: 1, requestId: "postload", operation: "preferences.read" })
+    const afterLoad = await afterLoadReply
+    assert.equal(afterLoad.ok, true, "channel survives arbitrary loads")
     // The new document announces itself and binds generation 2.
-    h.dispatchToWrapper({ protocol: GSD_EMBED_PROTOCOL, type: GSD_EMBED_READY_TYPE })
+    h.dispatchToWrapper({ protocol: GSD_EMBED_PROTOCOL, type: GSD_EMBED_READY_TYPE, nonce: "doc-beta" })
     assert.equal(h.postMessagesToFrame.length, 2)
     const port2 = framePortAt(h, 1)
     assert.equal((h.postMessagesToFrame[1].data as { generation: number }).generation, 2)
+    assert.equal((h.postMessagesToFrame[1].data as { nonce?: string }).nonce, "doc-beta", "bind must echo the fresh document nonce")
+    assert.equal((h.postMessagesToFrame[0].data as { nonce?: string }).nonce, "doc-alpha")
     const reply2 = waitForPortMessage(port2)
     port2.postMessage({ protocol: GSD_EMBED_PROTOCOL, type: GSD_EMBED_REQUEST_TYPE, generation: 2, requestId: "r2", operation: "preferences.read" })
     const response2 = await reply2
@@ -174,7 +172,7 @@ test("document generation SURVIVES its own load; load without ready retires; dup
     // Stale generation on the new port is ignored.
     port2.postMessage({ protocol: GSD_EMBED_PROTOCOL, type: GSD_EMBED_REQUEST_TYPE, generation: 1, requestId: "stale2", operation: "preferences.read" })
     await new Promise((r) => setTimeout(r, 10))
-    assert.equal(h.requests.length, 2)
+    assert.equal(h.requests.length, 3)
   } finally {
     ;(h.mountResult as { dispose: () => void }).dispose()
     h.restore()
@@ -192,7 +190,7 @@ test("per-mount subscription ownership: only owned ids forward; closed events re
     return { ok: true }
   })
   try {
-    h.dispatchToWrapper({ protocol: GSD_EMBED_PROTOCOL, type: GSD_EMBED_READY_TYPE })
+    h.dispatchToWrapper({ protocol: GSD_EMBED_PROTOCOL, type: GSD_EMBED_READY_TYPE, nonce: "doc-alpha" })
     const port = framePortAt(h, 0)
     const subReply = waitForPortMessage(port)
     port.postMessage({ protocol: GSD_EMBED_PROTOCOL, type: GSD_EMBED_REQUEST_TYPE, generation: 1, requestId: "s1", operation: "workspace.events.subscribe", args: {} })
@@ -235,7 +233,7 @@ test("per-mount subscription ownership: only owned ids forward; closed events re
 test("dispose unsubscribes host events and closes the channel", async () => {
   const h = setup()
   try {
-    h.dispatchToWrapper({ protocol: GSD_EMBED_PROTOCOL, type: GSD_EMBED_READY_TYPE })
+    h.dispatchToWrapper({ protocol: GSD_EMBED_PROTOCOL, type: GSD_EMBED_READY_TYPE, nonce: "doc-alpha" })
     assert.equal(h.hostEvents.length, 1)
     ;(h.mountResult as { dispose: () => void }).dispose()
     assert.equal(h.hostEvents.length, 0)

@@ -14,6 +14,15 @@
 
 import { realpathSync } from "node:fs"
 import { isAbsolute, join, resolve, sep } from "node:path"
+import type { GatewayRequestHandlerOptions, OpenClawPluginApi } from "openclaw/plugin-sdk/core"
+
+/** Real vendor contracts: handler options and registration shapes derive
+ * from the installed SDK - never hand-rolled substitutes. */
+export type UiHandlerOptions = GatewayRequestHandlerOptions
+export type UiGatewayRegistrationOptions = NonNullable<Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2]>
+export type UiClient = NonNullable<GatewayRequestHandlerOptions["client"]>
+export type UiHandlerContext = GatewayRequestHandlerOptions["context"]
+export type UiRespond = GatewayRequestHandlerOptions["respond"]
 
 export interface ApprovedProject {
   projectId: string
@@ -25,41 +34,11 @@ export interface EmbeddedProjectsConfig {
   projects?: ApprovedProject[]
 }
 
-export interface UiErrorShape {
-  message: string
-  code?: string
-}
-
-export interface UiClient {
-  connId?: string
-  connectionSignal?: AbortSignal
-  invalidated?: boolean
-  authenticatedUserProfile?: { profileId: string }
-  internal?: { controlUiAdmin?: true }
-}
-
-export interface UiHandlerContext {
-  broadcastToConnIds?: (
-    event: string,
-    payload: unknown,
-    connIds: ReadonlySet<string>,
-    opts?: unknown,
-  ) => void
-}
-
-export interface UiHandlerOptions {
-  params: Record<string, unknown>
-  client: UiClient | null
-  respond: (ok: boolean, payload?: unknown, error?: UiErrorShape, meta?: Record<string, unknown>) => void
-  context: UiHandlerContext
-  signal?: AbortSignal
-}
-
 export interface UiMethodApi {
   registerGatewayMethod: (
     method: string,
     handler: (opts: UiHandlerOptions) => Promise<void> | void,
-    opts?: { scope?: string; profileAccess?: string },
+    opts?: UiGatewayRegistrationOptions,
   ) => void
 }
 
@@ -69,6 +48,9 @@ const DAEMON_MAX_BYTES = 1_048_576
 const STREAM_LEASE_MS = 600_000
 const MAX_SUBSCRIPTIONS_PER_CONNECTION = 16
 const GSD_UI_EVENT = "gsd.ui.event"
+
+/** Vendor ErrorShape requires nonempty code AND message. */
+const frame = (code: string, message: string): { code: string; message: string } => ({ code, message: message.length > 0 ? message : code })
 
 function approvedProjects(config: EmbeddedProjectsConfig | undefined): ApprovedProject[] {
   return (config?.projects ?? []).filter(
@@ -138,24 +120,27 @@ export function registerGsdUiMethods(
   // opts out. Identity is always the server-owned client, never params.
   const adminRequired = config?.adminOnly !== false
   const admissionDenied = (client: UiClient | null): string | null => {
-    if (client?.invalidated) return "client invalidated"
+    if (client?.invalidated) return "GSD_UI_CLIENT_INVALIDATED|client invalidated"
     if (!adminRequired) return null
-    if (client?.internal?.controlUiAdmin !== true) return "administrator admission required"
+    if (client?.internal?.controlUiAdmin !== true) return "GSD_UI_ADMIN_REQUIRED|administrator admission required"
     return null
   }
 
   const requireApprovedProject = (
     params: Record<string, unknown>,
     client: UiClient | null,
-  ): { project: ApprovedProject; denied: UiErrorShape | null } => {
+  ): { project: ApprovedProject; denied: { code: string; message: string } | null } => {
     const denied = admissionDenied(client)
-    if (denied) return { project: undefined as never, denied: { message: denied } }
+    if (denied) {
+      const separator = denied.indexOf("|")
+      return { project: undefined as never, denied: frame(denied.slice(0, separator), denied.slice(separator + 1)) }
+    }
     const projectId = paramString(params, "projectId")
     const root = paramString(params, "root") ?? paramString(params, "project")
     const project = findApproved(config, { projectId, root })
-    if (!project) return { project: undefined as never, denied: { message: "no approved project matches" } }
+    if (!project) return { project: undefined as never, denied: frame("GSD_UI_NO_APPROVED_PROJECT", "no approved project matches") }
     if (!canonicalRootIsCurrent(project.canonicalRoot)) {
-      return { project: undefined as never, denied: { message: "approved root canonical identity changed" } }
+      return { project: undefined as never, denied: frame("GSD_UI_ROOT_IDENTITY_CHANGED", "approved root canonical identity changed") }
     }
     return { project, denied: null }
   }
@@ -171,7 +156,7 @@ export function registerGsdUiMethods(
           : typeof thrown?.message === "string"
             ? thrown.message
             : String(error)
-        opts.respond(false, undefined, { message })
+        opts.respond(false, undefined, frame("GSD_UI_ERROR", message))
       }
     })() as Promise<void>
 
@@ -202,7 +187,7 @@ export function registerGsdUiMethods(
         const rawPath = paramString(opts.params, "path")
         // Daemon paths are absolute; normalize either form before containment.
         const target = rawPath ? (isAbsolute(rawPath) ? rawPath : join(project.canonicalRoot, rawPath)) : project.canonicalRoot
-        if (!containsCanonically(project.canonicalRoot, target)) throw { message: "path escapes the approved root" }
+        if (!containsCanonically(project.canonicalRoot, target)) throw frame("GSD_UI_PATH_ESCAPE", "path escapes the approved root")
         return daemonFetch(`/api/browse-directories?path=${encodeURIComponent(target)}`)
       }),
     { scope: "operator.read", profileAccess: "required" },
@@ -213,7 +198,7 @@ export function registerGsdUiMethods(
     (opts) =>
       guard(opts, async () => {
         const devRoot = paramString(opts.params, "devRoot")
-        if (!devRoot) throw { message: "missing devRoot" }
+        if (!devRoot) throw frame("GSD_UI_MISSING_PARAM", "missing devRoot")
         const { project, denied } = requireApprovedProject({ root: devRoot }, opts.client)
         if (denied) throw denied
         return daemonFetch("/api/switch-root", { method: "POST", body: JSON.stringify({ devRoot: project.canonicalRoot }) })
@@ -228,8 +213,8 @@ export function registerGsdUiMethods(
         const { project, denied } = requireApprovedProject(opts.params, opts.client)
         if (denied) throw denied
         const path = paramString(opts.params, "path")
-        if (!path) throw { message: "missing path" }
-        if (!containsCanonically(project.canonicalRoot, path)) throw { message: "path escapes the approved root" }
+        if (!path) throw frame("GSD_UI_MISSING_PARAM", "missing path")
+        if (!containsCanonically(project.canonicalRoot, path)) throw frame("GSD_UI_PATH_ESCAPE", "path escapes the approved root")
         const relative = resolve(project.canonicalRoot, path).slice(project.canonicalRoot.length).replace(/^\//, "")
         return daemonFetch(
           `/api/files?root=project&path=${encodeURIComponent(relative)}&project=${encodeURIComponent(project.canonicalRoot)}`,
@@ -259,29 +244,29 @@ export function registerGsdUiMethods(
   }
 
   const startSubscription = (opts: UiHandlerOptions, streamRoute: (project: ApprovedProject) => string): void => {
-    const fail = (message: string) => {
-      opts.respond(false, undefined, { message })
+    const fail = (code: string, message: string) => {
+      opts.respond(false, undefined, frame(code, message))
     }
     const connId = opts.client?.connId
     const connectionSignal = opts.client?.connectionSignal
     const broadcast = opts.context.broadcastToConnIds
     if (!connId || !connectionSignal || !broadcast) {
-      fail("connection-targeted delivery unavailable")
+      fail("GSD_UI_DELIVERY_UNAVAILABLE", "connection-targeted delivery unavailable")
       return
     }
     if (connectionSignal.aborted || opts.client?.invalidated) {
-      fail("client connection already retired")
+      fail("GSD_UI_CONNECTION_RETIRED", "client connection already retired")
       return
     }
     const { project, denied } = requireApprovedProject(opts.params, opts.client)
     if (denied) {
-      fail(denied.message)
+      fail(denied.code, denied.message)
       return
     }
     let perConnection = 0
     for (const record of subscriptions.values()) if (record.connId === connId) perConnection += 1
     if (perConnection >= MAX_SUBSCRIPTIONS_PER_CONNECTION) {
-      fail("subscription cap reached for this connection")
+      fail("GSD_UI_SUBSCRIPTION_CAP", "subscription cap reached for this connection")
       return
     }
     const route = streamRoute(project) + (streamRoute(project).includes("?") ? "&" : "?") + "require_existing=1"
@@ -311,7 +296,7 @@ export function registerGsdUiMethods(
       const base = daemonBase()
       if (!base) {
         release(subscriptionId, "daemon unavailable")
-        fail("GSD web host unavailable")
+        fail("GSD_UI_HOST_UNAVAILABLE", "GSD web host unavailable")
         return
       }
       try {
@@ -321,8 +306,8 @@ export function registerGsdUiMethods(
         })
         if (!res.ok || !res.body) {
           release(subscriptionId, `stream route returned ${res.status}`)
-          if (res.status === 409) fail("workspace or terminal not started; start it first")
-          else fail(`stream route returned ${res.status}`)
+          if (res.status === 409) fail("GSD_UI_NOT_STARTED", "workspace or terminal not started; start it first")
+          else fail("GSD_UI_STREAM_ERROR", `stream route returned ${res.status}`)
           return
         }
         if (subscriptions.get(subscriptionId) !== record) return // closed before reply
@@ -377,7 +362,7 @@ export function registerGsdUiMethods(
     (opts) =>
       startSubscription(opts, (project) => {
         const terminalId = paramString(opts.params, "terminalId")
-        if (!terminalId) throw { message: "missing terminalId" }
+        if (!terminalId) throw frame("GSD_UI_MISSING_PARAM", "missing terminalId")
         return `/api/terminal/stream?id=${encodeURIComponent(terminalId)}`
       }),
     { scope: "operator.read", profileAccess: "required" },
@@ -392,9 +377,9 @@ export function registerGsdUiMethods(
       (opts) =>
         guard(opts, () => {
           const subscriptionId = paramString(opts.params, "subscriptionId")
-          if (!subscriptionId) throw { message: "missing subscriptionId" }
+          if (!subscriptionId) throw frame("GSD_UI_MISSING_PARAM", "missing subscriptionId")
           const record = subscriptions.get(subscriptionId)
-          if (!record || record.connId !== opts.client?.connId) throw { message: "unknown subscription for this connection" }
+          if (!record || record.connId !== opts.client?.connId) throw frame("GSD_UI_UNKNOWN_SUBSCRIPTION", "unknown subscription for this connection")
           release(subscriptionId, "unsubscribed")
           return { released: subscriptionId }
         }),

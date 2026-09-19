@@ -220,6 +220,21 @@ export function negotiateEmbeddedTransport(options: {
       if (options.expectedParentOrigin && event.origin !== options.expectedParentOrigin) return
       const data = event.data as BindMessage | undefined
       if (!data || data.protocol !== EMBEDDED_PROTOCOL || data.type !== BIND_TYPE) return
+      if ((data as { nonce?: unknown }).nonce !== nonce) {
+        // Not our document: close the transferred ports so they never pin
+        // the event loop or linger as phantom channels.
+        const rejected = (event as unknown as { ports?: unknown[] }).ports
+        if (Array.isArray(rejected)) {
+          for (const candidate of rejected) {
+            try {
+              ;(candidate as EmbeddedPortLike).close()
+            } catch {
+              // already closed
+            }
+          }
+        }
+        return
+      }
       const ports = (event as unknown as { ports?: unknown[] }).ports
       const closeAll = (list: unknown) => {
         if (!Array.isArray(list)) return
@@ -272,10 +287,14 @@ export function negotiateEmbeddedTransport(options: {
       resolveNegotiation(client)
     }
     w.addEventListener("message", listener)
-    // Announce readiness to the exact parent window: no data, no authority -
-    // only a signal that this frame is listening, closing the load race.
+    // Per-document correlation nonce: fresh for THIS negotiation, and the
+    // parent must echo it in the bind - a bind without our exact nonce is
+    // not our document. Correlation only, never authority.
+    const nonce = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : "doc-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2)
     try {
-      ;(w.parent as { postMessage(message: unknown, origin: string): void }).postMessage({ protocol: EMBEDDED_PROTOCOL, type: READY_TYPE }, "*")
+      ;(w.parent as { postMessage(message: unknown, origin: string): void }).postMessage({ protocol: EMBEDDED_PROTOCOL, type: READY_TYPE, nonce }, "*")
     } catch {
       // parent unreachable; negotiation expires on its own timer
     }

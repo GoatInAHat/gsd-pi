@@ -14,7 +14,8 @@ type AnyPort = { postMessage(message: unknown): void; close(): void; start?(): v
 
 function fakeWindow(origin: string, marker: boolean) {
   const listeners: Array<(event: { data: unknown; source?: unknown; origin?: string; ports?: unknown[] }) => void> = []
-  const parent = { postMessage: () => {} }
+  const parentMessages: unknown[] = []
+  const parent = { postMessage: (message: unknown) => { parentMessages.push(message) } }
   const win = {
     origin,
     location: { search: marker ? "?__gsd_embedded=1" : "" },
@@ -28,6 +29,7 @@ function fakeWindow(origin: string, marker: boolean) {
   }
   return {
     win,
+    parentMessages,
     parent,
     dispatch: (data: unknown, opts?: { source?: unknown; eventOrigin?: string; ports?: unknown[] }) => {
       const source = opts && "source" in opts ? opts.source : parent
@@ -52,7 +54,8 @@ function waitForMessage(port: AnyPort): Promise<any> {
 async function bind(h: ReturnType<typeof fakeWindow>, generation = 7, opts?: Parameters<typeof negotiateEmbeddedTransport>[0]) {
   const channel = new MessageChannel() as unknown as { port1: AnyPort; port2: AnyPort }
   const negotiation = negotiateEmbeddedTransport({ window: h.win, allowedOperations: ["preferences.get", "projects.list"], ...opts })
-  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation }, { ports: [channel.port2] })
+  const readyMessage = h.parentMessages.findLast((m) => (m as { type?: string })?.type === "gsd-ui-ready") as { nonce?: string } | undefined
+  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation, nonce: readyMessage?.nonce }, { ports: [channel.port2] })
   const client = await negotiation
   // The child posts a bind-ack before the negotiation promise resolves;
   // drain it so subsequent waitForMessage calls observe requests only.
@@ -83,7 +86,8 @@ test("valid parent bind resolves a client and sends a bind-ack over the port", a
   const h = fakeWindow("null", true)
   const channel = new MessageChannel() as unknown as { port1: AnyPort; port2: AnyPort }
   const negotiation = negotiateEmbeddedTransport({ window: h.win, allowedOperations: ["preferences.get"] })
-  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: 7 }, { ports: [channel.port2] })
+  const readyMessage = h.parentMessages.findLast((m) => (m as { type?: string })?.type === "gsd-ui-ready") as { nonce?: string } | undefined
+  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: 7, nonce: readyMessage?.nonce }, { ports: [channel.port2] })
   const client = await negotiation
   const ackMessage = await waitForMessage(channel.port1)
   assert.equal(ackMessage.protocol, EMBEDDED_PROTOCOL)
@@ -199,7 +203,8 @@ test("a request postMessage throw rejects the request and drains pending after a
     removeEventListener: () => {},
   }
   const negotiation = negotiateEmbeddedTransport({ window: h.win, allowedOperations: ["preferences.get"], maxPending: 1 })
-  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: 1 }, { ports: [flakyPort] })
+  const readyMessage = h.parentMessages.findLast((m) => (m as { type?: string })?.type === "gsd-ui-ready") as { nonce?: string } | undefined
+  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: 1, nonce: readyMessage?.nonce }, { ports: [flakyPort] })
   const client = await negotiation
   await assert.rejects(() => client.request("preferences.get"), /could not be cloned/)
   client.dispose()
@@ -216,7 +221,8 @@ test("bind acknowledgement failure rejects the negotiation instead of resolving 
     removeEventListener: () => {},
   }
   const negotiation = negotiateEmbeddedTransport({ window: h.win, allowedOperations: ["preferences.get"] })
-  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: 1 }, { ports: [deadPort] })
+  const readyMessage = h.parentMessages.findLast((m) => (m as { type?: string })?.type === "gsd-ui-ready") as { nonce?: string } | undefined
+  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: 1, nonce: readyMessage?.nonce }, { ports: [deadPort] })
   await assert.rejects(() => negotiation, /port closed/)
 })
 
@@ -225,14 +231,15 @@ test("binds with multiple transferred ports are rejected and negotiation expires
   const negotiation = negotiateEmbeddedTransport({ window: h.win, allowedOperations: ["preferences.get"], negotiationTimeoutMs: 25 })
   const first = new MessageChannel()
   const second = new MessageChannel()
-  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: 1 }, { ports: [first.port2, second.port2] })
+  const readyMessage = h.parentMessages.findLast((m) => (m as { type?: string })?.type === "gsd-ui-ready") as { nonce?: string } | undefined
+  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: 1, nonce: readyMessage?.nonce }, { ports: [first.port2, second.port2] })
   await assert.rejects(() => negotiation, /negotiation timed out/)
 })
 
 test("binds with a non-number generation are rejected and negotiation expires", async () => {
   const h = fakeWindow("null", true)
   const negotiation = negotiateEmbeddedTransport({ window: h.win, allowedOperations: ["preferences.get"], negotiationTimeoutMs: 25 })
-  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: "7" }, { ports: [new MessageChannel().port2] })
+  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: "7", nonce: "whatever" }, { ports: [new MessageChannel().port2] })
   await assert.rejects(() => negotiation, /negotiation timed out/)
 })
 
@@ -246,4 +253,12 @@ test("responses without a boolean ok or string requestId are ignored", async () 
   parentPort.postMessage({ protocol: EMBEDDED_PROTOCOL, type: RESPONSE_TYPE, generation: 9, requestId: request.requestId, ok: true, result: "good" })
   assert.equal(await promise, "good")
   client.dispose()
+})
+
+
+test("bind without the exact echoed nonce is ignored", async () => {
+  const h = fakeWindow("null", true)
+  const negotiation = negotiateEmbeddedTransport({ window: h.win, allowedOperations: ["preferences.get"], negotiationTimeoutMs: 40 })
+  h.dispatch({ protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: 1, nonce: "wrong-nonce-entirely" }, { ports: [new MessageChannel().port2] })
+  await assert.rejects(() => negotiation, /negotiation timed out/)
 })

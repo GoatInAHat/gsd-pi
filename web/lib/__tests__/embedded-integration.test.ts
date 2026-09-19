@@ -7,7 +7,8 @@ import { EMBEDDED_PROTOCOL, BIND_TYPE, BIND_ACK_TYPE, REQUEST_TYPE, RESPONSE_TYP
 test("startup-to-first-request: bounded negotiation precedes and enables authFetch over a real MessageChannel", async () => {
   const g = globalThis as unknown as { window?: unknown }
   const listeners: Array<(event: { data: unknown; source?: unknown; origin?: string; ports?: unknown[] }) => void> = []
-  const parent = { postMessage: () => {} }
+  const parentMessages: unknown[] = []
+  const parent = { postMessage: (message: unknown) => { parentMessages.push(message) } }
   g.window = {
     origin: "null",
     location: { search: "?__gsd_embedded=1" },
@@ -43,7 +44,9 @@ test("startup-to-first-request: bounded negotiation precedes and enables authFet
       requestsSeen.push(message)
       channel.port1.postMessage({ protocol: EMBEDDED_PROTOCOL, type: RESPONSE_TYPE, generation: 1, requestId: message.requestId, ok: true, result: { launchCwd: "/home/x" } })
     }
-    for (const l of [...listeners]) l({ data: { protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: 1 }, source: parent, origin: "https://parent.test", ports: [channel.port2] })
+    const readyMessage = parentMessages.findLast((m) => (m as { type?: string })?.type === "gsd-ui-ready") as { nonce?: string } | undefined
+    assert.ok(readyMessage?.nonce, "ready ping must carry the document nonce")
+    for (const l of [...listeners]) l({ data: { protocol: EMBEDDED_PROTOCOL, type: BIND_TYPE, generation: 1, nonce: readyMessage.nonce }, source: parent, origin: "https://parent.test", ports: [channel.port2] })
     assert.equal(await startupPromise, "embedded-ready")
 
     // 3. First request flows through negotiation-established transport.

@@ -1,14 +1,14 @@
 /**
  * Trusted native Control UI wrapper for the embedded GSD frame.
  *
- * Default export carries the exact plugin id the native loader matches for
- * open-gsd-openclaw. The page uses the required label and returns {dispose}
- * from mount. Document-generation lifecycle: each iframe load after the
- * first retires the active channel; a fresh ready ping binds a new
- * generation - the first-load race never closes a channel because nothing
- * is bound before the first ready ping. Host events are forwarded to the
- * bound port ONLY (exact-recipient, no broadcast), as gsd-ui-event messages.
- * host.request stays private: allowlisted operations dispatch to
+ * Document identity is a per-negotiation nonce from the child: each document
+ * ready ping carries a fresh nonce, the bind echoes it, and the child accepts
+ * only its own nonce. Duplicate ready with the current nonce is ignored; a
+ * fresh nonce retires the old channel (releasing its backend subscriptions)
+ * and binds the new document. Load ordering NEVER defines identity. Per-mount
+ * subscription ownership: only subscriptionIds established through this
+ * mount forward and unsubscribe; retirement releases them on the backend.
+ * host.request stays private - allowlisted operations dispatch to
  * individually registered gsd.ui.* methods.
  */
 
@@ -35,35 +35,9 @@ export interface EmbedContainerLike {
   appendChild(child: unknown): void
 }
 
-export interface EmbedControlUiViewContext {
-  signal: AbortSignal
-}
-
-export interface EmbedHostRequest {
-  (method: string, params: unknown): Promise<unknown>
-}
-
-export interface EmbedHostOnEvent {
-  (eventName: string, handler: (event: unknown) => void): () => void
-}
-
-export interface EmbedHostUi {
-  registerPage(page: {
-    id: string
-    label: string
-    mount: (
-      container: EmbedContainerLike,
-      context: EmbedControlUiViewContext,
-    ) => { dispose?: () => void } | void
-  }): void
-  registerNavigation?: (item: { id: string; label: string; page: { id: string } }) => void
-}
-
-export interface EmbedHost {
-  ui: EmbedHostUi
-  request?: EmbedHostRequest
-  onEvent?: EmbedHostOnEvent
-}
+/** The wrapper consumes the REAL vendor host type - never a substitute. */
+export type EmbedHost = import("openclaw/plugin-sdk/control-ui").ControlUiHost
+export type EmbedHostRequest = NonNullable<EmbedHost["request"]>
 
 export interface EmbedDefinePlugin {
   (plugin: { id: string; activate: (host: EmbedHost) => void }): unknown
@@ -74,7 +48,7 @@ export interface GsdEmbedOptions {
   request: EmbedHostRequest
   allowedOperations: readonly string[]
   definePlugin: EmbedDefinePlugin
-  onEvent?: EmbedHostOnEvent
+  onEvent?: (eventName: string, handler: (event: unknown) => void) => () => void
 }
 
 interface PortLike {
@@ -120,7 +94,7 @@ export function createGsdEmbedPlugin(options: GsdEmbedOptions): unknown {
       const page = {
         id: "gsd",
         label: "GSD",
-        mount: (container: EmbedContainerLike, context: EmbedControlUiViewContext) => {
+        mount: (container: EmbedContainerLike, context: { signal: AbortSignal }) => {
           const doc = (container.ownerDocument ?? (globalThis as { document?: DocumentLike }).document) as DocumentLike
           const iframe = doc.createElement("iframe")
           iframe.sandbox = "allow-scripts"
@@ -133,15 +107,9 @@ export function createGsdEmbedPlugin(options: GsdEmbedOptions): unknown {
           let bound = false
           let generation = 0
           let port: PortLike | null = null
-          // readySinceLoad pairs each load with the ready ping that PRECEDED it
-          // (child scripts run before load fires): the active generation
-          // survives its own load; a load with no pending ready retires the
-          // stale channel; duplicate ready within one document is ignored.
-          let readySinceLoad = false
-          // Per-mount subscription ownership: only subscriptionIds established
-          // through THIS mount are forwarded.
-          const ownedSubscriptions = new Set<string>()
           let disposed = false
+          let documentNonce: string | null = null
+          const ownedSubscriptions = new Map<string, string>()
 
           const respond = (requestId: string, ok: boolean, payload: unknown, error?: string) => {
             port?.postMessage({
@@ -172,7 +140,16 @@ export function createGsdEmbedPlugin(options: GsdEmbedOptions): unknown {
             })
           }
 
+          const releaseSubscription = (subscriptionId: string, unsubscribeOp: string) => {
+            void options.request(unsubscribeOp, { subscriptionId } as Record<string, unknown>).catch(() => {
+              // best-effort release; server lease retirement covers crashes
+            })
+          }
+
           const retireChannel = () => {
+            for (const [subscriptionId, unsubscribeOp] of ownedSubscriptions) {
+              releaseSubscription(subscriptionId, unsubscribeOp)
+            }
             ownedSubscriptions.clear()
             try {
               port?.close()
@@ -183,27 +160,43 @@ export function createGsdEmbedPlugin(options: GsdEmbedOptions): unknown {
             bound = false
           }
 
-          const bindChannel = () => {
+          const bindChannel = (nonce: string) => {
             retireChannel()
             generation += 1
-            const channel = new MessageChannel() as unknown as { port1: PortLike; port2: unknown }
             const localGeneration = generation
+            const channel = new MessageChannel() as unknown as { port1: PortLike; port2: unknown }
             channel.port1.onmessage = (ev) => {
               const message = ev.data as EmbedFrameRequest | undefined
               if (!message || message.protocol !== GSD_EMBED_PROTOCOL || message.type !== GSD_EMBED_REQUEST_TYPE) return
               if (typeof message.requestId !== "string" || typeof message.operation !== "string" || message.generation !== localGeneration) return
+              if (message.operation.endsWith(".unsubscribe")) {
+                const targetSubscription = (message.args as { subscriptionId?: unknown } | null | undefined)?.subscriptionId
+                if (typeof targetSubscription !== "string" || !ownedSubscriptions.has(targetSubscription)) {
+                  respond(message.requestId, false, undefined, "unsubscribe refused: subscription not owned by this mount")
+                  return
+                }
+              }
               if (!allowed.has(message.operation)) {
                 respond(message.requestId, false, undefined, "operation not allowed: " + message.operation)
                 return
               }
               void options
-                .request("gsd.ui." + message.operation, message.args ?? {})
+                .request("gsd.ui." + message.operation, message.args as Record<string, unknown> | undefined)
                 .then(
                   (result) => {
+                    const subscriptionId = (result as { subscriptionId?: unknown } | null)?.subscriptionId
+                    if (typeof subscriptionId === "string" && message.operation.endsWith(".subscribe")) {
+                      const unsubscribeOp = message.operation.replace(/\.subscribe$/, ".unsubscribe")
+                      if (generation !== localGeneration) {
+                        // Late subscribe after a generation change: release
+                        // THAT exact backend subscription, do not adopt it.
+                        releaseSubscription(subscriptionId, unsubscribeOp)
+                        return
+                      }
+                      ownedSubscriptions.set(subscriptionId, unsubscribeOp)
+                    }
                     if (generation !== localGeneration) return
                     respond(message.requestId, true, result)
-                    const subscriptionId = (result as { subscriptionId?: unknown } | null)?.subscriptionId
-                    if (typeof subscriptionId === "string" && message.operation.endsWith(".subscribe")) ownedSubscriptions.add(subscriptionId)
                   },
                   (error: unknown) => {
                     if (generation === localGeneration) respond(message.requestId, false, undefined, error instanceof Error ? error.message : String(error))
@@ -213,7 +206,7 @@ export function createGsdEmbedPlugin(options: GsdEmbedOptions): unknown {
             port = channel.port1
             bound = true
             ;(iframe.contentWindow as ContentWindowLike | null)?.postMessage(
-              { protocol: GSD_EMBED_PROTOCOL, type: GSD_EMBED_BIND_TYPE, generation },
+              { protocol: GSD_EMBED_PROTOCOL, type: GSD_EMBED_BIND_TYPE, generation, nonce },
               "*",
               [channel.port2],
             )
@@ -221,16 +214,17 @@ export function createGsdEmbedPlugin(options: GsdEmbedOptions): unknown {
 
           const windowListener = (event: MessageEvent) => {
             if (event.source !== (iframe.contentWindow as unknown)) return
-            const data = event.data as { protocol?: string; type?: string } | undefined
+            const data = event.data as { protocol?: string; type?: string; nonce?: unknown } | undefined
             if (!data || data.protocol !== GSD_EMBED_PROTOCOL) return
             if (data.type === GSD_EMBED_READY_TYPE) {
-              if (readySinceLoad) return
-              readySinceLoad = true
-              bindChannel()
+              const nonce = data.nonce
+              if (typeof nonce !== "string" || nonce.length === 0) return
+              if (nonce === documentNonce) return
+              documentNonce = nonce
+              bindChannel(nonce)
               return
             }
             if (data.type === GSD_EMBED_BIND_TYPE) {
-              // Frame-initiated bind attempts are rejected: close transferred ports.
               const ports = (event as unknown as { ports?: unknown[] }).ports
               if (Array.isArray(ports)) {
                 for (const candidate of ports) {
@@ -246,17 +240,11 @@ export function createGsdEmbedPlugin(options: GsdEmbedOptions): unknown {
 
           ;(globalThis as unknown as { addEventListener(t: string, l: unknown): void }).addEventListener("message", windowListener)
 
-          // Document-generation lifecycle: a load event after the first one
-          // means the document was replaced (reload/navigation) - retire the
-          // channel and wait for the new document's ready ping. The FIRST load
-          // fires before any bind exists, so it never closes a channel.
+          // Load ordering never defines document identity: the nonce protocol
+          // alone decides binds and retirements. A load with no fresh-nonce
+          // ready leaves the old channel idle until dispose or a new document.
           iframe.addEventListener?.("load", () => {
-            if (disposed) return
-            if (readySinceLoad) {
-              readySinceLoad = false
-              return
-            }
-            if (bound) retireChannel()
+            void 0
           })
 
           const unsubscribeHostEvents = options.onEvent
@@ -267,7 +255,7 @@ export function createGsdEmbedPlugin(options: GsdEmbedOptions): unknown {
             if (disposed) return
             disposed = true
             retireChannel()
-            ownedSubscriptions.clear()
+            documentNonce = null
             unsubscribeHostEvents?.()
             ;(globalThis as unknown as { removeEventListener(t: string, l: unknown): void }).removeEventListener("message", windowListener)
             try {
@@ -280,8 +268,8 @@ export function createGsdEmbedPlugin(options: GsdEmbedOptions): unknown {
           return { dispose: teardown }
         },
       }
-      host.ui.registerPage(page)
-      host.ui.registerNavigation?.({ id: "gsd", label: "GSD", page: { id: "gsd" } })
+      ;(host.ui as unknown as { registerPage(page: unknown): void }).registerPage(page)
+      ;(host.ui as unknown as { registerNavigation?(item: unknown): void }).registerNavigation?.({ id: "gsd", label: "GSD", page: { id: "gsd" } })
     },
   })
 }

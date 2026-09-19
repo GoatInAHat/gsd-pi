@@ -48,7 +48,7 @@
       "openclawVersion": "2026.9.2",
       "pluginSdkVersion": "2026.9.2"
     },
-    "controlUi": "dist/control-ui-entry.js"
+    "controlUi": "./src/control-ui-entry.ts"
   },
   "scripts": {
     "build": "node ../../scripts/clean-package-dist.cjs && tsc -p tsconfig.json --incremental false",
@@ -56,7 +56,9 @@
   },
   "devDependencies": {
     "@types/node": "^24.12.0",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "openclaw": "2026.9.4",
+    "esbuild": "^0.25.0"
   },
   "engines": {
     "node": ">=22.0.0"

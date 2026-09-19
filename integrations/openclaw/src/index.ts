@@ -1,3 +1,4 @@
+import { toolPluginMetadataSymbol } from "openclaw/plugin-sdk/tool-plugin"
 import { registerGsdUiMethods } from "./ui-methods.js"
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
@@ -11,7 +12,7 @@ import { GsdPortalService } from "./portals.js";
 import { registerWebTab } from "./webtab.js";
 import type { Flows, PluginApi } from "./types.js";
 
-const GATEWAY_SCOPES: Record<string, string[]> = {
+const GATEWAY_SCOPES: Record<string, OperatorScope[]> = {
   "projects.list": ["operator.read"],
   "projects.register": ["operator.admin"],
   "workboard.cards.list": ["operator.read"],
@@ -24,7 +25,9 @@ const GATEWAY_SCOPES: Record<string, string[]> = {
   "portal.close": ["operator.write"],
 };
 
-export function gatewayScopes(method: string): string[] {
+type OperatorScope = NonNullable<NonNullable<Parameters<typeof callGatewayFromCli>[3]>["scopes"]>[number]
+
+export function gatewayScopes(method: string): OperatorScope[] {
   const scopes = GATEWAY_SCOPES[method];
   if (!scopes) throw new Error(`Unsupported GSD synchronization method: ${method}`);
   return scopes;
@@ -32,7 +35,7 @@ export function gatewayScopes(method: string): string[] {
 
 let embeddedProjectsConfigRef: import("./ui-methods.js").EmbeddedProjectsConfig | undefined
 
-export default definePluginEntry({
+const gsdPluginEntry = definePluginEntry({
   id: "open-gsd-openclaw",
   name: "Open GSD",
   description: "GSD web UI in native Portals, MCP tools, and automatic project, TaskFlow, and Workboard synchronization",
@@ -169,3 +172,21 @@ export default definePluginEntry({
     });
   },
 });
+
+
+// Static authoring metadata for the supported plugins builder: same shape
+// defineToolPlugin publishes, attached to our feature-rich entry. The builder
+// reads this symbol (public via Symbol.for) plus package.json openclaw.controlUi.
+Object.defineProperty(gsdPluginEntry, toolPluginMetadataSymbol, {
+  value: {
+    id: "open-gsd-openclaw",
+    name: "Open GSD",
+    description: "GSD web UI in native Portals, MCP tools, and automatic project, TaskFlow, and Workboard synchronization",
+    activation: { onStartup: true },
+    configSchema: { type: "object", properties: {}, additionalProperties: false },
+    tools: [],
+  },
+  enumerable: false,
+})
+
+export default gsdPluginEntry

@@ -38,7 +38,7 @@ export async function GET(request: Request): Promise<Response> {
     if (url.searchParams.get("require_existing") === "1") {
       // Non-starting subscription mode for embedded RPC callers: never
       // create sessions; refuse with 409 when the session does not exist.
-      if (!hasSession(sessionId)) {
+      if (!hasSession(sessionId, projectCwd)) {
         return Response.json({ error: "terminal session not found" }, { status: 409 });
       }
     } else {

@@ -11,9 +11,9 @@ import { createGsdEmbedPlugin, EMBED_ALLOWED_OPERATIONS, type EmbedHost } from "
 
 let hostRef: EmbedHost | undefined
 
-const request = (method: string, params: unknown): Promise<unknown> => {
-  if (hostRef?.request) return hostRef.request(method, params)
-  return Promise.reject(new Error("Control UI host request unavailable before activation"))
+const request = async <T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> => {
+  if (hostRef?.request) return hostRef.request<T>(method, params)
+  throw new Error("Control UI host request unavailable before activation")
 }
 
 const onEvent = (eventName: string, handler: (event: unknown) => void): (() => void) => {
