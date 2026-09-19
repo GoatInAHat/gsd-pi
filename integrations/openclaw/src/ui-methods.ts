@@ -103,18 +103,25 @@ export function registerGsdUiMethods(
       redirect: "manual",
       signal: AbortSignal.timeout(DAEMON_TIMEOUT_MS),
     })
-    if (!res.ok) throw new Error(`GSD route ${route} returned ${res.status}`)
+    if (!res.ok) {
+      await res.body?.cancel()
+      throw new Error(`GSD route ${route} returned ${res.status}`)
+    }
     if (!res.body) throw new Error("GSD response has no body")
-    // Byte bound enforced WHILE reading, never after full buffering.
     const bodyReader = res.body.getReader()
+    let complete = false
     let received = 0
     const chunks: Uint8Array[] = []
-    for (;;) {
-      const { done, value } = await bodyReader.read()
-      if (done) break
-      received += value?.length ?? 0
-      if (received > DAEMON_MAX_BYTES) throw new Error("GSD response exceeds size bound")
-      if (value) chunks.push(value)
+    try {
+      for (;;) {
+        const { done, value } = await bodyReader.read()
+        if (done) { complete = true; break }
+        received += value.byteLength
+        if (received > DAEMON_MAX_BYTES) throw new Error("GSD response exceeds size bound")
+        chunks.push(value)
+      }
+    } finally {
+      try { if (!complete) await bodyReader.cancel() } finally { bodyReader.releaseLock() }
     }
     const text = await new Blob(chunks).text()
     const parsed = JSON.parse(text) as unknown
@@ -129,10 +136,9 @@ export function registerGsdUiMethods(
 
   // Admin admission is required by DEFAULT; only an explicit adminOnly:false
   // opts out. Identity is always the server-owned client, never params.
-  const adminRequired = config?.adminOnly !== false
   const admissionDenied = (client: UiClient | null): string | null => {
     if (client?.invalidated) return "GSD_UI_CLIENT_INVALIDATED|client invalidated"
-    if (!adminRequired) return null
+    if (config?.adminOnly === false) return null
     if (client?.internal?.controlUiAdmin !== true) return "GSD_UI_ADMIN_REQUIRED|administrator admission required"
     return null
   }
@@ -248,17 +254,49 @@ export function registerGsdUiMethods(
   )
 
   api.registerGatewayMethod(
+    "gsd.ui.workspace.bootstrap",
+    (opts) => guard(opts, async () => {
+      const { project, denied } = requireApprovedProject(opts.params, opts.client)
+      if (denied) throw denied
+      // The legacy boot route may start the bridge: this is a write operation,
+      // separate from passive subscriptions, even though the daemon uses GET.
+      const payload = await daemonFetch(`/api/boot?project=${encodeURIComponent(project.canonicalRoot)}`)
+      const object = (value: unknown): value is Record<string, unknown> =>
+        typeof value === "object" && value !== null && !Array.isArray(value)
+      if (!object(payload) || !object(payload.project) || payload.project.cwd !== project.canonicalRoot ||
+          !object(payload.bridge) || payload.bridge.projectCwd !== project.canonicalRoot ||
+          !object(payload.workspace) || !object(payload.onboarding) || typeof payload.onboarding.locked !== "boolean" ||
+          !Array.isArray(payload.resumableSessions)) {
+        throw frame("GSD_UI_INVALID_BOOT", "invalid boot payload for the approved project")
+      }
+      return payload
+    }),
+    { scope: "operator.write", profileAccess: "required" },
+  )
+
+  api.registerGatewayMethod(
     "gsd.ui.files.delete",
     (opts) =>
       guard(opts, async () => {
-        const { project, denied } = requireApprovedProject(opts.params, opts.client)
+        const projectId = paramString(opts.params, "projectId")
+        const projectIdentity = paramString(opts.params, "project")
+        if (!projectId && !projectIdentity) throw frame("GSD_UI_MISSING_PARAM", "missing project identity")
+        const { project, denied } = requireApprovedProject({ projectId, project: projectIdentity }, opts.client)
         if (denied) throw denied
+        const root = paramString(opts.params, "root")
+        if (root !== "project" && root !== "gsd") throw frame("GSD_UI_INVALID_ROOT", "root must be project or gsd")
         const path = paramString(opts.params, "path")
-        if (!path) throw frame("GSD_UI_MISSING_PARAM", "missing path")
-        if (!containsCanonically(project.canonicalRoot, path)) throw frame("GSD_UI_PATH_ESCAPE", "path escapes the approved root")
-        const relative = resolve(project.canonicalRoot, path).slice(project.canonicalRoot.length).replace(/^\//, "")
+        if (!path || isAbsolute(path) || path.startsWith("\\") || path.includes("..")) {
+          throw frame("GSD_UI_PATH_ESCAPE", "path must be relative within the selected root")
+        }
+        const selectedRoot = root === "project" ? project.canonicalRoot : join(project.canonicalRoot, ".gsd")
+        const target = resolve(selectedRoot, path)
+        if (target === selectedRoot || !containsCanonically(project.canonicalRoot, target) ||
+            !containsCanonically(selectedRoot, target)) {
+          throw frame("GSD_UI_PATH_ESCAPE", "path escapes the selected approved root")
+        }
         return daemonFetch(
-          `/api/files?root=project&path=${encodeURIComponent(relative)}&project=${encodeURIComponent(project.canonicalRoot)}`,
+          `/api/files?root=${root}&path=${encodeURIComponent(path)}&project=${encodeURIComponent(project.canonicalRoot)}`,
           { method: "DELETE" },
         )
       }),
@@ -273,7 +311,8 @@ export function registerGsdUiMethods(
     seq: number
     removeConnectionListener: () => void
     connectionSignal: AbortSignal
-    broadcast: (event: string, payload: unknown, connIds: ReadonlySet<string>) => void
+    finish: (reason: string) => void
+    reader?: ReadableStreamDefaultReader<Uint8Array>
   }
   const subscriptions = new Map<string, SubscriptionRecord>()
 
@@ -283,21 +322,20 @@ export function registerGsdUiMethods(
     subscriptions.delete(subscriptionId)
     clearTimeout(record.lease)
     record.removeConnectionListener()
+    void record.reader?.cancel().catch(() => {})
     record.controller.abort()
-    // Targeted closure notice: only a still-live connection hears it.
-    if (!record.connectionSignal.aborted) {
-      try {
-        record.broadcast(GSD_UI_EVENT, { type: GSD_UI_EVENT, subscriptionId, closed: true, reason }, new Set([record.connId]))
-      } catch {
-        // connection already gone
-      }
-    }
+    record.finish(reason)
   }
 
   const startSubscription = (opts: UiHandlerOptions, streamRoute: (project: ApprovedProject) => string): void => {
-    const fail = (code: string, message: string) => {
-      opts.respond(false, undefined, frame(code, message))
+    let initialResponded = false
+    let admitted = false
+    const respondOnce: UiRespond = (ok, payload, error) => {
+      if (initialResponded) return
+      initialResponded = true
+      opts.respond(ok, payload, error)
     }
+    const fail = (code: string, message: string) => respondOnce(false, undefined, frame(code, message))
     const connId = opts.client?.connId
     const connectionSignal = opts.client?.connectionSignal
     const broadcast = opts.context.broadcastToConnIds
@@ -320,7 +358,14 @@ export function registerGsdUiMethods(
       fail("GSD_UI_SUBSCRIPTION_CAP", "subscription cap reached for this connection")
       return
     }
-    const route = streamRoute(project) + (streamRoute(project).includes("?") ? "&" : "?") + "require_existing=1"
+    let route: string
+    try {
+      const selectedRoute = streamRoute(project)
+      route = selectedRoute + (selectedRoute.includes("?") ? "&" : "?") + "require_existing=1"
+    } catch {
+      fail("GSD_UI_MISSING_PARAM", "invalid stream arguments")
+      return
+    }
     const subscriptionId = `sub-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`
     const onConnectionAbort = () => release(subscriptionId, "connection retired")
     const record: SubscriptionRecord = {
@@ -331,7 +376,19 @@ export function registerGsdUiMethods(
       seq: 0,
       removeConnectionListener: () => connectionSignal.removeEventListener("abort", onConnectionAbort),
       connectionSignal,
-      broadcast,
+      finish(reason) {
+        if (connectionSignal.aborted || opts.client?.invalidated) {
+          initialResponded = true
+          return
+        }
+        if (!initialResponded) {
+          fail("GSD_UI_ADMISSION_CANCELLED", reason)
+        } else if (admitted) {
+          try {
+            broadcast(GSD_UI_EVENT, { type: GSD_UI_EVENT, subscriptionId, seq: ++record.seq, closed: true, reason }, new Set([connId]))
+          } catch { /* connection already gone */ }
+        }
+      },
     }
     subscriptions.set(subscriptionId, record)
     connectionSignal.addEventListener("abort", onConnectionAbort, { once: true })
@@ -348,66 +405,69 @@ export function registerGsdUiMethods(
     void (async () => {
       const base = daemonBase()
       if (!base) {
-        release(subscriptionId, "daemon unavailable")
         fail("GSD_UI_HOST_UNAVAILABLE", "GSD web host unavailable")
+        release(subscriptionId, "daemon unavailable")
         return
       }
-      let initialResponded = false
+      const admission = new AbortController()
+      const admissionTimer = setTimeout(() => admission.abort(), DAEMON_TIMEOUT_MS)
+      let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+      let complete = false
       try {
-        // Admission deadline: cleared once headers arrive so a healthy
-        // stream is governed ONLY by the lifetime lease afterwards.
-        const admission = new AbortController()
-        const admissionTimer = setTimeout(() => admission.abort(), DAEMON_TIMEOUT_MS)
         const res = await fetch(base + route, {
           redirect: "manual",
           signal: AbortSignal.any([record.controller.signal, admission.signal]),
         })
+        // Only opening the stream has a short deadline. The body is governed
+        // by the lease and explicit connection/plugin disposal afterwards.
         clearTimeout(admissionTimer)
         if (!res.ok || !res.body) {
-          release(subscriptionId, `stream route returned ${res.status}`)
           if (res.status === 409) fail("GSD_UI_NOT_STARTED", "workspace or terminal not started; start it first")
           else fail("GSD_UI_STREAM_ERROR", `stream route returned ${res.status}`)
+          await res.body?.cancel()
+          release(subscriptionId, `stream route returned ${res.status}`)
           return
         }
-        if (subscriptions.get(subscriptionId) !== record) return // closed before reply
-        initialResponded = true
-        opts.respond(true, { subscriptionId })
-        const reader = res.body.getReader()
-        const decoder = new TextDecoder()
+        reader = res.body.getReader()
+        record.reader = reader
+        if (subscriptions.get(subscriptionId) !== record) return
+        admitted = true
+        respondOnce(true, { subscriptionId })
+        const decoder = new TextDecoder("utf-8", { fatal: true })
         let buffer = ""
+        let bufferedBytes = 0
         for (;;) {
           const { done, value } = await reader.read()
-          if (done) break
+          if (done) { complete = true; break }
+          bufferedBytes += value.byteLength
+          if (bufferedBytes > DAEMON_MAX_BYTES) throw new Error("stream buffer exceeds byte bound")
           buffer += decoder.decode(value, { stream: true })
-          if (buffer.length > DAEMON_MAX_BYTES) {
-            release(subscriptionId, "stream buffer exceeded size bound")
-            return
-          }
           let index: number
           while ((index = buffer.indexOf("\n\n")) >= 0) {
             const chunk = buffer.slice(0, index)
             buffer = buffer.slice(index + 2)
+            bufferedBytes -= Buffer.byteLength(chunk, "utf8") + 2
             const dataLine = chunk.split("\n").find((l) => l.startsWith("data:"))
             if (!dataLine) continue
             const payload = dataLine.slice(5).trim()
-            if (!payload || payload.length > DAEMON_MAX_BYTES) continue
+            if (!payload) continue
             let event: unknown
-            try {
-              event = JSON.parse(payload)
-            } catch {
-              event = payload
-            }
+            try { event = JSON.parse(payload) } catch { event = payload }
             record.seq += 1
             if (!emit({ type: GSD_UI_EVENT, subscriptionId, seq: record.seq, event })) return
           }
         }
         release(subscriptionId, "stream ended")
       } catch {
-        const stillLive = subscriptions.get(subscriptionId) === record
-        release(subscriptionId, "stream failed")
-        if (stillLive && !initialResponded) {
-          initialResponded = true
-          opts.respond(false, undefined, frame("GSD_UI_STREAM_ERROR", "stream admission failed"))
+        if (subscriptions.get(subscriptionId) === record) {
+          if (!admitted) fail("GSD_UI_STREAM_ERROR", "stream admission failed")
+          release(subscriptionId, "stream failed")
+        }
+      } finally {
+        clearTimeout(admissionTimer)
+        if (reader) {
+          try { if (!complete) await reader.cancel() } catch { /* already aborted */ }
+          finally { reader.releaseLock() }
         }
       }
     })()

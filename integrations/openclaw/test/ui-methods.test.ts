@@ -53,10 +53,10 @@ function stubDaemonFetch(body: unknown = { stubbed: true }) {
   return { calls, restore: () => { globalThis.fetch = original } }
 }
 
-test("nine methods registered; respond contract with ErrorShape third argument", async () => {
+test("eleven methods registered; respond contract with ErrorShape third argument", async () => {
   const { api, registered } = recordingApi()
   registerGsdUiMethods(api, () => 33277)
-  assert.equal(registered.size, 10)
+  assert.equal(registered.size, 11)
   for (const [method, entry] of registered) {
     assert.ok(method.startsWith("gsd.ui."), method)
     assert.equal(entry.opts?.profileAccess, "required", method)
@@ -112,7 +112,7 @@ test("approved-root operations with canonical identity, containment, absolute-pa
     const dirsEscape = await call(registered.get("gsd.ui.directories.list")!.handler, { params: { projectId: "p1", path: "../../etc" }, client })
     assert.equal(dirsEscape[0].ok, false)
     assert.match(dirsEscape[0].error?.message ?? "", /escapes/)
-    const del = await call(registered.get("gsd.ui.files.delete")!.handler, { params: { projectId: "p1", path: join(root, "src", "f.txt") }, client })
+    const del = await call(registered.get("gsd.ui.files.delete")!.handler, { params: { project: root, root: "project", path: "src/f.txt" }, client })
     assert.equal(del[0].ok, true, del[0].error?.message)
     const delUrl = daemon.calls[3].url
     assert.ok(delUrl.includes("root=project"), delUrl)
@@ -262,7 +262,7 @@ test("setDevRoot proxies PUT preferences with the admitted canonical root", asyn
   }
 })
 
-test("path-only browse pins to the single approved project; closed event reaches the connection on unsubscribe", async () => {
+test("path-only browse pins to the single approved project", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "gsd-pin-")))
   mkdirSync(join(root, "src"), { recursive: true })
   const config: EmbeddedProjectsConfig = { adminOnly: true, projects: [{ projectId: "p1", canonicalRoot: root }] }
@@ -277,4 +277,291 @@ test("path-only browse pins to the single approved project; closed event reaches
     daemon.restore()
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+
+const flush = () => new Promise<void>((resolve) => setImmediate(resolve))
+
+function subscriptionHarness(root: string) {
+  const { api, registered } = recordingApi()
+  const handles = registerGsdUiMethods(api, () => 33277, { projects: [{ projectId: "p1", canonicalRoot: root }] })
+  const responses: Captured[] = []
+  const events: Array<Record<string, unknown>> = []
+  const connection = new AbortController()
+  const opts = {
+    params: { project: root },
+    client: adminClient({ connectionSignal: connection.signal }),
+    respond: (ok: boolean, payload: unknown, error: Captured["error"]) => responses.push({ ok, payload, error }),
+    context: { broadcastToConnIds: (_name: string, payload: unknown, ids: ReadonlySet<string>) => {
+      assert.deepEqual([...ids], ["conn-1"])
+      events.push(payload as Record<string, unknown>)
+    } },
+  } as unknown as UiHandlerOptions
+  return { registered, handles, responses, events, connection, opts }
+}
+
+function temporaryProject() {
+  return realpathSync(mkdtempSync(join(tmpdir(), "gsd-server-final-")))
+}
+
+test("disposeAll during pending admission responds once on a live connection and clears the record", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const root = temporaryProject()
+  const h = subscriptionHarness(root)
+  const original = globalThis.fetch
+  let signal: AbortSignal | undefined
+  globalThis.fetch = ((_url: unknown, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    signal = init.signal as AbortSignal
+    signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true })
+  })) as typeof fetch
+  try {
+    await h.registered.get("gsd.ui.workspace.events.subscribe")!.handler(h.opts)
+    assert.equal(h.responses.length, 0)
+    h.handles.disposeAll()
+    await flush()
+    assert.equal(signal?.aborted, true)
+    assert.equal(h.handles.subscriptions.size, 0)
+    assert.equal(h.responses.length, 1)
+    assert.equal(h.responses[0].ok, false)
+    assert.match(h.responses[0].error?.message ?? "", /disposal/)
+    assert.equal(h.events.length, 0, "an unadmitted subscription has no child-visible closure")
+    h.handles.disposeAll()
+    t.mock.timers.tick(600_001)
+    await flush()
+    assert.equal(h.responses.length, 1)
+  } finally {
+    h.handles.disposeAll(); globalThis.fetch = original; rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("stream admission timeout replies once; a healthy body survives that deadline and closes once on disposal", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const root = temporaryProject()
+  const h = subscriptionHarness(root)
+  const original = globalThis.fetch
+  let streamSignal: AbortSignal | undefined
+  let controller!: ReadableStreamDefaultController<Uint8Array>
+  let cancelled = 0
+  const body = new ReadableStream<Uint8Array>({ start(c) { controller = c }, cancel() { cancelled += 1 } })
+  globalThis.fetch = (async (_url: unknown, init: RequestInit) => {
+    streamSignal = init.signal as AbortSignal
+    return new Response(body)
+  }) as typeof fetch
+  try {
+    await h.registered.get("gsd.ui.workspace.events.subscribe")!.handler(h.opts)
+    await flush()
+    assert.equal(h.responses.length, 1)
+    assert.equal(h.responses[0].ok, true)
+    t.mock.timers.tick(10_001)
+    await flush()
+    assert.equal(streamSignal?.aborted, false)
+    controller.enqueue(new TextEncoder().encode('data: {"still":"live"}\n\n'))
+    await flush()
+    assert.deepEqual(h.events[0].event, { still: "live" })
+    h.handles.disposeAll()
+    await flush()
+    assert.equal(h.responses.length, 1)
+    assert.equal(h.events.filter((e) => e.closed === true).length, 1)
+    assert.equal(cancelled, 1)
+    assert.equal(body.locked, false)
+    h.handles.disposeAll()
+    assert.equal(h.events.filter((e) => e.closed === true).length, 1)
+
+    const pending = subscriptionHarness(root)
+    globalThis.fetch = ((_url: unknown, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init.signal!.addEventListener("abort", () => reject(new Error("deadline")), { once: true })
+    })) as typeof fetch
+    await pending.registered.get("gsd.ui.workspace.events.subscribe")!.handler(pending.opts)
+    t.mock.timers.tick(10_000)
+    await flush()
+    assert.equal(pending.responses.length, 1)
+    assert.equal(pending.responses[0].ok, false)
+    assert.equal(pending.handles.subscriptions.size, 0)
+    assert.equal(pending.events.length, 0)
+  } finally {
+    h.handles.disposeAll(); globalThis.fetch = original; rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("SSE enforces raw UTF-8 byte budget and cancels/releases an oversized reader", async () => {
+  const root = temporaryProject()
+  const h = subscriptionHarness(root)
+  const original = globalThis.fetch
+  const text = "界".repeat(Math.floor(1_048_576 / 3) + 1)
+  assert.ok(text.length < 1_048_576)
+  const bytes = new TextEncoder().encode(text)
+  assert.ok(bytes.byteLength > 1_048_576)
+  let cancelled = 0
+  const body = new ReadableStream<Uint8Array>({
+    start(c) { c.enqueue(bytes.subarray(0, 500_000)); c.enqueue(bytes.subarray(500_000)) },
+    cancel() { cancelled += 1 },
+  })
+  globalThis.fetch = (async () => new Response(body)) as typeof fetch
+  try {
+    await h.registered.get("gsd.ui.workspace.events.subscribe")!.handler(h.opts)
+    await flush()
+    assert.equal(h.responses.length, 1)
+    assert.equal(h.responses[0].ok, true)
+    assert.equal(h.handles.subscriptions.size, 0)
+    assert.equal(h.events.filter((e) => e.closed === true).length, 1)
+    assert.equal(cancelled, 1)
+    assert.equal(body.locked, false)
+  } finally {
+    h.handles.disposeAll(); globalThis.fetch = original; rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("SSE reader error releases its lock and sends one closure after admission", async () => {
+  const root = temporaryProject()
+  const h = subscriptionHarness(root)
+  const original = globalThis.fetch
+  let controller!: ReadableStreamDefaultController<Uint8Array>
+  const body = new ReadableStream<Uint8Array>({ start(c) { controller = c } })
+  globalThis.fetch = (async () => new Response(body)) as typeof fetch
+  try {
+    await h.registered.get("gsd.ui.workspace.events.subscribe")!.handler(h.opts)
+    await flush()
+    controller.error(new Error("read failed"))
+    await flush()
+    assert.equal(h.responses.length, 1)
+    assert.equal(h.events.filter((e) => e.closed === true).length, 1)
+    assert.equal(body.locked, false)
+    assert.equal(h.handles.subscriptions.size, 0)
+  } finally {
+    h.handles.disposeAll(); globalThis.fetch = original; rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("ordinary daemon responses count bytes while reading and cancel/release on oversize", async () => {
+  const { api, registered } = recordingApi()
+  registerGsdUiMethods(api, () => 33277)
+  const original = globalThis.fetch
+  let cancelled = 0
+  const body = new ReadableStream<Uint8Array>({
+    start(c) { c.enqueue(new TextEncoder().encode("界".repeat(350_000))) },
+    cancel() { cancelled += 1 },
+  })
+  globalThis.fetch = (async () => new Response(body)) as typeof fetch
+  try {
+    const responses = await call(registered.get("gsd.ui.preferences.read")!.handler, { client: adminClient() })
+    assert.equal(responses.length, 1)
+    assert.equal(responses[0].ok, false)
+    assert.match(responses[0].error?.message ?? "", /size bound/)
+    assert.equal(cancelled, 1)
+    assert.equal(body.locked, false)
+  } finally { globalThis.fetch = original }
+})
+
+test("terminal subscription forwards admitted canonical project and never starts the daemon route", async () => {
+  const root = temporaryProject()
+  const h = subscriptionHarness(root)
+  const original = globalThis.fetch
+  let requested: URL | undefined
+  const body = new ReadableStream<Uint8Array>({ start() {} })
+  globalThis.fetch = (async (url: unknown) => { requested = new URL(String(url)); return new Response(body) }) as typeof fetch
+  try {
+    await h.registered.get("gsd.ui.terminal.output.subscribe")!.handler({ ...h.opts, params: { project: root, terminalId: "terminal-a" } })
+    await flush()
+    assert.equal(requested?.searchParams.get("project"), root)
+    assert.equal(requested?.searchParams.get("id"), "terminal-a")
+    assert.equal(requested?.searchParams.get("require_existing"), "1")
+    assert.equal(h.responses[0].ok, true)
+  } finally {
+    h.handles.disposeAll(); await flush(); globalThis.fetch = original; rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("workspace bootstrap requires write scope, profile, admin and approved project; preserves a project-bound boot DTO", async () => {
+  const root = temporaryProject()
+  const { api, registered } = recordingApi()
+  const config: EmbeddedProjectsConfig = { projects: [{ projectId: "p1", canonicalRoot: root }] }
+  registerGsdUiMethods(api, () => 33277, config)
+  const method = registered.get("gsd.ui.workspace.bootstrap")!
+  assert.equal(method.opts?.scope, "operator.write")
+  assert.equal(method.opts?.profileAccess, "required")
+  const boot = { project: { cwd: root }, workspace: {}, bridge: { projectCwd: root }, onboarding: { locked: false }, resumableSessions: [], onboardingNeeded: false }
+  const daemon = stubDaemonFetch(boot)
+  try {
+    const denied = await call(method.handler, { params: { project: root }, client: { connId: "reader" } })
+    assert.equal(denied[0].ok, false)
+    const outside = await call(method.handler, { params: { project: "/outside" }, client: adminClient() })
+    assert.equal(outside[0].ok, false)
+    assert.equal(daemon.calls.length, 0)
+    const response = await call(method.handler, { params: { project: root }, client: adminClient() })
+    assert.equal(response[0].ok, true)
+    assert.deepEqual(response[0].payload, boot)
+    assert.equal(new URL(daemon.calls[0].url).searchParams.get("project"), root)
+    assert.equal(new URL(daemon.calls[0].url).pathname.endsWith("/api/boot"), true)
+    config.projects = []
+    assert.equal((await call(method.handler, { params: { project: root }, client: adminClient() }))[0].ok, false)
+  } finally { daemon.restore(); rmSync(root, { recursive: true, force: true }) }
+})
+
+test("workspace bootstrap rejects a daemon payload bound to another project", async () => {
+  const root = temporaryProject()
+  const { api, registered } = recordingApi()
+  registerGsdUiMethods(api, () => 33277, { projects: [{ projectId: "p1", canonicalRoot: root }] })
+  const daemon = stubDaemonFetch({ project: { cwd: "/other" }, workspace: {}, bridge: {}, onboarding: { locked: false }, resumableSessions: [] })
+  try {
+    const responses = await call(registered.get("gsd.ui.workspace.bootstrap")!.handler, { params: { project: root }, client: adminClient() })
+    assert.equal(responses[0].ok, false)
+    assert.match(responses[0].error?.message ?? "", /invalid boot payload/)
+  } finally { daemon.restore(); rmSync(root, { recursive: true, force: true }) }
+})
+
+test("file deletion separates selector from project identity and rejects traversal or external .gsd symlinks", async () => {
+  const root = temporaryProject()
+  const outside = temporaryProject()
+  mkdirSync(join(root, ".gsd"))
+  writeFileSync(join(root, ".gsd", "state.md"), "state")
+  writeFileSync(join(root, "file.txt"), "project")
+  writeFileSync(join(outside, "secret.txt"), "outside")
+  symlinkSync(outside, join(root, "escape"))
+  const { api, registered } = recordingApi()
+  registerGsdUiMethods(api, () => 33277, { projects: [{ projectId: "p1", canonicalRoot: root }] })
+  const method = registered.get("gsd.ui.files.delete")!
+  const daemon = stubDaemonFetch({ success: true })
+  try {
+    for (const [selector, path] of [["project", "file.txt"], ["gsd", "state.md"]]) {
+      assert.equal((await call(method.handler, { params: { project: root, root: selector, path }, client: adminClient() }))[0].ok, true)
+      const requested = new URL(daemon.calls.at(-1)!.url)
+      assert.equal(requested.searchParams.get("root"), selector)
+      assert.equal(requested.searchParams.get("project"), root)
+      assert.equal(requested.searchParams.get("path"), path)
+    }
+    const validCount = daemon.calls.length
+    for (const params of [
+      { root: root, path: "file.txt" },
+      { project: root, root: root, path: "file.txt" },
+      { project: root, root: "project", path: "../outside" },
+      { project: root, root: "project", path: "." },
+      { project: root, root: "project", path: join(root, "file.txt") },
+      { project: root, root: "project", path: "escape/secret.txt" },
+    ]) assert.equal((await call(method.handler, { params, client: adminClient() }))[0].ok, false)
+    rmSync(join(root, ".gsd"), { recursive: true })
+    symlinkSync(outside, join(root, ".gsd"))
+    assert.equal((await call(method.handler, { params: { project: root, root: "gsd", path: "secret.txt" }, client: adminClient() }))[0].ok, false)
+    assert.equal(daemon.calls.length, validCount)
+  } finally { daemon.restore(); rmSync(root, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }) }
+})
+
+test("admission observes policy updates after registration and defaults back to admin required", async () => {
+  const root = temporaryProject()
+  const config: EmbeddedProjectsConfig = { projects: [{ projectId: "p1", canonicalRoot: root }] }
+  const { api, registered } = recordingApi()
+  registerGsdUiMethods(api, () => 33277, config)
+  const method = registered.get("gsd.ui.projects.list")!
+  const daemon = stubDaemonFetch([])
+  const opts = { params: { project: root }, client: { connId: "non-admin" } as UiClient }
+  try {
+    assert.equal((await call(method.handler, opts))[0].ok, false)
+    config.adminOnly = false
+    assert.equal((await call(method.handler, opts))[0].ok, true)
+    delete config.adminOnly
+    assert.equal((await call(method.handler, opts))[0].ok, false)
+    config.adminOnly = false
+    config.projects = []
+    assert.equal((await call(method.handler, opts))[0].ok, false)
+    assert.equal(daemon.calls.length, 1)
+  } finally { daemon.restore(); rmSync(root, { recursive: true, force: true }) }
 })
