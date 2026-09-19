@@ -89,8 +89,10 @@ test("valid parent bind resolves a client and sends a bind-ack over the port", a
   assert.equal(ackMessage.protocol, EMBEDDED_PROTOCOL)
   assert.equal(ackMessage.type, BIND_ACK_TYPE)
   assert.equal(ackMessage.generation, 7)
-  assert.equal(h.listenerCount(), 0)
+  // The duplicate-bind guard listener is retained through disposal by design;
+  // only after dispose are no listeners left.
   client.dispose()
+  assert.equal(h.listenerCount(), 0)
 })
 
 test("binds from a non-parent source or wrong protocol are ignored and negotiation expires", async () => {
