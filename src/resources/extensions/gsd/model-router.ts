@@ -172,6 +172,7 @@ export const MODEL_CAPABILITY_TIER: Record<string, ComplexityTier> = {
   "gemini-3-6-flash": "light",
   "gemini-3-7-flash": "light",
   "gemini-3-8-flash": "light",             // models.dev 2026-09 refresh: same class/pricing as Gemini 3.7 Flash
+  "gpt-5-6-luna": "light",              // GitHub Copilot: "fast help with simple/repetitive tasks", 5x cheaper than Sol; was misclassified heavy (fixed 2026-09-20)
 
   // Standard-tier models
   "claude-sonnet-4": "standard",
@@ -187,6 +188,7 @@ export const MODEL_CAPABILITY_TIER: Record<string, ComplexityTier> = {
   "gemini-3-1-pro-preview": "standard",
   "kimi-k2-7-code": "standard",
   "deepseek-chat": "standard",
+  "gpt-5-6-terra": "standard",          // GitHub Copilot: "balanced everyday interactive and agentic coding"; was misclassified heavy (fixed 2026-09-20)
 
   // Heavy-tier models (most capable)
   "claude-opus-4-5": "heavy",
@@ -207,8 +209,6 @@ export const MODEL_CAPABILITY_TIER: Record<string, ComplexityTier> = {
   "gpt-5-4": "heavy",
   "gpt-5-5": "heavy",
   "gpt-5-6-sol": "heavy",
-  "gpt-5-6-terra": "heavy",
-  "gpt-5-6-luna": "heavy",
   "gpt-6-astra": "heavy",
   "o1": "heavy",
   "o3": "heavy",
