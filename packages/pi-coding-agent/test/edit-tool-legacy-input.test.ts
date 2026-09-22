@@ -181,4 +181,32 @@ describe("edit tool misnamed edits field", () => {
 		expect(result.content).toEqual([{ type: "text", text: "Successfully replaced 1 block(s) in alias.txt." }]);
 		expect(await readFile(filePath, "utf8")).toBe("after\n");
 	});
+
+	it("leaves an unusable alias value as-is so schema validation fails clearly downstream", () => {
+		const definition = createEditToolDefinition(process.cwd());
+
+		// Alias value is a non-JSON string: promoted to `edits`, but the
+		// stringified-JSON recovery's catch{} silently leaves it as a string,
+		// which downstream schema validation must reject with a clear error
+		// rather than this normalizer papering over it.
+		const preparedString = definition.prepareArguments!({
+			path: "file.txt",
+			oldEntries: "not json",
+		});
+		expect(preparedString).toEqual({
+			path: "file.txt",
+			edits: "not json",
+		});
+
+		// Alias value is neither an array nor a string (e.g. a number):
+		// promoted verbatim, still not a valid edits array.
+		const preparedNumber = definition.prepareArguments!({
+			path: "file.txt",
+			edit: 42,
+		});
+		expect(preparedNumber).toEqual({
+			path: "file.txt",
+			edits: 42,
+		});
+	});
 });
