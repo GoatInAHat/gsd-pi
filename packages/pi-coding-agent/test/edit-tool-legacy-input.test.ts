@@ -114,3 +114,71 @@ describe("edit tool stringified edits", () => {
 		});
 	});
 });
+
+describe("edit tool misnamed edits field", () => {
+	it("recovers edits sent under the `oldEntries` alias (array value)", () => {
+		const definition = createEditToolDefinition(process.cwd());
+		const prepared = definition.prepareArguments!({
+			path: "file.txt",
+			oldEntries: [{ oldText: "a", newText: "b" }],
+		});
+		expect(prepared).toEqual({
+			path: "file.txt",
+			edits: [{ oldText: "a", newText: "b" }],
+		});
+	});
+
+	it("recovers edits sent under the `oldEntries` alias (stringified JSON value)", () => {
+		const definition = createEditToolDefinition(process.cwd());
+		const prepared = definition.prepareArguments!({
+			path: "file.txt",
+			oldEntries: JSON.stringify([{ oldText: "a", newText: "b" }]),
+		});
+		expect(prepared).toEqual({
+			path: "file.txt",
+			edits: [{ oldText: "a", newText: "b" }],
+		});
+	});
+
+	it("recovers edits sent under the `edit` alias (singular)", () => {
+		const definition = createEditToolDefinition(process.cwd());
+		const prepared = definition.prepareArguments!({
+			path: "file.txt",
+			edit: [{ oldText: "a", newText: "b" }],
+		});
+		expect(prepared).toEqual({
+			path: "file.txt",
+			edits: [{ oldText: "a", newText: "b" }],
+		});
+	});
+
+	it("prefers the real `edits` field over an alias when both are present", () => {
+		const definition = createEditToolDefinition(process.cwd());
+		const prepared = definition.prepareArguments!({
+			path: "file.txt",
+			edits: [{ oldText: "a", newText: "b" }],
+			oldEntries: [{ oldText: "c", newText: "d" }],
+		});
+		expect(prepared).toEqual({
+			path: "file.txt",
+			edits: [{ oldText: "a", newText: "b" }],
+			oldEntries: [{ oldText: "c", newText: "d" }],
+		});
+	});
+
+	it("prepared alias input executes correctly", async () => {
+		const dir = await createTempDir();
+		const filePath = join(dir, "alias.txt");
+		await writeFile(filePath, "before\n", "utf8");
+
+		const definition = createEditToolDefinition(dir);
+		const prepared = definition.prepareArguments!({
+			path: "alias.txt",
+			oldEntries: [{ oldText: "before", newText: "after" }],
+		});
+
+		const result = await definition.execute("tool-1", prepared, undefined, undefined, {} as ExtensionContext);
+		expect(result.content).toEqual([{ type: "text", text: "Successfully replaced 1 block(s) in alias.txt." }]);
+		expect(await readFile(filePath, "utf8")).toBe("after\n");
+	});
+});

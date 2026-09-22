@@ -93,6 +93,24 @@ function prepareEditArguments(input: unknown): EditToolInput {
 
 	const args = input as Record<string, unknown>;
 
+	// Some models confuse the `edits` field name with a similar-sounding one
+	// (observed: `oldEntries`, `edit`). When the real `edits` field is absent
+	// but one of these aliases is present, treat it as `edits` before the
+	// stringified-JSON recovery below runs. This turns a confusing dual
+	// AJV error ("edits: must have required properties edits" + "root: must
+	// not have additional properties") into a single clear validation
+	// message, and recovers the call outright when the alias's value is
+	// valid JSON.
+	if (args.edits === undefined) {
+		for (const alias of ["oldEntries", "edit"]) {
+			if (alias in args) {
+				args.edits = args[alias];
+				delete args[alias];
+				break;
+			}
+		}
+	}
+
 	// Some models (Opus 4.6, GLM-5.1) send edits as a JSON string instead of an array.
 	if (typeof args.edits === "string") {
 		try {
