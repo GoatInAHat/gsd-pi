@@ -210,3 +210,78 @@ describe("edit tool misnamed edits field", () => {
 		});
 	});
 });
+
+describe("edit tool leaked parameter-wrapper strings", () => {
+	it("recovers the exact reported payload: oldEntries as a bare <parameter name=\"oldText\"> wrapper plus a real newText", () => {
+		const definition = createEditToolDefinition(process.cwd());
+		const prepared = definition.prepareArguments!({
+			path: "file.txt",
+			oldEntries: '\n<parameter name="oldText">const before = 1;',
+			newText: "const after = 2;",
+		});
+		expect(prepared).toEqual({
+			path: "file.txt",
+			edits: [{ oldText: "const before = 1;", newText: "const after = 2;" }],
+		});
+	});
+
+	it("recovers a wrapper with a properly closed </parameter> tag", () => {
+		const definition = createEditToolDefinition(process.cwd());
+		const prepared = definition.prepareArguments!({
+			path: "file.txt",
+			edits: '<parameter name="old_text">before text</parameter>',
+			oldText: undefined,
+			newText: "after text",
+		});
+		expect(prepared).toEqual({
+			path: "file.txt",
+			edits: [{ oldText: "before text", newText: "after text" }],
+		});
+	});
+
+	it("does not unwrap a wrapper-shaped edits string when a real oldText is already present", () => {
+		const definition = createEditToolDefinition(process.cwd());
+		const prepared = definition.prepareArguments!({
+			path: "file.txt",
+			edits: '<parameter name="oldText">should not be used</parameter>',
+			oldText: "real old",
+			newText: "real new",
+		});
+		// oldText already present -> wrapper unwrap is skipped, and the raw
+		// wrapper string in `edits` is discarded in favor of the real
+		// oldText/newText fold-in (edits was never a valid array to begin with).
+		expect(prepared).toEqual({
+			path: "file.txt",
+			edits: [{ oldText: "real old", newText: "real new" }],
+		});
+	});
+
+	it("leaves a non-wrapper, non-JSON string alone (unrecoverable, surfaces a clear schema error)", () => {
+		const definition = createEditToolDefinition(process.cwd());
+		const prepared = definition.prepareArguments!({
+			path: "file.txt",
+			oldEntries: "just some prose, not a parameter wrapper or JSON",
+		});
+		expect(prepared).toEqual({
+			path: "file.txt",
+			edits: "just some prose, not a parameter wrapper or JSON",
+		});
+	});
+
+	it("end-to-end: prepared parameter-wrapper payload executes correctly", async () => {
+		const dir = await createTempDir();
+		const filePath = join(dir, "wrapper.txt");
+		await writeFile(filePath, "before\n", "utf8");
+
+		const definition = createEditToolDefinition(dir);
+		const prepared = definition.prepareArguments!({
+			path: "wrapper.txt",
+			oldEntries: '<parameter name="oldText">before',
+			newText: "after",
+		});
+
+		const result = await definition.execute("tool-1", prepared, undefined, undefined, {} as ExtensionContext);
+		expect(result.content).toEqual([{ type: "text", text: "Successfully replaced 1 block(s) in wrapper.txt." }]);
+		expect(await readFile(filePath, "utf8")).toBe("after\n");
+	});
+});
