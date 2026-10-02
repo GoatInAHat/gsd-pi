@@ -24,6 +24,7 @@ import {
 } from "./quality-gate-closure.js";
 import {
   readLatestTaskAttempt,
+  readTaskLifecycleStatus,
   settleTaskAttempt,
   type StagedTaskCompletionMutation,
 } from "./task-execution-domain-operation.js";
@@ -148,6 +149,9 @@ export interface TaskCompletionAuthorityOptions {
    * when the supervisor already settled the Attempt out from under a surviving
    * session (#1973). When set, the running-attempt gate routes to the legacy
    * write path (a durable DB write that needs no Attempt) instead of throwing.
+   * The legacy writer still refuses its SUMMARY + plan-checkbox projections
+   * while the canonical lifecycle is non-terminal (#2348, see
+   * legacyCompletionProjectionRefusal) — recordable, not projectable.
    */
   blockerReport?: boolean;
 }
@@ -167,6 +171,18 @@ export function recoveryRouteLever(route: TaskRecoveryRouteSnapshot): string {
       `call gsd_task_recovery_resume with recoveryActionId "${route.recoveryActionId}".`;
   }
   return ` Recovery action ${route.recoveryActionId} (${route.action}) is recorded for this Attempt.`;
+}
+
+/**
+ * The gate error for a Task whose canonical lifecycle has no running Attempt
+ * to close. Shared by the running-attempt gate itself and by the legacy
+ * projection refusal (#2348), so both surfaces name the same sanctioned exit.
+ */
+function noRunningAttemptGateError(task: TaskCompletionIdentity): string {
+  return "Canonical Task completion has no running Attempt to close. Re-enter `/gsd auto` to resume " +
+    "the Task from its durable checkpoint; if its latest Attempt is settled succeeded at the verify " +
+    "stage, dry-run `gsd_task_settle` (reconcileLifecycle) to publish the verified completion." +
+    latestAttemptRecoveryContext(task);
 }
 
 /**
@@ -255,11 +271,40 @@ export function resolveTaskCompletionAuthority(
       latestAttemptRecoveryContext(task),
     );
   }
-  throw new Error(
-    "Canonical Task completion has no running Attempt to close. Re-enter `/gsd auto` to resume " +
-    "the Task from its durable checkpoint." +
-    latestAttemptRecoveryContext(task),
-  );
+  throw new Error(noRunningAttemptGateError(task));
+}
+
+/**
+ * Canonical Task lifecycle dispositions that already carry their outcome.
+ * Matches the closed set doctor-engine-checks reconciles against, including
+ * the #2202 operator `blocker-accepted` closeout.
+ */
+const TERMINAL_TASK_LIFECYCLE_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "cancelled",
+  "blocker-accepted",
+]);
+
+/**
+ * The legacy projection refusal (#2348): when the Task already carries a
+ * canonical lifecycle that has not reached a terminal disposition, the legacy
+ * completion writer may still record the blocker/disposition durably, but it
+ * must not project a SUMMARY or flip plan checkboxes — a legacy completion
+ * projection would claim a completion the canonical lifecycle does not carry.
+ * This is the legacy-path twin of the #1726 staging invariant ("a failed
+ * Attempt has no completion to render"), and the returned message mirrors the
+ * running-attempt gate error so a stranded session learns the sanctioned exit
+ * (#1973) instead of a false completion. Returns null when the legacy
+ * projections may proceed (no canonical row, or a terminal disposition).
+ */
+export function legacyCompletionProjectionRefusal(
+  task: TaskCompletionIdentity,
+): string | null {
+  const lifecycleStatus = readTaskLifecycleStatus(task);
+  if (lifecycleStatus === null || TERMINAL_TASK_LIFECYCLE_STATUSES.has(lifecycleStatus)) {
+    return null;
+  }
+  return noRunningAttemptGateError(task);
 }
 
 function runningAttemptId(task: TaskCompletionIdentity): string {
@@ -458,7 +503,12 @@ function loadSucceededAttempt(input: PublishVerifiedTaskCompletionInput): Attemp
       AND lifecycle.milestone_id = :milestone_id
       AND lifecycle.slice_id = :slice_id
       AND lifecycle.task_id = :task_id
-      AND lifecycle.lifecycle_status = 'in_progress'
+      -- 'ready' covers a durable success whose lifecycle shadow was reverted by
+      -- a side door (#2417): in_progress → ready is not a canonical transition,
+      -- so the Attempt and evidence predicates below carry the guarantee, not
+      -- the shadow. Publication first re-adopts in_progress in a separate
+      -- fenced operation, then completes the Task and its legacy row.
+      AND lifecycle.lifecycle_status IN ('in_progress', 'ready')
       AND attempt.attempt_state = 'settled'
       AND result.outcome = 'succeeded'
       AND checkpoint.next_stage = 'verify'
@@ -610,10 +660,68 @@ function requireCurrentVerifiedSource(input: PublishVerifiedTaskCompletionInput)
   });
 }
 
+/**
+ * A durable success behind a side-door `ready` lifecycle shadow (#2417) cannot
+ * complete in one step: the lifecycle trigger forbids ready → completed, and a
+ * second status change inside the publication domain operation cannot advance
+ * the causal revision. Re-adopt ready → in_progress as its own fenced
+ * operation first — the normal post-settle state, so a later failure leaves
+ * the Task in a shape the loop resume and a retry both understand.
+ */
+function readoptReadyLifecycleShadowForPublication(input: PublishVerifiedTaskCompletionInput): void {
+  const lifecycleStatus = readTaskLifecycleStatus(input.task);
+  if (lifecycleStatus !== "ready") return;
+  const idempotencyKey = `${input.invocation.idempotencyKey}:lifecycle:in_progress`;
+  const fence = readDomainOperationFence(idempotencyKey);
+  executeDomainOperation({
+    operationType: "task.lifecycle.reconcile",
+    idempotencyKey,
+    expectedRevision: fence.revision,
+    expectedAuthorityEpoch: fence.authorityEpoch,
+    actorType: input.invocation.actorType,
+    ...(input.invocation.actorId ? { actorId: input.invocation.actorId } : {}),
+    sourceTransport: input.invocation.sourceTransport,
+    ...(input.invocation.traceId ? { traceId: input.invocation.traceId } : {}),
+    ...(input.invocation.turnId ? { turnId: input.invocation.turnId } : {}),
+    payload: {
+      milestoneId: input.task.milestoneId,
+      sliceId: input.task.sliceId,
+      taskId: input.task.taskId,
+      from: "ready",
+      to: "in_progress",
+      reason: "Verified Task publication re-adopted a side-door ready lifecycle shadow (#2417)",
+    },
+  }, (context) => {
+    adoptOrTransitionLifecycle(context, {
+      itemKind: "task",
+      milestoneId: input.task.milestoneId,
+      sliceId: input.task.sliceId,
+      taskId: input.task.taskId,
+      lifecycleStatus: "in_progress",
+    });
+    const entityId = `${input.task.milestoneId}/${input.task.sliceId}/${input.task.taskId}`;
+    return {
+      events: [{
+        eventType: "task.lifecycle.reconciled",
+        entityType: "task",
+        entityId,
+        payload: { from: "ready", to: "in_progress", attemptId: input.attemptId },
+        destinations: ["projection"],
+      }],
+      projections: [{
+        projectionKey: `lifecycle/${entityId}`.toLowerCase(),
+        projectionKind: "task-lifecycle",
+        rendererVersion: "1",
+      }],
+    };
+  });
+}
+
 export async function publishVerifiedTaskCompletion(
   input: PublishVerifiedTaskCompletionInput,
 ): Promise<PublishedTaskCompletionReceipt> {
   requireCurrentVerifiedSource(input);
+  readoptReadyLifecycleShadowForPublication(input);
   const status = publishCanonicalCompletion(input);
   const summaryPath = await renderPublishedTaskCompletionProjections(input.basePath, input.task);
   return {

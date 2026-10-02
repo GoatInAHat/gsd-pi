@@ -290,9 +290,33 @@ describe("hasQualifyingTaskEvidence: lenient verdict matching (#2014)", () => {
     assert.equal(hasQualifyingTaskEvidence([record("", 1)]), false);
   });
 
+  test("commandless records remain distinct instead of collapsing to one latest row (#2338)", () => {
+    assert.equal(hasQualifyingTaskEvidence([
+      { command: "", exitCode: 1, verdict: "", durationMs: 10 },
+      { command: "", exitCode: 0, verdict: "", durationMs: 10 },
+    ]), false);
+  });
+
   test("one decorated failing record disqualifies an otherwise passing set", () => {
     assert.equal(
       hasQualifyingTaskEvidence([record("✅ pass"), record("❌ fail")]),
+      false,
+    );
+  });
+
+  test("an earlier FAIL row does not poison a set that ends passing (#2338)", () => {
+    assert.equal(
+      hasQualifyingTaskEvidence([
+        record("FAIL - 12 passed, 1 failed"),
+        record("PASS - 13 passed, 28 assertions"),
+      ]),
+      true,
+    );
+    assert.equal(
+      hasQualifyingTaskEvidence([
+        record("PASS - 13 passed"),
+        record("FAIL - regression"),
+      ]),
       false,
     );
   });

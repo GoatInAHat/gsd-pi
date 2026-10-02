@@ -417,6 +417,8 @@ export interface LifecycleShadowRepairCandidate extends LifecycleShadowRepairIde
    * completion's adoption territory when a canonically-completed sibling
    * establishes the adoption pattern (#2070) — from rows with a recorded
    * failed verification, which must never be silently repaired (#2002).
+   * Free-text verification narratives (#2313) count as adoptable evidence;
+   * only an explicit failure marker blocks repair.
    */
   legacyVerificationResult: string | null;
 }
@@ -460,8 +462,16 @@ interface RepairEvidenceFacts {
   digestFacts: unknown;
 }
 
-export function isPassingVerificationResult(verificationResult: string): boolean {
-  return verificationResult.trim().toLowerCase() === "passed";
+/**
+ * Only an explicit failure marker counts as a recorded failed verification
+ * (#2002). Legacy completion writes free-text verification narratives
+ * (tools/complete-task.ts persists params.verification verbatim), so any
+ * non-empty value that is not an explicit failure marker is adoptable
+ * evidence (#2313) — matching the closeout adoption sweep, which never
+ * gated on verification_result.
+ */
+export function isFailedVerificationResult(verificationResult: string): boolean {
+  return verificationResult.trim().toLowerCase() === "failed";
 }
 
 function taskCompletionFacts(row: Record<string, unknown>): RepairEvidenceFacts {
@@ -474,7 +484,8 @@ function taskCompletionFacts(row: Record<string, unknown>): RepairEvidenceFacts 
     supported:
       normalizeLegacyLifecycleStatus(typeof row["status"] === "string" ? row["status"] : null) === "completed" &&
       completedAt !== null &&
-      isPassingVerificationResult(verificationResult) &&
+      verificationResult.length > 0 &&
+      !isFailedVerificationResult(verificationResult) &&
       summary.length > 0,
     digestFacts: {
       status: row["status"] ?? null,
@@ -565,6 +576,7 @@ export function getLifecycleShadowRepairCandidate(
         AND milestone_id = :milestone_id
         AND slice_id IS :slice_id
         AND task_id IS :task_id
+        AND project_id = (SELECT project_id FROM project_authority WHERE singleton = 1)
     `).get({
       ":item_kind": identity.itemKind,
       ":milestone_id": identity.milestoneId,
@@ -671,11 +683,12 @@ export function getMilestoneLifecycleShadowSnapshot(
   let authorityEpoch = 0;
   try {
     const authority = db.prepare(`
-      SELECT revision, authority_epoch
+      SELECT project_id, revision, authority_epoch
       FROM project_authority WHERE singleton = 1
     `).get();
     projectRevision = numberColumn(authority, "revision");
     authorityEpoch = numberColumn(authority, "authority_epoch");
+    const projectId = typeof authority?.["project_id"] === "string" ? authority["project_id"] : null;
     const rows = db.prepare(`
       WITH hierarchy AS (
         SELECT
@@ -702,6 +715,7 @@ export function getMilestoneLifecycleShadowSnapshot(
         SELECT item_kind, milestone_id, slice_id, task_id
         FROM workflow_item_lifecycles
         WHERE milestone_id = :milestone_id
+          AND (:project_id IS NULL OR project_id = :project_id)
       )
       SELECT
         identity.item_kind,
@@ -719,6 +733,7 @@ export function getMilestoneLifecycleShadowSnapshot(
        AND hierarchy.task_id IS identity.task_id
       LEFT JOIN workflow_item_lifecycles lifecycle
         ON lifecycle.item_kind = identity.item_kind
+       AND (:project_id IS NULL OR lifecycle.project_id = :project_id)
        AND lifecycle.milestone_id = identity.milestone_id
        AND lifecycle.slice_id IS identity.slice_id
        AND lifecycle.task_id IS identity.task_id
@@ -726,7 +741,10 @@ export function getMilestoneLifecycleShadowSnapshot(
         CASE identity.item_kind WHEN 'milestone' THEN 0 WHEN 'slice' THEN 1 ELSE 2 END,
         identity.slice_id,
         identity.task_id
-    `).all({ ":milestone_id": milestoneId });
+    `).all({
+      ":milestone_id": milestoneId,
+      ":project_id": projectId,
+    });
 
     return {
       projectRevision,
@@ -1375,6 +1393,25 @@ export function getSliceRunUatAssessment(
   ).get({ ":mid": milestoneId, ":sid": sliceId });
   if (!row) return null;
   return { status: String(row["status"] ?? ""), fullContent: String(row["fullContent"] ?? "") };
+}
+
+/**
+ * Recorded timestamp of the slice's latest `run-uat` assessment row, or null
+ * when the DB is unavailable or the slice has no run-uat assessment. Used to
+ * order a slice's UAT verdict against a milestone validation receipt (#2347).
+ */
+export function getSliceRunUatAssessmentRecordedAt(
+  milestoneId: string,
+  sliceId: string,
+): string | null {
+  if (!getDbOrNull()!) return null;
+  const row = getDbOrNull()!.prepare(
+    `SELECT created_at FROM assessments
+      WHERE milestone_id = :mid AND slice_id = :sid AND scope = 'run-uat'
+      ORDER BY created_at DESC, ROWID DESC
+      LIMIT 1`,
+  ).get({ ":mid": milestoneId, ":sid": sliceId });
+  return typeof row?.["created_at"] === "string" ? row["created_at"] : null;
 }
 
 export function getLatestAssessmentByScope(

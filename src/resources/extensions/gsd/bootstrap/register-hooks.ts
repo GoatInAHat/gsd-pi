@@ -35,12 +35,14 @@ import {
   recordToolInvocationError,
 } from "../auto-runtime-state.js";
 import {
+  hasInteractiveToolInFlight,
   isDeterministicPolicyError,
   isQueuedUserMessageSkip,
   isToolSchemaValidationError,
   isToolInvocationError,
   isToolUnavailableError,
 } from "../auto-tool-tracking.js";
+import { TurnStatusTracker, type TurnStatusUi } from "../turn-status.js";
 import { applyProviderPayloadPolicy } from "../provider-payload-policy.js";
 
 import { checkToolCallLoop, configureToolCallLoopGuard, recordToolCallLoopMutation, resetToolCallLoopGuard } from "./tool-call-loop-guard.js";
@@ -124,6 +126,8 @@ function clearCurrentUnitToolErrorHarnessAbort(toolName: string): void {
 
 type WelcomeScreenModule = {
   buildWelcomeScreenLines(opts: { version: string; remoteChannel?: string; width?: number }): string[];
+  /** Optional: resolve GSD_MILESTONE_LOCK before the first sync render (#2360). */
+  primeMilestoneLock?: () => Promise<void>;
 };
 
 async function loadWelcomeScreenModule(): Promise<WelcomeScreenModule | undefined> {
@@ -159,6 +163,10 @@ async function installWelcomeHeader(ctx: ExtensionContext): Promise<void> {
   try {
     const welcome = await loadWelcomeScreenModule();
     if (!welcome) return;
+
+    // Resolve the milestone lock up front — the header render itself is sync.
+    // Older welcome-screen builds without priming simply skip this.
+    await welcome.primeMilestoneLock?.();
 
     let remoteChannel: string | undefined;
     try {
@@ -767,6 +775,26 @@ function deferApprovalGateFromSnapshot(gateId: string, basePath: string, snapsho
 
 function contextBasePath(ctx?: { cwd?: string }): string {
   return typeof ctx?.cwd === "string" ? ctx.cwd : process.cwd();
+}
+
+/** Turn-status tracker for the persistent "gsd-turn" footer status (#2374). */
+let turnStatus: TurnStatusTracker | null = null;
+
+/** True while any interactive human boundary is active (question or interactive tool). */
+function isUserBoundaryPending(): boolean {
+  return isInteractiveElicitationInFlight() || hasInteractiveToolInFlight();
+}
+
+/**
+ * Extract the setStatus/notify UI channel from an event ctx (null when
+ * headless — ctx.hasUI is false or no setStatus capability).
+ */
+function extractTurnStatusUi(ctx: unknown): TurnStatusUi | null {
+  const ctxRecord = ctx as { ui?: unknown; hasUI?: boolean } | undefined;
+  if (ctxRecord?.hasUI === false) return null;
+  const ui = ctxRecord?.ui;
+  if (!ui || typeof (ui as TurnStatusUi).setStatus !== "function") return null;
+  return ui as TurnStatusUi;
 }
 
 const LOOP_GUARD_INTERACTIVE_INSTRUCTIONS = [
@@ -1472,6 +1500,36 @@ export function registerHooks(
     }
   });
 
+  // Persistent turn-state indicator (#2374): "working" → "⏸ waiting on you"
+  // while the turn is parked on an elicitation/interactive tool or a write
+  // gate → "✅ turn done" flash. Written to the "gsd-turn" status key the
+  // footer already renders; headless contexts (no UI) are a no-op.
+  //
+  // Boundaries are the AGENT events: turn_start/turn_end fire between tool
+  // rounds inside one user turn, before_agent_start/agent_end bracket it.
+  // Registered AFTER the recovery agent_end above so a deferred approval
+  // gate armed in its finally-block is visible to the fresh predicate read.
+  pi.on("before_agent_start", async (_event, ctx) => {
+    const ui = extractTurnStatusUi(ctx);
+    if (!turnStatus) {
+      turnStatus = new TurnStatusTracker({
+        ui,
+        isQuestionPending: isUserBoundaryPending,
+        getPendingGateId: () => getPendingGate(contextBasePath(ctx)),
+      });
+    } else {
+      turnStatus.rebindUi(ui);
+    }
+    turnStatus.turnStarted();
+  });
+
+  pi.on("agent_end", async (event, ctx) => {
+    turnStatus?.turnEnded({
+      willRetry: event.willRetry === true,
+      waitingNow: isUserBoundaryPending() || getPendingGate(contextBasePath(ctx)) !== null,
+    });
+  });
+
   pi.on("session_before_compact", async (event, ctx) => {
     const basePath = contextBasePath(ctx);
     // Context Mode is default-on. Write the resumable snapshot before any
@@ -1618,6 +1676,7 @@ export function registerHooks(
 
   pi.on("session_shutdown", async (_event, ctx: ExtensionContext) => {
     clearPendingModelRouting();
+    turnStatus?.dispose();
     const { isParallelActive, shutdownParallel } = await import("../parallel-orchestrator.js");
     if (isParallelActive()) {
       try {

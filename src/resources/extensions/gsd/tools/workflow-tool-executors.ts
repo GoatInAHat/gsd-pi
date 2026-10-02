@@ -1307,7 +1307,10 @@ export async function executeTaskRecoveryResume(
           `Authorized one repaired Task continuation for ${result.attemptId}. ` +
           `Queued durable continuation ${result.workCheckpointId} for recovery action ${result.recoveryActionId} — ` +
           "the next execute-task dispatch of this Task atomically claims the successor Attempt (one-shot); " +
-          "re-enter `/gsd auto` to consume it.",
+          "re-enter `/gsd auto` to consume it. " +
+          "Do not call gsd_task_complete from this session to close the successor: only a live `/gsd auto` " +
+          "dispatch can claim it, and the authorization is single-shot — if no host re-enters, it stays " +
+          "dormant instead of stranding the Task.",
       }],
       details: { operation: "task_recovery_resume", ...result },
     };
@@ -1344,7 +1347,7 @@ export async function executeTaskSettle(
     taskId: params.taskId,
   };
   const unit = `${task.milestoneId}/${task.sliceId}/${task.taskId}`;
-  const settleOptions = { reconcileLifecycle: params.reconcileLifecycle === true };
+  const settleOptions = { reconcileLifecycle: params.reconcileLifecycle === true, basePath };
   const blockerAccepted = params.settleDisposition === "blocker-accepted";
   if (blockerAccepted && settleOptions.reconcileLifecycle) {
     return {
@@ -1424,7 +1427,7 @@ export async function executeTaskSettle(
     }
     if (!params.apply) {
       const plan = planTaskSettle(task, params.reason, settleOptions);
-      if (plan.rows.length === 0 && plan.lifecycleRows.length === 0) {
+      if (plan.rows.length === 0 && plan.lifecycleRows.length === 0 && !plan.publication) {
         return {
           content: [{ type: "text", text: `gsd_task_settle (dry run): ${unit} has no running Attempt — nothing to do.` }],
           details: { operation: "task_settle", dryRun: true, rows: [], lifecycleRows: [] },
@@ -1437,6 +1440,12 @@ export async function executeTaskSettle(
         ...plan.lifecycleRows.map(
           (row) => `  lifecycle ${row.currentStatus} → ${row.targetStatus} — ${row.rationale}`,
         ),
+        ...(plan.publication ? [
+          `  publication: ${plan.publication.rationale} (host verdict: ${plan.publication.verdict ?? "none recorded"})` +
+          (plan.publication.verdict === "pass"
+            ? ""
+            : " — apply will fail closed until a passing host Technical Verdict is recorded (re-enter `/gsd auto` to run verification)"),
+        ] : []),
         ...(plan.proof ? [`  proof: ${plan.proof.note}`] : []),
       ];
       return {
@@ -1449,16 +1458,18 @@ export async function executeTaskSettle(
           dryRun: true,
           rows: plan.rows,
           lifecycleRows: plan.lifecycleRows,
+          ...(plan.publication ? { publication: plan.publication } : {}),
         },
       };
     }
-    const result = applyTaskSettle({
+    const result = await applyTaskSettle({
       invocation,
       task,
       reason: params.reason,
+      // settleOptions carries basePath for the verification-paused receipt gate.
       ...settleOptions,
     });
-    if (!result.settled && !result.reconciled) {
+    if (!result.settled && !result.reconciled && !result.published) {
       return {
         content: [{ type: "text", text: `gsd_task_settle: ${unit} has no running Attempt — nothing to do.` }],
         details: {
@@ -1479,6 +1490,12 @@ export async function executeTaskSettle(
       const target = result.lifecycleRows[result.lifecycleRows.length - 1]?.targetStatus;
       parts.push(`Reconciled lifecycle to ${target} (${unit}) without deleting SUMMARYs.`);
     }
+    if (result.published) {
+      parts.push(
+        `Published verified Task completion for ${unit} from Attempt ${result.published.attemptId} ` +
+        `(${result.published.status}): lifecycle completed, tasks.status complete.`,
+      );
+    }
     if (result.proof) {
       parts.push(result.proof.note);
     }
@@ -1493,6 +1510,7 @@ export async function executeTaskSettle(
           ? { attemptId: result.rows[0].attemptId, resultId: result.resultId }
           : {}),
         lifecycleRows: result.lifecycleRows,
+        ...(result.published ? { published: result.published } : {}),
       },
     };
   } catch (err) {

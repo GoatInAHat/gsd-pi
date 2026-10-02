@@ -78,7 +78,7 @@ import {
   runMilestoneCloseoutGitHub,
 } from "./milestone-closeout.js";
 import type { AutoSession, SidecarItem } from "./auto/session.js";
-import { getEvidence, clearEvidenceFromDisk, isExecutionToolName } from "./safety/evidence-collector.js";
+import { getEvidence, clearEvidenceFromDisk, archiveEvidenceToBlocked, isExecutionToolName } from "./safety/evidence-collector.js";
 import { removeProjectionFileSync } from "./atomic-write.js";
 import {
   validateFileChanges,
@@ -713,7 +713,7 @@ async function prepareHookRetry(
   return "retry";
 }
 
-function resolveVerificationFailureMarkerPath(
+export function resolveVerificationFailureMarkerPath(
   unitType: string,
   unitId: string,
   basePath: string,
@@ -2087,11 +2087,13 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
                   }
                   const routePresentation = resolveEvidenceRoutePresentation(routed, routeFailure);
                   s.lastSafetyBlockRecovery = routePresentation.recovery;
-                  // Clear the persisted evidence file on the blocked path too, so a
-                  // retry cross-references fresh execution instead of replaying the
-                  // same stale rows indefinitely (#1641).
+                  // Archive the persisted evidence file on the blocked path, so a
+                  // retry cross-references fresh execution instead of replaying
+                  // the same stale rows indefinitely (#1641) while the mismatch
+                  // that caused the block stays inspectable under
+                  // .gsd/safety/blocked/ (#2425).
                   try {
-                    clearEvidenceFromDisk(s.basePath, sMid, sSid, sTid);
+                    archiveEvidenceToBlocked(s.basePath, sMid, sSid, sTid);
                   } catch (clearError) {
                     debugLog("postUnit", { phase: "safety-evidence-clear", error: String(clearError) });
                   }
@@ -2156,6 +2158,36 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
 
     // Artifact verification
     const verificationBasePath = s.currentUnit.workspaceRoot ?? s.basePath;
+    // ── #2442: worktree integrity gates publication unconditionally ──────
+    // An execute-task dispatched into a GSD worktree must never publish from a
+    // broken one. The integrity check below used to run only when an artifact
+    // went missing or failed verification, so a fabricated SUMMARY inside a
+    // non-worktree directory verified cleanly (#2442). Evidence produced in a
+    // broken worktree cannot be trusted, so check before verifying at all:
+    // diagnoseWorktreeIntegrityFailure returns null for project roots and
+    // healthy worktrees, so every legitimate run pays one cheap probe and
+    // behaves exactly as before.
+    if (s.currentUnit.type === "execute-task") {
+      const worktreeIntegrityFailure = diagnoseWorktreeIntegrityFailure(verificationBasePath);
+      if (worktreeIntegrityFailure) {
+        const retryKey = `${s.currentUnit.type}:${s.currentUnit.id}`;
+        s.pendingVerificationRetry = null;
+        s.verificationRetryCount.delete(retryKey);
+        s.verificationRetryFailureHashes.delete(retryKey);
+        debugLog("postUnit", {
+          phase: "worktree-integrity-failure-unverified-artifact",
+          unitType: s.currentUnit.type,
+          unitId: s.currentUnit.id,
+          basePath: verificationBasePath,
+        });
+        ctx.ui.notify(
+          `${worktreeIntegrityFailure} Retry ${s.currentUnit.id} after repair.`,
+          "error",
+        );
+        await pauseAuto(ctx, pi);
+        return "dispatched";
+      }
+    }
     let triggerArtifactVerified = false;
     let durableReceiptFailure: string | null = null;
     if (!s.currentUnit.type.startsWith("hook/")) {
@@ -2471,10 +2503,15 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
         s.pendingVerificationRetry = null;
         s.verificationRetryCount.delete(retryKey);
         s.verificationRetryFailureHashes.delete(retryKey);
-        writeBlockerPlaceholder(s.currentUnit.type, s.currentUnit.id, s.basePath, reason);
+        // #2510: the write can return null (artifact path unresolvable) — in that
+        // case neither the diagnostic sidecar nor the plan-milestone-recovery
+        // gate row exists, so the UI must not claim a blocker was recorded.
+        const blockerPath = writeBlockerPlaceholder(s.currentUnit.type, s.currentUnit.id, s.basePath, reason);
         ctx.ui.notify(
           planningBlocked
-            ? `${s.currentUnit.type} ${s.currentUnit.id} — deterministic policy rejection, recorded planning blocker and paused (no work marked complete)`
+            ? blockerPath
+              ? `${s.currentUnit.type} ${s.currentUnit.id} — deterministic policy rejection, recorded planning blocker and paused (no work marked complete)`
+              : `${s.currentUnit.type} ${s.currentUnit.id} — deterministic policy rejection, paused, but the planning blocker could not be persisted (no recovery gate was recorded; the next iteration re-dispatches planning)`
             : `${s.currentUnit.type} ${s.currentUnit.id} — deterministic policy rejection, wrote blocker placeholder (no retries)`,
           planningBlocked ? "error" : "warning",
         );

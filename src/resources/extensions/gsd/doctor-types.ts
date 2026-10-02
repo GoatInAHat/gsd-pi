@@ -3,6 +3,7 @@ export type DoctorSeverity = "info" | "warning" | "error";
 export type DoctorIssueCode =
   | "invalid_preferences"
   | "missing_roadmap"
+  | "planning_blocked"
   | "missing_tasks_dir"
   | "missing_slice_plan"
   | "all_slices_done_missing_milestone_validation"
@@ -97,16 +98,23 @@ export type DoctorIssueCode =
   | "memories_fts_rebuild_missing"
   | "projection_drift"
   | "unresolved_projection_evidence"
+  | "stale_control_publication_intent"
   | "validation_source_revision_mismatch"
   // Orphaned execution Attempts (#1749)
   | "orphaned_running_attempt"
+  // Succeeded Attempt stranded before publication (#2417)
+  | "unpublished_succeeded_attempt"
   // Milestone lease held by a dead local worker (#2375)
   | "orphaned_milestone_lease"
   // Pre-#1659 legacy import remediation (#1661)
   | "lifecycle_projection_wrong_kind"
+  // Legacy/canonical lifecycle shadow drift (#2440)
+  | "lifecycle_shadow_mismatch"
   // Milestone filesystem/DB drift (#4996)
   | "orphan_milestone_dir"
   | "orphan_milestone_db"
+  // Lifecycle shadow observation loss accounting (#2442)
+  | "lifecycle_shadow_observation_loss"
   // Parent-workspace declared repository checks (#818)
   | "workspace_repo_path_missing"
   | "workspace_repo_not_a_repo";
