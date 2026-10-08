@@ -38,7 +38,7 @@ import { isClosedStatus } from "../../status-guards.js";
 import { findMilestoneIds } from "../../milestone-ids.js";
 import { removeProjectionTreeSync } from "../../atomic-write.js";
 import { invalidateStateCache } from "../../state.js";
-import { hasTaskExecutionOrReopenHistory } from "../../db/lifecycle-queries.js";
+import { hasTaskExecutionOrReopenHistory, latestSliceReopenAt } from "../../db/lifecycle-queries.js";
 import type { GSDState } from "../../types.js";
 import {
   completedEventCoversDispatch,
@@ -163,6 +163,35 @@ function taskHasExecutionOrReopenHistory(
 ): boolean {
   if (!isDbAvailable()) return false;
   return hasTaskExecutionOrReopenHistory(milestoneId, sliceId, taskId);
+}
+
+/**
+ * Disk-existence check for a slice-level SUMMARY artifact row: the recorded
+ * path, or the currently-resolved slice projection path. Mirrors the
+ * task-level stagedTaskSummaryExistsOnDisk above.
+ */
+function sliceSummaryExistsOnDisk(
+  basePath: string,
+  milestoneId: string,
+  sliceId: string,
+  rowPath: string,
+): boolean {
+  const candidates = [
+    isAbsolute(rowPath) ? rowPath : resolve(basePath, rowPath),
+    resolveSliceFile(basePath, milestoneId, sliceId, "SUMMARY"),
+  ];
+  return candidates.some((candidate) => candidate !== null && existsSync(candidate));
+}
+
+/**
+ * The occurred-at of a slice's newest explicit reopen, or null when the DB
+ * is unavailable or the slice was never reopened. The caller ties this to
+ * the artifact row's imported_at: only a row that predates the reopen is
+ * dead bookkeeping left by the pre-reopen completion.
+ */
+function sliceLatestReopenAt(milestoneId: string, sliceId: string): string | null {
+  if (!isDbAvailable()) return null;
+  return latestSliceReopenAt(milestoneId, sliceId);
 }
 
 function isAbandonedStagedTaskSummary(
@@ -383,6 +412,24 @@ function detectArtifactDbStatusDriftForMilestone(
     if (row.artifact_type !== "SUMMARY" || !row.slice_id || row.task_id) continue;
     const slice = bySlice.get(row.slice_id);
     if (!slice || slice.closed) continue;
+    // A missing-file slice-level SUMMARY row imported BEFORE the slice's
+    // latest reopen is dead bookkeeping, mirroring the task-level
+    // #1771/#1983 exemption: the reopen cleared the summary carrier and
+    // quarantined the file, so the orphaned artifacts row must not wedge the
+    // reopened slice's re-execution. The temporal tie matters (PR #2674
+    // review): a row imported AFTER the latest reopen with no file on disk is
+    // a genuine divergence — for example a post-reopen gsd_summary_save whose
+    // projection write failed — and must stay flaggable. A slice that
+    // legitimately re-completes re-writes its SUMMARY to disk, so the
+    // disk-absence gate keeps that genuine completion-claim flaggable too.
+    const latestSliceReopen = sliceLatestReopenAt(milestoneId, row.slice_id);
+    if (
+      latestSliceReopen !== null &&
+      !isAfter(row.imported_at, latestSliceReopen) &&
+      !sliceSummaryExistsOnDisk(basePath, milestoneId, row.slice_id, row.path)
+    ) {
+      continue;
+    }
     addUniqueDrift(drifts, seen, {
       kind: "artifact-db-status-divergence",
       milestoneId,
