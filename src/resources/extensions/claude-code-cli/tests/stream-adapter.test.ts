@@ -2336,6 +2336,23 @@ describe("stream-adapter — catalog model metadata (#2437)", () => {
 		assert.deepEqual(options.thinking, { type: "adaptive" });
 	});
 
+	// #2701 — Haiku 5.5 is adaptive-thinking only (budget_tokens 400s); the id
+	// heuristic must recognize it (dash and dotted spellings) so custom catalogs
+	// without metadata still get adaptive thinking instead of a budget payload.
+	test("haiku-5-5 is recognized as adaptive by the id heuristic (#2701)", () => {
+		for (const modelId of ["claude-haiku-5-5", "claude-haiku-5.5"]) {
+			const options = buildSdkOptions(
+				modelId,
+				"test prompt",
+				undefined,
+				{ reasoning: "high" },
+				undefined,
+			);
+			assert.equal(options.effort, "high", `${modelId}: heuristic-supported model must map effort`);
+			assert.deepEqual(options.thinking, { type: "adaptive" }, `${modelId}: adaptive thinking required`);
+		}
+	});
+
 	test("missing, null, and non-effort thinkingLevelMap entries fall back to the legacy effort map", () => {
 		const metadata = { compat: { forceAdaptiveThinking: true }, thinkingLevelMap: { xhigh: null, high: "off-the-scale" } };
 		const nullMapped = buildSdkOptions("claude-opus-9", "test", undefined, { reasoning: "xhigh" }, metadata);

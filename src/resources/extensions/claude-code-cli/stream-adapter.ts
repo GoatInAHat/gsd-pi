@@ -1895,6 +1895,8 @@ function modelSupportsAdaptiveThinking(modelId: string): boolean {
 		|| modelId.includes("sonnet-4.7")
 		|| modelId.includes("haiku-4-5")
 		|| modelId.includes("haiku-4.5")
+		|| modelId.includes("haiku-5-5")
+		|| modelId.includes("haiku-5.5")
 	);
 }
 

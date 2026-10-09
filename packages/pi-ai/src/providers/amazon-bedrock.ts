@@ -497,21 +497,24 @@ function supportsAdaptiveThinking(modelId: string, modelName?: string): boolean 
 			s.includes("opus-5") ||
 			s.includes("sonnet-5") ||
 			s.includes("sonnet-4-6") ||
-			s.includes("fable-5"),
+			s.includes("fable-5") ||
+			s.includes("haiku-5-5"),
 	);
 }
 
 /**
  * Claude 5.x models with the strict request surface reject `temperature`
  * outright, even with thinking off (#2500 Sonnet 5.5, #2645 Opus 5.5 and
- * Fable 5.x). The Converse path carries no compat metadata for Bedrock
- * models, so this mirrors the catalog markers by id, following the
- * supportsAdaptiveThinking heuristic convention.
+ * Fable 5.x, #2701 Haiku 5.5). The Converse path carries no compat metadata
+ * for Bedrock models, so this mirrors the catalog markers by id, following
+ * the supportsAdaptiveThinking heuristic convention.
  */
 function rejectsTemperatureParams(modelId: string, modelName?: string): boolean {
 	const candidates = getModelMatchCandidates(modelId, modelName);
 	return candidates.some(
-		(s) => s.includes("claude") && (s.includes("sonnet-5-5") || s.includes("opus-5-5") || s.includes("fable-5")),
+		(s) =>
+			s.includes("claude") &&
+			(s.includes("sonnet-5-5") || s.includes("opus-5-5") || s.includes("fable-5") || s.includes("haiku-5-5")),
 	);
 }
 

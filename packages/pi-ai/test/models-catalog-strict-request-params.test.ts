@@ -128,3 +128,62 @@ describe("strictRequestParams umbrella (#2500/#2645)", () => {
 		expect(entry?.compat?.rejectsForcedToolChoice).toBe(true);
 	});
 });
+
+describe("claude-haiku-5-5 catalog registration (#2701)", () => {
+	it("marks Haiku 5.5 granular on the anthropic provider, never the umbrella", () => {
+		const entry = MODELS.anthropic?.["claude-haiku-5-5"] as
+			| { compat?: CatalogCompat & { forceAdaptiveThinking?: boolean } }
+			| undefined;
+		expect(entry?.compat?.strictRequestParams).toBeUndefined();
+		expect(entry?.compat?.forceAdaptiveThinking).toBe(true);
+		expect(entry?.compat?.rejectsTemperature).toBe(true);
+		expect(entry?.compat?.rejectsForcedToolChoice).toBeUndefined();
+	});
+
+	it("registers Haiku 5.5 on the Anthropic-family providers with adaptive compat", () => {
+		for (const [provider, id] of [
+			["anthropic", "claude-haiku-5-5"],
+			["anthropic-vertex", "claude-haiku-5-5"],
+			["opencode", "claude-haiku-5-5"],
+			["opencode-go", "claude-haiku-5-5"],
+			["vercel-ai-gateway", "anthropic/claude-haiku-5.5"],
+		] as const) {
+			const entry = MODELS[provider]?.[id] as { compat?: CatalogCompat & { forceAdaptiveThinking?: boolean } } | undefined;
+			expect(entry, `${provider}:${id}`).toBeDefined();
+			expect(entry?.compat?.forceAdaptiveThinking, provider).toBe(true);
+			expect(entry?.compat?.rejectsTemperature, provider).toBe(true);
+			expect(entry?.compat?.strictRequestParams, provider).toBeUndefined();
+		}
+	});
+
+	it("registers the Bedrock Haiku 5.5 profiles (base, US, global, EU, JP, AU)", () => {
+		for (const id of [
+			"anthropic.claude-haiku-5-5",
+			"us.anthropic.claude-haiku-5-5",
+			"global.anthropic.claude-haiku-5-5",
+			"eu.anthropic.claude-haiku-5-5",
+			"jp.anthropic.claude-haiku-5-5",
+			"au.anthropic.claude-haiku-5-5",
+		]) {
+			const entry = MODELS["amazon-bedrock"]?.[id] as { contextWindow?: number; maxTokens?: number } | undefined;
+			expect(entry, id).toBeDefined();
+			expect(entry?.contextWindow, id).toBe(1_000_000);
+			expect(entry?.maxTokens, id).toBe(128_000);
+		}
+	});
+
+	it("registers the relay entries with temperature rejection only", () => {
+		const copilot = MODELS["github-copilot"]?.["claude-haiku-5.5"] as { compat?: CatalogCompat } | undefined;
+		expect(copilot?.compat?.rejectsTemperature).toBe(true);
+		expect(copilot?.compat?.rejectsForcedToolChoice).toBeUndefined();
+		const openrouter = MODELS.openrouter?.["anthropic/claude-haiku-5.5"] as { compat?: CatalogCompat } | undefined;
+		expect(openrouter?.compat?.rejectsTemperature).toBe(true);
+		expect(openrouter?.compat?.rejectsForcedToolChoice).toBeUndefined();
+	});
+
+	it("prices Haiku 5.5 from the models.dev data ($0.10/$0.50 base tier)", () => {
+		const entry = MODELS.anthropic?.["claude-haiku-5-5"] as { cost?: { input?: number; output?: number } } | undefined;
+		expect(entry?.cost?.input).toBe(0.1);
+		expect(entry?.cost?.output).toBe(0.5);
+	});
+});
