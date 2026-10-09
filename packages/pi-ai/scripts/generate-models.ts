@@ -203,7 +203,9 @@ function isAnthropicAdaptiveThinkingModel(modelId: string): boolean {
 		modelId.includes("sonnet-5") ||
 		modelId.includes("sonnet.5") ||
 		modelId.includes("sonnet-4-6") ||
-		modelId.includes("sonnet-4.6")
+		modelId.includes("sonnet-4.6") ||
+		modelId.includes("haiku-5-5") ||
+		modelId.includes("haiku-5.5")
 	);
 }
 
@@ -243,10 +245,23 @@ function isFable5BaseModel(modelId: string): boolean {
 
 /**
  * Claude 5.x ids that reject `temperature` when relayed over an
- * OpenAI-compatible endpoint (Copilot, OpenRouter) (#2645).
+ * OpenAI-compatible endpoint (Copilot, OpenRouter) (#2645, #2701).
  */
 function isClaude55RelayTemperatureRejectionModel(modelId: string): boolean {
-	return modelId.includes("claude") && (isClaude55StrictRequestModel(modelId) || isFable5BaseModel(modelId));
+	return (
+		modelId.includes("claude") &&
+		(isClaude55StrictRequestModel(modelId) || isFable5BaseModel(modelId) || isHaiku55Model(modelId))
+	);
+}
+
+/**
+ * Claude Haiku 5.5: adaptive-thinking only (`budget_tokens` 400s) and rejects
+ * non-default sampling params (#2701). Unlike the Sonnet/Opus/Fable 5.x tier
+ * it still accepts `thinking: {type: "disabled"}` and forced `tool_choice`,
+ * so it only gets the granular temperature flag, never the strict umbrella.
+ */
+function isHaiku55Model(modelId: string): boolean {
+	return modelId.includes("haiku-5-5") || modelId.includes("haiku-5.5");
 }
 
 function mergeAnthropicMessagesCompat(model: Model<Api>, compat: AnthropicMessagesCompat): void {
@@ -336,6 +351,15 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 		// Fable 5 rejects thinking {type:"disabled"} and temperature but still
 		// accepts forced tool_choice (#2645) — granular flags, not the umbrella.
 		mergeAnthropicMessagesCompat(model, { thinkingOffMode: "between_tools", rejectsTemperature: true });
+	}
+	if (
+		(model.api === "anthropic-messages" || model.api === "anthropic-vertex") &&
+		isHaiku55Model(model.id)
+	) {
+		// Haiku 5.5 is adaptive-thinking only and rejects non-default sampling
+		// params, but still accepts thinking {type:"disabled"} and forced
+		// tool_choice (#2701) — granular temperature flag only.
+		mergeAnthropicMessagesCompat(model, { rejectsTemperature: true });
 	}
 	if (
 		model.api === "openai-completions" &&

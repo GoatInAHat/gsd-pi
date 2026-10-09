@@ -202,6 +202,31 @@ describe("Anthropic strict request params coverage (#2645)", () => {
 	});
 });
 
+// #2701 — Haiku 5.5 is adaptive-thinking only and rejects temperature, but
+// still accepts thinking {type:"disabled"} and forced tool_choice, so it
+// gets forceAdaptiveThinking + rejectsTemperature, never the strict umbrella.
+describe("Anthropic Haiku 5.5 request surface (#2701)", () => {
+	it("keeps thinking.type=disabled for Claude Haiku 5.5 when thinking is off", async () => {
+		const payload = await capturePayload(getModel("anthropic", "claude-haiku-5-5"));
+
+		expect(payload.thinking).toEqual({ type: "disabled" });
+	});
+
+	it("omits temperature for Claude Haiku 5.5", async () => {
+		const payload = await capturePayload(getModel("anthropic", "claude-haiku-5-5"), { temperature: 0 });
+
+		expect(payload.temperature).toBeUndefined();
+		expect(payload.thinking).toEqual({ type: "disabled" });
+	});
+
+	it("uses adaptive thinking for Claude Haiku 5.5 when reasoning is enabled", async () => {
+		const payload = await capturePayload(getModel("anthropic", "claude-haiku-5-5"), { reasoning: "high" });
+
+		expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+		expect(payload.output_config).toEqual({ effort: "high" });
+	});
+});
+
 // `tool_choice` only reaches buildParams through streamAnthropic's
 // AnthropicOptions (the simple path does not forward it), so these exercise
 // the request-building layer directly against a local HTTP server.
@@ -300,6 +325,16 @@ describe("Anthropic strict request params tool_choice (#2500)", () => {
 				{ thinkingOffMode: "between_tools", rejectsTemperature: true },
 				"claude-fable-5",
 			),
+			{ toolChoice: "any" },
+		);
+
+		expect(body.tool_choice).toEqual({ type: "any" });
+	});
+
+	// #2701 — Haiku 5.5 has no strict umbrella, so forced tool_choice passes through.
+	it("keeps forced tool_choice for Haiku 5.5 (#2701)", async () => {
+		const body = await captureRequest(
+			createStrictModel({ rejectsTemperature: true }, "claude-haiku-5-5"),
 			{ toolChoice: "any" },
 		);
 

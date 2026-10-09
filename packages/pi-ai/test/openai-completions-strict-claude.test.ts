@@ -157,6 +157,15 @@ describe("openai-completions Claude 5.x relay guards (#2645)", () => {
 		expect(params.tool_choice).toBe("required");
 	});
 
+	it("omits temperature but keeps forced tool_choice for the Haiku 5.5 relay entry (#2701)", async () => {
+		const model = makeRelayModel({ rejectsTemperature: true }, "claude-haiku-5.5");
+
+		const params = await captureRelayPayload(model, { temperature: 0, toolChoice: "required" });
+
+		expect(params.temperature).toBeUndefined();
+		expect(params.tool_choice).toBe("required");
+	});
+
 	it("leaves unmarked models untouched", async () => {
 		const model = makeRelayModel({}, "claude-sonnet-5");
 

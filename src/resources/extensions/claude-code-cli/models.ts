@@ -124,6 +124,19 @@ export const CLAUDE_CODE_MODELS: ClaudeCodeModelDefinition[] = [
 		contextWindow: 200_000,
 		maxTokens: 64_000,
 	},
+	{
+		id: "claude-haiku-5-5",
+		name: "Claude Haiku 5.5 (via Claude Code)",
+		reasoning: true,
+		input: ["text", "image"] as ("text" | "image")[],
+		cost: ZERO_COST,
+		contextWindow: 1_000_000,
+		maxTokens: 128_000,
+		// Adaptive-thinking only (budget_tokens 400s) and rejects temperature;
+		// still accepts thinking disabled + forced tool_choice, so no strict
+		// umbrella (#2701). Curated entries win the catalog merge (#2437).
+		compat: { forceAdaptiveThinking: true, rejectsTemperature: true },
+	},
 ];
 
 // Durable first-party release ids only: dated snapshot aliases

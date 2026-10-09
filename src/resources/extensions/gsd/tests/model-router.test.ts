@@ -1884,4 +1884,23 @@ describe("Copilot GPT-5.6 family tier classification (regression, 2026-09-20)", 
     assert.equal(canonicalizeModelId("github-copilot/gpt-5.6-terra"), "gpt-5-6-terra");
     assert.equal(canonicalizeModelId("github-copilot/gpt-5.6-sol"), "gpt-5-6-sol");
   });
+
+  // #2701 — Haiku 5.5 joins the light tier so tier routing recognizes it
+  // instead of silently bypassing it (#1612). Canonical default stays
+  // claude-haiku-4-5 (owner decision, out of scope).
+  test("claude-haiku-5-5 is a known light-tier model", () => {
+    assert.equal(MODEL_CAPABILITY_TIER["claude-haiku-5-5"], "light");
+    const result = resolveModelForComplexity(
+      makeClassification("light"),
+      { primary: "claude-opus-4-6", fallbacks: [] },
+      { ...defaultRoutingConfig(), enabled: true },
+      ["claude-opus-4-6", "claude-haiku-5-5"],
+    );
+    assert.equal(result.modelId, "claude-haiku-5-5");
+    assert.equal(result.wasDowngraded, true);
+  });
+
+  test("claude-haiku-5-5 has a curated capability profile", () => {
+    assert.equal(getModelProfileConfidence("claude-haiku-5-5"), "curated");
+  });
 });

@@ -172,3 +172,57 @@ describe("Bedrock strict request params (#2645)", () => {
 		expect(payload.additionalModelRequestFields?.anthropic_beta).toBeUndefined();
 	});
 });
+
+// #2701 — Haiku 5.5 rejects temperature and is adaptive-thinking only, but
+// still accepts forced tool choices.
+describe("Bedrock Haiku 5.5 request surface (#2701)", () => {
+	it("omits temperature for Haiku 5.5", async () => {
+		const model = getModel("amazon-bedrock", "global.anthropic.claude-haiku-5-5");
+
+		const payload = await captureCommandInput(model, { temperature: 0 });
+
+		expect(payload.inferenceConfig?.temperature).toBeUndefined();
+	});
+
+	it("uses adaptive thinking for Haiku 5.5: no budget thinking, no interleaved beta", async () => {
+		const model = getModel("amazon-bedrock", "global.anthropic.claude-haiku-5-5");
+
+		const payload = await captureCommandInput(model, { reasoning: "high" });
+
+		expect(payload.additionalModelRequestFields?.thinking).toEqual({ type: "adaptive", display: "summarized" });
+		expect(payload.additionalModelRequestFields?.output_config).toEqual({ effort: "high" });
+		expect(payload.additionalModelRequestFields?.anthropic_beta).toBeUndefined();
+	});
+
+	it("keeps a forced tool choice for Haiku 5.5, which still accepts it", async () => {
+		const model = getModel("amazon-bedrock", "global.anthropic.claude-haiku-5-5");
+
+		const payload = await captureCommandInput(model, { toolChoice: "any" });
+
+		expect(payload.toolConfig?.toolChoice).toEqual({ any: {} });
+	});
+
+	it("keeps temperature and budget thinking for Haiku 4.5, which lacks the 5.5 surface", async () => {
+		const model = getModel("amazon-bedrock", "global.anthropic.claude-haiku-4-5-20251001-v1:0");
+
+		const payload = await captureCommandInput(model, { temperature: 0, reasoning: "high" });
+
+		expect(payload.inferenceConfig?.temperature).toBe(0);
+		expect(payload.additionalModelRequestFields?.thinking?.type).toBe("enabled");
+		expect(payload.additionalModelRequestFields?.thinking?.budget_tokens).toBeGreaterThan(0);
+	});
+
+	it("matches Haiku 5.5 by model name for application inference profiles", async () => {
+		const baseModel = getModel("amazon-bedrock", "global.anthropic.claude-haiku-5-5");
+		const model: Model<"bedrock-converse-stream"> = {
+			...baseModel,
+			id: "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/xyz789",
+			name: "Claude Haiku 5.5 (Application profile)",
+		};
+
+		const payload = await captureCommandInput(model, { temperature: 0, toolChoice: "any" });
+
+		expect(payload.inferenceConfig?.temperature).toBeUndefined();
+		expect(payload.toolConfig?.toolChoice).toEqual({ any: {} });
+	});
+});
