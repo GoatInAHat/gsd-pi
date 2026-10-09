@@ -3833,7 +3833,8 @@
         "xhigh": "xhigh"
       },
       "compat": {
-        "forceAdaptiveThinking": true
+        "forceAdaptiveThinking": true,
+        "strictRequestParams": true
       }
     },
     "claude-fable-5-1": {
@@ -3859,7 +3860,8 @@
         "xhigh": "xhigh"
       },
       "compat": {
-        "forceAdaptiveThinking": true
+        "forceAdaptiveThinking": true,
+        "strictRequestParams": true
       }
     },
     "claude-opus-4-5-20251101": {
@@ -3931,7 +3933,9 @@
         "xhigh": "xhigh"
       },
       "compat": {
-        "forceAdaptiveThinking": true
+        "forceAdaptiveThinking": true,
+        "thinkingOffMode": "between_tools",
+        "rejectsTemperature": true
       }
     },
     "claude-opus-4-8": {
@@ -4272,7 +4276,8 @@
         "xhigh": "xhigh"
       },
       "compat": {
-        "forceAdaptiveThinking": true
+        "forceAdaptiveThinking": true,
+        "strictRequestParams": true
       }
     },
     "claude-opus-5": {
@@ -4433,7 +4438,8 @@
         "xhigh": "xhigh"
       },
       "compat": {
-        "forceAdaptiveThinking": true
+        "forceAdaptiveThinking": true,
+        "strictRequestParams": true
       }
     },
     "claude-fable-5": {
@@ -4459,7 +4465,9 @@
         "xhigh": "xhigh"
       },
       "compat": {
-        "forceAdaptiveThinking": true
+        "forceAdaptiveThinking": true,
+        "thinkingOffMode": "between_tools",
+        "rejectsTemperature": true
       }
     },
     "claude-sonnet-4@20250514": {
@@ -6808,7 +6816,8 @@
         "xhigh": "xhigh"
       },
       "compat": {
-        "forceAdaptiveThinking": true
+        "forceAdaptiveThinking": true,
+        "strictRequestParams": true
       }
     },
     "claude-sonnet-4.5": {
@@ -6854,7 +6863,9 @@
         "xhigh": "xhigh"
       },
       "compat": {
-        "forceAdaptiveThinking": true
+        "forceAdaptiveThinking": true,
+        "thinkingOffMode": "between_tools",
+        "rejectsTemperature": true
       }
     },
     "claude-sonnet-5": {
@@ -6929,7 +6940,8 @@
         "xhigh": "xhigh"
       },
       "compat": {
-        "forceAdaptiveThinking": true
+        "forceAdaptiveThinking": true,
+        "strictRequestParams": true
       }
     },
     "gpt-5.4": {
@@ -12040,7 +12052,8 @@
         "xhigh": "xhigh"
       },
       "compat": {
-        "forceAdaptiveThinking": true
+        "forceAdaptiveThinking": true,
+        "strictRequestParams": true
       }
     },
     "claude-fable-5-1": {
@@ -12066,7 +12079,8 @@
         "xhigh": "xhigh"
       },
       "compat": {
-        "forceAdaptiveThinking": true
+        "forceAdaptiveThinking": true,
+        "strictRequestParams": true
       }
     },
     "gemini-3.6-flash": {
@@ -12352,7 +12366,9 @@
         "xhigh": "xhigh"
       },
       "compat": {
-        "forceAdaptiveThinking": true
+        "forceAdaptiveThinking": true,
+        "thinkingOffMode": "between_tools",
+        "rejectsTemperature": true
       }
     },
     "mimo-v2.6-flash-free": {
@@ -14330,7 +14346,9 @@
       "compat": {
         "supportsStore": false,
         "supportsDeveloperRole": false,
-        "supportsReasoningEffort": false
+        "supportsReasoningEffort": false,
+        "rejectsTemperature": true,
+        "rejectsForcedToolChoice": true
       },
       "thinkingLevelMap": {
         "xhigh": "xhigh"
@@ -14395,7 +14413,9 @@
       "compat": {
         "supportsStore": false,
         "supportsDeveloperRole": false,
-        "supportsReasoningEffort": false
+        "supportsReasoningEffort": false,
+        "rejectsTemperature": true,
+        "rejectsForcedToolChoice": true
       },
       "thinkingLevelMap": {
         "xhigh": "xhigh"
@@ -14429,7 +14449,8 @@
       "compat": {
         "supportsStore": false,
         "supportsDeveloperRole": false,
-        "supportsReasoningEffort": false
+        "supportsReasoningEffort": false,
+        "rejectsTemperature": true
       },
       "thinkingLevelMap": {
         "xhigh": "xhigh"
@@ -14713,7 +14734,9 @@
       "compat": {
         "supportsStore": false,
         "supportsDeveloperRole": false,
-        "supportsReasoningEffort": false
+        "supportsReasoningEffort": false,
+        "rejectsTemperature": true,
+        "rejectsForcedToolChoice": true
       },
       "thinkingLevelMap": {
         "xhigh": "xhigh"
@@ -16288,6 +16311,10 @@
       "maxTokens": 128000,
       "thinkingLevelMap": {
         "xhigh": "xhigh"
+      },
+      "compat": {
+        "rejectsTemperature": true,
+        "rejectsForcedToolChoice": true
       }
     },
     "anthropic/claude-sonnet-5.5:batch": {
@@ -16311,6 +16338,10 @@
       "maxTokens": 128000,
       "thinkingLevelMap": {
         "xhigh": "xhigh"
+      },
+      "compat": {
+        "rejectsTemperature": true,
+        "rejectsForcedToolChoice": true
       }
     },
     "typesafe/jev-router": {
@@ -16690,6 +16721,10 @@
       "maxTokens": 128000,
       "thinkingLevelMap": {
         "xhigh": "xhigh"
+      },
+      "compat": {
+        "rejectsTemperature": true,
+        "rejectsForcedToolChoice": true
       }
     },
     "anthropic/claude-opus-5.5:batch": {
@@ -16713,6 +16748,10 @@
       "maxTokens": 128000,
       "thinkingLevelMap": {
         "xhigh": "xhigh"
+      },
+      "compat": {
+        "rejectsTemperature": true,
+        "rejectsForcedToolChoice": true
       }
     },
     "xiaomi/mimo-v2.6-pro-ultraspeed": {
@@ -17378,6 +17417,10 @@
       "maxTokens": 128000,
       "thinkingLevelMap": {
         "xhigh": "xhigh"
+      },
+      "compat": {
+        "rejectsTemperature": true,
+        "rejectsForcedToolChoice": true
       }
     },
     "anthropic/claude-fable-5.1:batch": {
@@ -17401,6 +17444,10 @@
       "maxTokens": 128000,
       "thinkingLevelMap": {
         "xhigh": "xhigh"
+      },
+      "compat": {
+        "rejectsTemperature": true,
+        "rejectsForcedToolChoice": true
       }
     },
     "ibm-granite/granite-4.2-8b": {
@@ -19050,6 +19097,9 @@
       "maxTokens": 128000,
       "thinkingLevelMap": {
         "xhigh": "xhigh"
+      },
+      "compat": {
+        "rejectsTemperature": true
       }
     },
     "anthropic/claude-fable-5:batch": {
@@ -19073,6 +19123,9 @@
       "maxTokens": 128000,
       "thinkingLevelMap": {
         "xhigh": "xhigh"
+      },
+      "compat": {
+        "rejectsTemperature": true
       }
     },
     "nvidia/nemotron-3-ultra-550b-a55b": {
@@ -25010,7 +25063,9 @@
         "xhigh": "xhigh"
       },
       "compat": {
-        "forceAdaptiveThinking": true
+        "forceAdaptiveThinking": true,
+        "thinkingOffMode": "between_tools",
+        "rejectsTemperature": true
       }
     },
     "anthropic/claude-fable-5.1": {
@@ -25036,7 +25091,8 @@
         "xhigh": "xhigh"
       },
       "compat": {
-        "forceAdaptiveThinking": true
+        "forceAdaptiveThinking": true,
+        "strictRequestParams": true
       }
     },
     "anthropic/claude-haiku-4.5": {
@@ -25278,7 +25334,8 @@
         "xhigh": "xhigh"
       },
       "compat": {
-        "forceAdaptiveThinking": true
+        "forceAdaptiveThinking": true,
+        "strictRequestParams": true
       }
     },
     "anthropic/claude-opus-5.5-fast": {
@@ -25304,7 +25361,8 @@
         "xhigh": "xhigh"
       },
       "compat": {
-        "forceAdaptiveThinking": true
+        "forceAdaptiveThinking": true,
+        "strictRequestParams": true
       }
     },
     "anthropic/claude-sonnet-4": {

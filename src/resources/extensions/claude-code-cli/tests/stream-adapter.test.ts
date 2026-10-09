@@ -2302,6 +2302,28 @@ describe("stream-adapter — catalog model metadata (#2437)", () => {
 		assert.deepEqual(options.thinking, { type: "disabled" }, "legacy models must keep {type:\"disabled\"}");
 	});
 
+	// #2645 — Fable 5 rejects {type:"disabled"} but still accepts forced
+	// tool_choice, so it carries the granular thinkingOffMode flag instead of
+	// the strictRequestParams umbrella.
+	test("granular thinkingOffMode compat (Fable 5) maps thinking-off to between_tools", () => {
+		const options = buildSdkOptions(
+			"claude-fable-5",
+			"test prompt",
+			undefined,
+			{},
+			{
+				compat: { forceAdaptiveThinking: true, thinkingOffMode: "between_tools", rejectsTemperature: true },
+				thinkingLevelMap: { xhigh: "xhigh" },
+			},
+		);
+		assert.equal("effort" in options, false, "no effort when reasoning is off");
+		assert.deepEqual(
+			options.thinking,
+			{ type: "between_tools" },
+			"Fable 5 rejects {type:\"disabled\"}; off must map to between_tools via thinkingOffMode",
+		);
+	});
+
 	test("forceAdaptiveThinking: false does not disable the id-heuristic path (additive only)", () => {
 		const options = buildSdkOptions(
 			"claude-opus-4-6",

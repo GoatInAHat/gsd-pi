@@ -27,7 +27,12 @@ export interface ClaudeCodeModelDefinition {
 	contextWindow: number;
 	maxTokens: number;
 	thinkingLevelMap?: Record<string, string | null>;
-	compat?: { forceAdaptiveThinking?: boolean; strictRequestParams?: boolean };
+	compat?: {
+		forceAdaptiveThinking?: boolean;
+		strictRequestParams?: boolean;
+		thinkingOffMode?: "between_tools";
+		rejectsTemperature?: boolean;
+	};
 }
 
 export const CLAUDE_CODE_MODELS: ClaudeCodeModelDefinition[] = [
@@ -75,6 +80,10 @@ export const CLAUDE_CODE_MODELS: ClaudeCodeModelDefinition[] = [
 		cost: ZERO_COST,
 		contextWindow: 1_000_000,
 		maxTokens: 128_000,
+		// Curated entries win the catalog merge (#2437), so the strict-surface
+		// compat must be restated here or thinking-off would send
+		// {type: "disabled"} and 400 (#2645).
+		compat: { forceAdaptiveThinking: true, strictRequestParams: true },
 	},
 	{
 		id: "claude-fable-5",
@@ -84,6 +93,9 @@ export const CLAUDE_CODE_MODELS: ClaudeCodeModelDefinition[] = [
 		cost: ZERO_COST,
 		contextWindow: 1_000_000,
 		maxTokens: 128_000,
+		// Fable 5 rejects thinking {type:"disabled"} and temperature but still
+		// accepts forced tool_choice (#2645) — granular flags, not the umbrella.
+		compat: { forceAdaptiveThinking: true, thinkingOffMode: "between_tools", rejectsTemperature: true },
 	},
 	{
 		id: "claude-sonnet-5",
