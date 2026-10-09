@@ -1935,7 +1935,12 @@ const ANTHROPIC_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
  * barrel lags behind monorepo source exports.
  */
 export interface ClaudeCodeModelMetadata {
-	compat?: { forceAdaptiveThinking?: boolean; strictRequestParams?: boolean } | undefined;
+	compat?: {
+		forceAdaptiveThinking?: boolean;
+		strictRequestParams?: boolean;
+		thinkingOffMode?: "between_tools";
+		rejectsTemperature?: boolean;
+	} | undefined;
 	thinkingLevelMap?: Partial<Record<string, string | null>> | undefined;
 }
 
@@ -2388,11 +2393,15 @@ export function buildSdkOptions(
 	//        omitting the field leaves the SDK in its adaptive default (or persisted session state).
 	// #2500: strict-param models (Sonnet 5.5) 400 on {type:"disabled"} — their off
 	//        switch is {type:"between_tools"}, flagged via catalog compat.
+	// #2645: Opus 5.5 / Fable 5.1 share the umbrella; Fable 5 sets the
+	//        granular thinkingOffMode because it still accepts forced tool_choice.
 	const strictRequestParams = modelMetadata?.compat?.strictRequestParams === true;
+	const thinkingOffBetweenTools = strictRequestParams
+		|| modelMetadata?.compat?.thinkingOffMode === "between_tools";
 	const thinkingConfig = supportsAdaptive
 		? effort
 			? { thinking: { type: "adaptive" } }
-			: { thinking: { type: strictRequestParams ? "between_tools" : "disabled" } }
+			: { thinking: { type: thinkingOffBetweenTools ? "between_tools" : "disabled" } }
 		: undefined;
 
 	// Interactive runs load user settings, so legacy gsd-core v1 skills installed
