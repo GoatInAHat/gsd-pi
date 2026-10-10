@@ -3,6 +3,7 @@
   "name": "Open GSD",
   "description": "GSD Pi over MCP with a native web UI portal and automatic project, TaskFlow, Workboard, and heartbeat synchronization",
   "version": "1.20.1",
+  "contracts": { "gatewayMethodDispatch": ["authenticated-request"] },
   "activation": { "onStartup": true },
   "mcpServers": {
     "gsd": {

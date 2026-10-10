@@ -6,7 +6,7 @@ The plugin serves GSD's existing web UI in **Control UI → Portals**, declares 
 
 ## Install
 
-Requires **OpenClaw 2026.9.2 or later** and `gsd-pi` installed on the MCP server's host.
+Requires **OpenClaw 2026.9.7 or later** and `gsd-pi` installed on the MCP server's host.
 
 ```bash
 openclaw plugins install npm:@opengsd/open-gsd-openclaw --pin
@@ -81,6 +81,14 @@ Flows belong to the configured default agent's main session, which is the operat
 Cancelling a TaskFlow cancels synchronization of that observation flow; it does **not** stop an external GSD process. Use `gsd_cancel` to stop execution and GSD's status/results to confirm it. The adapter never launches, cancels, or resumes coding work in response to a board move or flow cancellation. Cancelled flow records remain cancelled while retained by OpenClaw (terminal flows are normally pruned after seven days).
 
 ## Projects and managed worktrees
+
+Inside the OpenClaw dashboard, GSD lists **OpenClaw Settings → Projects**, using the native `projects.list` API with the current authenticated user's profile and scopes. It inspects each registered checkout itself, not its child directories, so ordinary repositories and registered Git worktrees need no `.gsd` directory to appear. Scope-redacted or inaccessible paths are not exposed. Add, rename, or remove projects in OpenClaw; reopening the picker reads the current registry.
+
+Standalone GSD keeps its own saved development root and project discovery. Embedded browsing does not read or rewrite that setting, and GSD's root-selection and project-creation controls are replaced with guidance to manage projects in OpenClaw.
+
+The embedded surface is administrator-only by default. `plugins.entries.open-gsd-openclaw.config.embeddedProjects.projects` is an optional narrowing list of `{ "projectId": "<native-id>", "canonicalRoot": "/canonical/checkout" }` entries. Omit it to use the native catalog; `[]` denies every project. Existing installations with a legacy list must remove it to see all native projects. Explicit entries never grant access to a project absent from the caller's native catalog. Non-admin access requires both `adminOnly: false` and an explicit list, plus native operator scopes exposing the paths.
+
+The plugin declares `contracts.gatewayMethodDispatch: ["authenticated-request"]` for these RPC handlers; it never uses owner CLI credentials to expand the user's project access.
 
 Use OpenClaw's Place picker to select a project or create an OpenClaw-managed worktree. Pass the actual selected execution directory to GSD. Automatic registration does not create a worktree, switch branches, or relocate running work.
 

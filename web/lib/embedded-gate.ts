@@ -14,6 +14,7 @@ import {
   type EmbeddedOperationClient,
   type FrameEventMessage,
 } from "./embedded-transport.ts"
+import { setEmbeddedTheme } from "./embedded-theme.ts"
 
 export type EmbeddedStartupState = "standalone" | "embedded-ready" | "embedded-unavailable"
 
@@ -53,8 +54,12 @@ export function embeddedStartup(options?: {
   if (!embeddedModeActive()) return Promise.resolve("standalone")
   if (startupPromise) return startupPromise
   const allowed = options?.allowedOperations ?? EMBEDDED_ALLOWED_OPERATIONS
-  const negotiate = options?.negotiate ?? ((opts) => negotiateEmbeddedTransport({ ...opts, window: window as never }))
   const generation = gateGeneration
+  const negotiate = options?.negotiate ?? ((opts) => negotiateEmbeddedTransport({
+    ...opts,
+    window: window as never,
+    onTheme: (theme) => { if (generation === gateGeneration) setEmbeddedTheme(theme) },
+  }))
   startupPromise = negotiate({ allowedOperations: allowed })
     .then((client) => {
       if (generation !== gateGeneration) {
@@ -80,6 +85,7 @@ export function resetEmbeddedGate(): void {
   cachedTransport?.dispose()
   cachedTransport = null
   startupPromise = null
+  setEmbeddedTheme(undefined)
 }
 
 interface RouteMapping {
