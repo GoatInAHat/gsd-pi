@@ -6,12 +6,15 @@
  * OPENCLAW_BIN=/path/to/openclaw node integrations/openclaw/test/browser-host.mjs
  * CHROME_BIN optionally selects an existing Chromium; otherwise Playwright's
  * installed Chromium is used. GSD_BROWSER_EVIDENCE_DIR retains sanitized proof.
+ * GSD_BROWSER_GSD_TARBALL reuses an existing root-package artifact (copied into
+ * this test's fixture), avoiding another prepack while other checks are running.
  */
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { access, copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -26,8 +29,10 @@ const repoDir = resolve(pluginDir, '../..');
 const basePath = '/plugins/open-gsd-openclaw/web';
 const openclaw = process.env.OPENCLAW_BIN;
 assert.ok(openclaw, 'Set OPENCLAW_BIN to an installed OpenClaw host; this test never uses the live Gateway');
-await access(join(repoDir, 'dist/web/standalone/server.js'));
-await access(join(repoDir, 'dist/web/standalone/openclaw/server.js'));
+if (!process.env.GSD_BROWSER_GSD_TARBALL) {
+  await access(join(repoDir, 'dist/web/standalone/server.js'));
+  await access(join(repoDir, 'dist/web/standalone/openclaw/server.js'));
+}
 const root = await realpath(await mkdtemp(join(tmpdir(), 'gsd-openclaw-browser-')));
 const stateDir = join(root, 'host');
 const configPath = join(stateDir, 'openclaw.json');
@@ -159,11 +164,21 @@ try {
   // Exercise both released artifacts. The plugin must run the prefixed server
   // from an npm-installed GSD package, without source-checkout dependencies.
   let gsdPacked;
-  await run(process.execPath, [join(repoDir, 'scripts/prepack-resolve-workspace.cjs')], { cwd: repoDir });
-  try {
-    gsdPacked = JSON.parse((await run('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', root], { cwd: repoDir, timeout: 180_000 })).stdout)[0];
-  } finally {
-    await run(process.execPath, [join(repoDir, 'scripts/postpack-restore-workspace.cjs')], { cwd: repoDir });
+  if (process.env.GSD_BROWSER_GSD_TARBALL) {
+    const filename = 'gsd-under-test.tgz';
+    const tarball = join(root, filename);
+    await copyFile(resolve(process.env.GSD_BROWSER_GSD_TARBALL), tarball);
+    const metadata = JSON.parse((await run('tar', ['-xOf', tarball, 'package/package.json'])).stdout);
+    const hash = createHash('sha1');
+    for await (const chunk of createReadStream(tarball)) hash.update(chunk);
+    gsdPacked = { name: metadata.name, version: metadata.version, filename, shasum: hash.digest('hex') };
+  } else {
+    await run(process.execPath, [join(repoDir, 'scripts/prepack-resolve-workspace.cjs')], { cwd: repoDir });
+    try {
+      gsdPacked = JSON.parse((await run('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', root], { cwd: repoDir, timeout: 180_000 })).stdout)[0];
+    } finally {
+      await run(process.execPath, [join(repoDir, 'scripts/postpack-restore-workspace.cjs')], { cwd: repoDir });
+    }
   }
   const installDir = join(root, 'installed');
   await mkdir(installDir);
@@ -206,7 +221,12 @@ try {
   await start();
   const alpha = await rpc('projects.register', { path: fixtures[0], name: 'Native Alpha' });
   const beta = await rpc('projects.register', { path: fixtures[1], name: 'Native Beta' });
-  assert.equal((await rpc('projects.list')).projects.length, 2);
+  const nativeCatalog = (await rpc('projects.list')).projects;
+  assert.ok(nativeCatalog.some((entry) => entry.id === alpha.id));
+  assert.ok(nativeCatalog.some((entry) => entry.id === beta.id));
+  // Native workspace aliases may duplicate a registered checkout. The UI
+  // renders that path once, under its explicit registered identity/name.
+  const nativeCount = nativeCatalog.length;
   browser = await chromium.launch({ headless: true, ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}), args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, colorScheme: 'light', serviceWorkers: 'block' });
   context.on('page', (page) => {
@@ -284,7 +304,7 @@ try {
   await assertClosed(gatewayPort);
   proof('owned-host-clean-shutdown');
   await start();
-  assert.equal((await rpc('projects.list')).projects.length, 2, 'native registry survives Gateway restart');
+  assert.equal((await rpc('projects.list')).projects.length, nativeCount, 'native registry survives Gateway restart');
   assert.equal((await rpc('portal.list')).portals.filter((entry) => entry.port === webPort).length, 1, 'restart does not leak portal registrations');
   page = await context.newPage();
   frame = await openEmbedded();

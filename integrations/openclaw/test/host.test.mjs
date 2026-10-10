@@ -53,7 +53,7 @@ test('packed plugin automatically synchronizes projects and Workboard from event
   const run = (file, args, options = {}) => exec(file, args, {
     env, cwd: root, timeout: 30_000, signal: t.signal, maxBuffer: 4 * 1024 * 1024, ...options,
   });
-  const cli = (args) => run(openclaw, args);
+  const cli = (args, options = {}) => run(openclaw, args, options);
   await mkdir(repo);
   await mkdir(stateDir);
   await run('git', ['init', '--initial-branch=main', repo]);
@@ -75,7 +75,7 @@ test('packed plugin automatically synchronizes projects and Workboard from event
     } } },
   }));
   const packed = JSON.parse((await run('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', root], { cwd: pluginDir })).stdout)[0];
-  await cli(['plugins', 'install', `npm-pack:${join(root, packed.filename)}`, '--force', '--accept-capabilities']);
+  await cli(['plugins', 'install', `npm-pack:${join(root, packed.filename)}`, '--force', '--accept-capabilities'], { timeout: 180_000 });
   const inspected = JSON.parse((await cli(['plugins', 'inspect', 'open-gsd-openclaw', '--runtime', '--json'])).stdout);
   assert.equal(inspected.plugin.status, 'loaded');
   assert.equal(inspected.plugin.mcpServers.gsd.command, 'gsd-mcp-server');

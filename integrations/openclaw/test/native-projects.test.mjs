@@ -5,6 +5,7 @@ import { nativeProjectsFromPayload } from '../dist/native-projects.js';
 
 test('native project payload uses native IDs and roots, keeps ordinary projects, and deduplicates checkouts', () => {
   assert.deepEqual(nativeProjectsFromPayload({ projects: [
+    { id: 'workspace:main', source: 'workspace', displayName: 'a', repoRoot: '/projects/a' },
     { id: 'a', displayName: 'First', repoRoot: '/projects/a' },
     { id: 'b', displayName: 'Second', repoRoot: '/worktrees/b' },
     { id: 'duplicate', displayName: 'Duplicate', repoRoot: '/projects/a' },
@@ -15,6 +16,12 @@ test('native project payload uses native IDs and roots, keeps ordinary projects,
     { projectId: 'a', name: 'First', canonicalRoot: '/projects/a' },
     { projectId: 'b', name: 'Second', canonicalRoot: '/worktrees/b' },
   ]);
+});
+
+test('workspace-only projects keep their native identities', () => {
+  assert.deepEqual(nativeProjectsFromPayload({ projects: [
+    { id: 'workspace:main', source: 'workspace', displayName: 'Workspace', repoRoot: '/workspace' },
+  ] }), [{ projectId: 'workspace:main', name: 'Workspace', canonicalRoot: '/workspace' }]);
 });
 
 test('missing or malformed native catalogs fail closed; empty/redacted catalogs stay empty', () => {

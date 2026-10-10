@@ -84,6 +84,9 @@ jobs:
       - name: Build host integrations (plugin dist)
         run: pnpm run build:integrations
 
+      - name: Web transport and theme contracts
+        run: pnpm --filter gsd-web test
+
       - name: Install isolated OpenClaw host
         run: npm install --prefix "$RUNNER_TEMP/openclaw-host" --ignore-scripts --no-audit --no-fund --package-lock=false openclaw@2026.9.7
 
