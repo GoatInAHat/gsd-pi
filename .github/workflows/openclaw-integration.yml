@@ -12,6 +12,7 @@ on:
       - 'src/web/**'
       - 'web/**'
       - 'scripts/stage-web-standalone.cjs'
+      - 'scripts/build-openclaw-web-host.cjs'
       - 'scripts/build-web-if-stale.cjs'
       - 'pnpm-lock.yaml'
       - 'src/read-cli.ts'
@@ -33,6 +34,7 @@ on:
       - 'src/web/**'
       - 'web/**'
       - 'scripts/stage-web-standalone.cjs'
+      - 'scripts/build-openclaw-web-host.cjs'
       - 'scripts/build-web-if-stale.cjs'
       - 'pnpm-lock.yaml'
       - 'src/read-cli.ts'
@@ -91,7 +93,7 @@ jobs:
       - name: Build staged web host
         env:
           NEXT_TELEMETRY_DISABLED: '1'
-        run: pnpm run build:web-host
+        run: pnpm run build:web-host && pnpm run build:web-host:openclaw
 
       - name: Install test browser
         run: pnpm exec playwright install --with-deps chromium

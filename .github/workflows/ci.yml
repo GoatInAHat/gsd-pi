@@ -190,7 +190,7 @@ jobs:
 
       # validate-pack requires dist/web/standalone/server.js in the tarball (package.json files).
       - name: Build web host
-        run: pnpm run build:web-host
+        run: pnpm run build:web-host && pnpm run build:web-host:openclaw
 
       - name: Pack build artifacts
         run: bash scripts/ci-pack-build-artifacts.sh

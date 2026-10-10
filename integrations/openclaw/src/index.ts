@@ -7,10 +7,10 @@ import { buildAgentMainSessionKey } from "openclaw/plugin-sdk/routing";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ProjectEvents } from "./discovery.js";
-import { CONTROLLER, ProjectSync, state } from "./sync.js";
+import { ProjectSync } from "./sync.js";
 import { GsdPortalService } from "./portals.js";
 import { registerWebTab } from "./webtab.js";
-import type { Flows, PluginApi } from "./types.js";
+import type { PluginApi } from "./types.js";
 
 const GATEWAY_SCOPES: Record<string, OperatorScope[]> = {
   "projects.list": ["operator.read"],
@@ -72,7 +72,7 @@ const configSchema = {
 const gsdPluginEntry = definePluginEntry({
   id: "open-gsd-openclaw",
   name: "Open GSD",
-  description: "GSD web UI in native Portals, MCP tools, and automatic project, TaskFlow, and Workboard synchronization",
+  description: "GSD web UI in native Portals, MCP tools, and automatic project and Workboard synchronization",
   configSchema: buildJsonPluginConfigSchema(configSchema),
   register(api: PluginApi) {
     // gsd.ui.* embedded-frame methods: individually registered, profile
@@ -129,7 +129,6 @@ const gsdPluginEntry = definePluginEntry({
     });
     let events: ProjectEvents | undefined;
     let sync: ProjectSync | undefined;
-    let flows: Flows | undefined;
     let ownerKey: string | undefined;
     let unsubscribe: (() => void) | undefined;
     api.registerService({
@@ -139,7 +138,6 @@ const gsdPluginEntry = definePluginEntry({
         const cfg = context.config;
         const agentId = resolveDefaultAgentId(cfg);
         ownerKey = buildAgentMainSessionKey({ agentId, mainKey: cfg.session?.mainKey });
-        flows = api.runtime.tasks.managedFlows.bindSession({ sessionKey: ownerKey });
         const sessionKey = ownerKey;
         const env = { ...process.env, ...cfg.mcp?.servers?.gsd?.env };
         const fail = (_error: unknown) => {
@@ -149,7 +147,6 @@ const gsdPluginEntry = definePluginEntry({
           api.logger.warn("GSD project synchronization failed; check GSD state and Gateway access.");
         };
         sync = new ProjectSync({
-          flows,
           // Public authenticated Gateway client. The in-process runtime gateway
           // facade is reserved for bundled/official plugins, not external ones.
           request: (method, params) => callGatewayFromCli(method, { timeout: "10000", json: true }, params,
@@ -172,11 +169,11 @@ const gsdPluginEntry = definePluginEntry({
             if (path) void discovery.add(path).catch(fail);
           }
         }
-        // Reload tracked paths as well, including legacy local .gsd directories.
-        for (const flow of flows.list()) {
-          const path = state(flow).projectDir;
-          if (flow.controllerId === CONTROLLER && typeof path === "string") void discovery.add(path).catch(fail);
-        }
+        // Recover legacy local paths and durable source provenance from the
+        // optional native board; absent Workboard leaves only memory state.
+        void instance.restore().then((paths) => {
+          for (const path of paths) void discovery.add(path).catch(fail);
+        }).catch(fail);
         unsubscribe = context.gatewayEvents?.onSessionsChanged((event) => {
           const entry = api.runtime.agent.session.getSessionEntry(event);
           const path = entry?.sessionRoot ?? entry?.cwd;
@@ -190,7 +187,6 @@ const gsdPluginEntry = definePluginEntry({
         await sync?.stop();
         events = undefined;
         sync = undefined;
-        flows = undefined;
       },
     });
     api.on("after_tool_call", (event) => {
@@ -201,12 +197,11 @@ const gsdPluginEntry = definePluginEntry({
       if (typeof path === "string") void events?.add(path).catch(() => {});
     });
     api.on("heartbeat_prompt_contribution", (event) => {
-      if (!flows || event.sessionKey !== ownerKey) return;
-      const current = flows.list().filter((f) => f.controllerId === CONTROLLER && !f.endedAt && !f.cancelRequestedAt);
+      if (!sync || event.sessionKey !== ownerKey) return;
+      const current = sync.snapshots().filter((snapshot) => snapshot.status !== "done");
       if (!current.length) return;
-      return { appendContext: JSON.stringify({ source: "GSD workflow records (project data)", projects: current.slice(0, 12).map((f) => {
-        const snapshot = state(f);
-        return { flowId: f.flowId, projectDir: snapshot.projectDir, phase: snapshot.phase,
+      return { appendContext: JSON.stringify({ source: "GSD workflow records (project data)", projects: current.slice(0, 12).map((snapshot) => {
+        return { projectDir: snapshot.projectDir, phase: snapshot.phase,
           milestone: snapshot.milestone, slice: snapshot.slice, task: snapshot.task,
           status: snapshot.status, tasks: snapshot.tasks, unavailable: snapshot.unavailable,
           blockerCount: Array.isArray(snapshot.blockers) ? snapshot.blockers.length : undefined };
@@ -223,7 +218,7 @@ Object.defineProperty(gsdPluginEntry, toolPluginMetadataSymbol, {
   value: {
     id: "open-gsd-openclaw",
     name: "Open GSD",
-    description: "GSD web UI in native Portals, MCP tools, and automatic project, TaskFlow, and Workboard synchronization",
+    description: "GSD web UI in native Portals, MCP tools, and automatic project and Workboard synchronization",
     activation: { onStartup: true },
     configSchema,
     tools: [],

@@ -140,7 +140,7 @@ jobs:
         run: node scripts/verify-workspace-dist.cjs
 
       - name: Build web host
-        run: pnpm run build:web-host
+        run: pnpm run build:web-host && pnpm run build:web-host:openclaw
 
       - name: Stamp prerelease version and sync platform packages
         id: stamp
