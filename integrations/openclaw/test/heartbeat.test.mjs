@@ -17,14 +17,16 @@ test('heartbeat receives factual project context without a skill or scheduled pr
   } });
   t.after(() => loader.deregister());
   const { default: plugin, gatewayScopes } = await import('../dist/index.js');
+  const { ProjectSync } = await import('../dist/sync.js');
   const root = await mkdtemp(join(tmpdir(), 'gsd-openclaw-heartbeat-'));
   await symlink('.gsd', join(root, '.gsd'));
   const hooks = new Map();
   const warnings = [];
   const failures = [];
   let service;
-  const records = [{ controllerId: 'open-gsd-openclaw.projects', flowId: 'flow-1', stateJson: { projectDir: '/fixture', phase: 'executing' } },
-    { controllerId: 'another-plugin', flowId: 'private', stateJson: { projectDir: '/other' } }];
+  const records = [{ projectDir: '/fixture', phase: 'executing', status: 'running' }];
+  t.mock.method(ProjectSync.prototype, 'restore', async () => []);
+  t.mock.method(ProjectSync.prototype, 'snapshots', () => records);
   const cfg = { agents: { defaults: { workspace: root } }, mcp: { servers: { gsd: { env: { GSD_HOME: join(root, 'gsd-home') } } } } };
   plugin.register({
     config: cfg, logger: { warn: (message) => warnings.push(message) },
@@ -35,7 +37,6 @@ test('heartbeat receives factual project context without a skill or scheduled pr
     registerControlUiDescriptor: () => {},
     registerGatewayMethod: () => {},
     runtime: {
-      tasks: { managedFlows: { bindSession: () => ({ list: () => records }) } },
       agent: { resolveAgentWorkspaceDir: () => root, session: { listSessionEntries: () => [] } },
       system: { enqueueSystemEvent: assert.fail, requestHeartbeat: assert.fail },
     },
@@ -62,9 +63,9 @@ test('heartbeat receives factual project context without a skill or scheduled pr
     'absolute paths from discovery errors do not reach host logs or health reports');
   const contribute = hooks.get('heartbeat_prompt_contribution');
   const context = JSON.parse(contribute({ sessionKey: 'agent:main:main' }).appendContext);
-  assert.deepEqual(context.projects, [{ flowId: 'flow-1', projectDir: '/fixture', phase: 'executing' }]);
+  assert.deepEqual(context.projects, [{ projectDir: '/fixture', phase: 'executing', status: 'running' }]);
   assert.equal(contribute({ sessionKey: 'agent:other:main' }), undefined, 'operator data stays with its owner');
-  records[0].endedAt = Date.now();
+  records[0].status = 'done';
   assert.equal(contribute({ sessionKey: 'agent:main:main' }), undefined);
   await service.stop();
   assert.equal(contribute({ sessionKey: 'agent:main:main' }), undefined, 'a stopped service contributes no stale context');

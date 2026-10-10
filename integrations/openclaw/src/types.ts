@@ -1,36 +1,5 @@
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
-export interface Flow {
-  flowId: string;
-  controllerId?: string;
-  ownerKey: string;
-  revision: number;
-  status: string;
-  goal: string;
-  currentStep?: string;
-  stateJson?: Json;
-  cancelRequestedAt?: number;
-  endedAt?: number;
-  updatedAt: number;
-}
-
-export interface FlowWrite {
-  flowId: string;
-  expectedRevision: number;
-  currentStep?: string;
-  stateJson?: Json;
-  waitJson?: Json;
-  blockedSummary?: string | null;
-}
-
-export interface Flows {
-  list(): Flow[];
-  get(id: string): Flow | undefined;
-  createManaged(input: { controllerId: string; goal: string; stateJson: Json; notifyPolicy: "silent" }): Flow;
-  setWaiting(input: FlowWrite): { applied: boolean; flow?: Flow; code?: string };
-  finish(input: FlowWrite): { applied: boolean; flow?: Flow; code?: string };
-}
-
 export interface Progress {
   source?: "database" | "markdown";
   phase: string;
@@ -62,7 +31,6 @@ export interface PluginApi {
         getSessionEntry(input: { sessionKey: string; agentId?: string }): { sessionRoot?: string; cwd?: string } | undefined;
       };
     };
-    tasks: { managedFlows: { bindSession(input: { sessionKey: string }): Flows } };
     system: {
       enqueueSystemEvent(text: string, options: { sessionKey: string; contextKey: string; replace: boolean }): boolean;
       requestHeartbeat(options: { source: "other"; intent: "event"; reason: string; sessionKey: string; agentId: string }): void;

@@ -155,6 +155,10 @@ export function registerGsdUiMethods(
     if (client?.internal?.controlUiAdmin !== true && config?.projects === undefined) return []
     const native = await readNativeProjects()
     if (client?.invalidated || client?.connectionSignal?.aborted) throw frame("GSD_UI_CLIENT_INVALIDATED", "client invalidated")
+    // Service reload can change policy while the native lookup is awaiting.
+    // Recheck both gates before applying the current narrowing list.
+    requireAdmission(client)
+    if (client?.internal?.controlUiAdmin !== true && config?.projects === undefined) return []
     if (config?.projects === undefined) return native
     const allowed = approvedProjects(config)
     return native.filter((project) => allowed.some((entry) =>
@@ -220,6 +224,10 @@ export function registerGsdUiMethods(
             const project = projects[index]
             if (!canonicalRootIsCurrent(project.canonicalRoot)) continue
             const result = await daemonFetch(`/api/projects?root=${encodeURIComponent(project.canonicalRoot)}&exact=true&detail=${detail ? "true" : "false"}`)
+            // Exact inspection returns [] if this checkout disappeared or
+            // became unreadable after the canonical-identity check. Other
+            // registered checkouts remain useful; malformed metadata still fails.
+            if (Array.isArray(result) && result.length === 0) continue
             if (!Array.isArray(result) || result.length !== 1 || result[0]?.path !== project.canonicalRoot) {
               throw frame("GSD_UI_INVALID_PROJECT", "invalid native project metadata")
             }

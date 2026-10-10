@@ -1,7 +1,8 @@
 /**
  * Opt-in acceptance against a real, disposable OpenClaw Gateway and the npm
  * artifact. No mocked Gateway, theme bridge, project catalog, or HTTP response.
- * Build core, staged web host and plugin first, then:
+ * Build core, plugin, and staged web host with
+ * `pnpm run build:web-host && pnpm run build:web-host:openclaw` first, then:
  * OPENCLAW_BIN=/path/to/openclaw node integrations/openclaw/test/browser-host.mjs
  * CHROME_BIN optionally selects an existing Chromium; otherwise Playwright's
  * installed Chromium is used. GSD_BROWSER_EVIDENCE_DIR retains sanitized proof.
@@ -26,6 +27,7 @@ const basePath = '/plugins/open-gsd-openclaw/web';
 const openclaw = process.env.OPENCLAW_BIN;
 assert.ok(openclaw, 'Set OPENCLAW_BIN to an installed OpenClaw host; this test never uses the live Gateway');
 await access(join(repoDir, 'dist/web/standalone/server.js'));
+await access(join(repoDir, 'dist/web/standalone/openclaw/server.js'));
 const root = await realpath(await mkdtemp(join(tmpdir(), 'gsd-openclaw-browser-')));
 const stateDir = join(root, 'host');
 const configPath = join(stateDir, 'openclaw.json');
@@ -34,10 +36,12 @@ const token = randomUUID();
 const env = {
   PATH: process.env.PATH,
   HOME: root,
+  TMPDIR: process.env.TMPDIR,
   OPENCLAW_STATE_DIR: stateDir,
   OPENCLAW_CONFIG_PATH: configPath,
   GSD_HOME: join(root, 'gsd-home'),
   NO_COLOR: '1',
+  GSD_SKIP_RTK_INSTALL: '1',
 };
 const evidence = { timestamp: new Date().toISOString(), isolated: true, checks: [] };
 let gateway;
@@ -152,6 +156,23 @@ async function assertTheme(frame, mode) {
 try {
   await mkdir(stateDir, { recursive: true });
   await mkdir(evidenceDir, { recursive: true });
+  // Exercise both released artifacts. The plugin must run the prefixed server
+  // from an npm-installed GSD package, without source-checkout dependencies.
+  let gsdPacked;
+  await run(process.execPath, [join(repoDir, 'scripts/prepack-resolve-workspace.cjs')], { cwd: repoDir });
+  try {
+    gsdPacked = JSON.parse((await run('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', root], { cwd: repoDir, timeout: 180_000 })).stdout)[0];
+  } finally {
+    await run(process.execPath, [join(repoDir, 'scripts/postpack-restore-workspace.cjs')], { cwd: repoDir });
+  }
+  const installDir = join(root, 'installed');
+  await mkdir(installDir);
+  await writeFile(join(installDir, 'package.json'), JSON.stringify({ name: 'gsd-browser-fixture', private: true }));
+  await run('npm', ['install', '--omit=dev', '--no-audit', '--no-fund', join(root, gsdPacked.filename)], { cwd: installDir, timeout: 180_000 });
+  const packageRoot = join(installDir, 'node_modules/@opengsd/gsd-pi');
+  await access(join(packageRoot, 'dist/web/standalone/openclaw/server.js'));
+  evidence.gsdPackage = { name: gsdPacked.name, version: gsdPacked.version, shasum: gsdPacked.shasum };
+  proof('packed-gsd-installed');
   gatewayPort = await port();
   webPort = await port();
   const fixtures = [join(root, 'alpha'), join(root, 'beta')];
@@ -170,8 +191,8 @@ try {
   await writeFile(configPath, JSON.stringify({
     gateway: { mode: 'local', port: gatewayPort, auth: { mode: 'token', token }, controlUi: { enabled: true, experimental: { customPlugins: true } } },
     agents: { defaults: { workspace: fixtures[0], model: { primary: 'anthropic/claude-sonnet-4-5' }, heartbeat: { every: '0m' } } },
-    plugins: { allow: ['open-gsd-openclaw'], entries: { 'open-gsd-openclaw': { enabled: true, config: { webUi: { enabled: true, packageRoot: repoDir, port: webPort } } } } },
-    mcp: { servers: { gsd: { command: process.execPath, args: [join(repoDir, 'packages/mcp-server/bin/gsd-mcp-server.js')], env: { GSD_CLI_PATH: join(repoDir, 'dist/loader.js'), GSD_HOME: env.GSD_HOME } } } },
+    plugins: { allow: ['open-gsd-openclaw'], entries: { 'open-gsd-openclaw': { enabled: true, config: { webUi: { enabled: true, packageRoot, port: webPort } } } } },
+    mcp: { servers: { gsd: { command: process.execPath, args: [join(packageRoot, 'packages/mcp-server/bin/gsd-mcp-server.js')], env: { GSD_CLI_PATH: join(packageRoot, 'dist/loader.js'), GSD_HOME: env.GSD_HOME } } } },
   }));
   const packed = JSON.parse((await run('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', root], { cwd: pluginDir })).stdout)[0];
   const manifest = JSON.parse(await readFile(join(pluginDir, 'openclaw.plugin.json'), 'utf8'));
@@ -189,15 +210,15 @@ try {
   browser = await chromium.launch({ headless: true, ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}), args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, colorScheme: 'light', serviceWorkers: 'block' });
   context.on('page', (page) => {
-  page.setDefaultTimeout(30_000);
-  page.on('pageerror', (error) => browserErrors.push(redact(error.message)));
-  page.on('response', (response) => {
-    const path = new URL(response.url()).pathname;
-    if (path.startsWith(basePath)) network.push({ path, status: response.status() });
-  });
-  page.on('websocket', (socket) => socket.on('framesent', ({ payload }) => {
-    try { const frame = JSON.parse(String(payload)); if (frame.type === 'req') methods.push(frame.method); } catch { /* binary frame */ }
-  }));
+    page.setDefaultTimeout(30_000);
+    page.on('pageerror', (error) => browserErrors.push(redact(error.message)));
+    page.on('response', (response) => {
+      const path = new URL(response.url()).pathname;
+      if (path.startsWith(basePath)) network.push({ path, status: response.status() });
+    });
+    page.on('websocket', (socket) => socket.on('framesent', ({ payload }) => {
+      try { const frame = JSON.parse(String(payload)); if (frame.type === 'req') methods.push(frame.method); } catch { /* binary frame */ }
+    }));
   });
   page = await context.newPage();
   let frame = await openEmbedded();
@@ -229,7 +250,11 @@ try {
   await browserRpc('themes.set', { mode: 'light' });
   await assertTheme(frame, 'light');
   await page.screenshot({ path: join(evidenceDir, 'embedded-light.png'), fullPage: true });
-  await browserRpc('themes.set', { mode: 'dark', appearance: { accent: '#a63fe1' } });
+  await browserRpc('themes.set', { mode: 'dark' });
+  await assertTheme(frame, 'dark');
+  const priorPrimary = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--primary').trim());
+  await browserRpc('themes.set', { appearance: { accent: '#a63fe1' } });
+  await eventually(async () => (await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--primary').trim())) !== priorPrimary, 'same-mode host accent update');
   await assertTheme(frame, 'dark');
   assert.equal(await standalone.evaluate(() => localStorage.getItem('theme')), 'light');
   assert.equal(await standalone.evaluate(() => document.documentElement.classList.contains('light')), true);

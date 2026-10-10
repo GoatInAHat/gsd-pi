@@ -763,3 +763,57 @@ test("subscription lookup cannot admit after plugin disposal or connection retir
     }
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
+
+
+test("native lookup rechecks non-admin policy after an asynchronous service reload", async () => {
+  const root = temporaryProject()
+  try {
+    for (const change of ["require-admin", "remove-list"]) {
+      const config: EmbeddedProjectsConfig = { adminOnly: false, projects: [{ projectId: "p", canonicalRoot: root }] }
+      let resolve!: (projects: NativeProject[]) => void
+      const { api, registered } = recordingApi()
+      registerRealGsdUiMethods(api, () => 33277, config, () => new Promise(r => { resolve = r }))
+      const daemon = stubDaemonFetch()
+      try {
+        const pending = call(registered.get("gsd.ui.projects.list")!.handler, { client: { connId: "non-admin" } as UiClient })
+        if (change === "require-admin") config.adminOnly = true
+        else delete config.projects
+        resolve([{ projectId: "p", canonicalRoot: root, name: "P" }])
+        const responses = await pending
+        if (change === "require-admin") {
+          assert.equal(responses[0].ok, false)
+          assert.match(responses[0].error?.message ?? "", /administrator admission required/)
+        } else {
+          assert.equal(responses[0].ok, true)
+          assert.deepEqual(responses[0].payload, [], "removing the explicit list never grants a non-admin the whole catalog")
+        }
+        assert.equal(daemon.calls.length, 0)
+      } finally { daemon.restore() }
+    }
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test("native catalog retains other projects if exact inspection loses a checkout, but rejects malformed metadata", async () => {
+  const a = temporaryProject(), b = temporaryProject()
+  const { api, registered } = recordingApi()
+  registerRealGsdUiMethods(api, () => 33277, undefined, async () => [
+    { projectId: "a", canonicalRoot: a, name: "A" },
+    { projectId: "b", canonicalRoot: b, name: "B" },
+  ])
+  const original = globalThis.fetch
+  let lostProject: unknown = []
+  globalThis.fetch = (async (url: unknown) => Response.json(
+    new URL(String(url)).searchParams.get("root") === a ? lostProject : [{ path: b, name: "b" }],
+  )) as typeof fetch
+  try {
+    const handler = registered.get("gsd.ui.projects.list")!.handler
+    const opts = { client: adminClient() }
+    const responses = await call(handler, opts)
+    assert.equal(responses[0].ok, true)
+    assert.deepEqual(responses[0].payload, [{ path: b, name: "B", projectId: "b" }])
+    lostProject = [{ path: b, name: "wrong checkout" }]
+    const malformed = await call(handler, opts)
+    assert.equal(malformed[0].ok, false)
+    assert.match(malformed[0].error?.message ?? "", /invalid native project metadata/)
+  } finally { globalThis.fetch = original; rmSync(a, { recursive: true, force: true }); rmSync(b, { recursive: true, force: true }) }
+})

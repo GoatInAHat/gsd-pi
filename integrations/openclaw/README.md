@@ -2,7 +2,7 @@
 
 [OpenClaw](https://docs.openclaw.ai) plugin integrating [GSD Pi](https://github.com/open-gsd/gsd-pi) as a structured delivery engine. Plugin id `open-gsd-openclaw`, npm package `@opengsd/open-gsd-openclaw`.
 
-The plugin serves GSD's existing web UI in **Control UI → Portals**, declares GSD's MCP server, and automatically synchronizes local GSD projects into OpenClaw's native project registry, TaskFlow, and optional Workboard. Gateway services own the web host and observe filesystem and session events. Registration and synchronization run in code, without skill instructions, agent bookkeeping, polling timers, or scheduled prompts. GSD owns execution and recovery.
+The plugin serves GSD's existing web UI in **Control UI → Portals**, declares GSD's MCP server, and automatically synchronizes local GSD projects into OpenClaw's native project registry and optional Workboard. Gateway services own the web host and observe filesystem and session events. Registration and synchronization run in code, without skill instructions, agent bookkeeping, polling timers, or scheduled prompts. GSD owns execution and recovery.
 
 ## Install
 
@@ -42,7 +42,7 @@ Once Workboard is enabled, GSD cards appear automatically. No GSD plugin configu
 
 On Gateway startup the plugin opens a native portal titled **GSD**, then starts the existing GSD web host on IPv4 loopback with that portal's `PUBLIC_URL` and the selected `PORT`. Open **Control UI → Portals → GSD**. The app starts at its project picker; selecting a project uses GSD's own UI and APIs. Merely starting the portal does not start a coding run or select another builder's project.
 
-The GSD installation is resolved from `mcp.servers.gsd.env.GSD_CLI_PATH`, or `gsd` on PATH. Packaged installs use `dist/web/standalone/server.js`. Source checkouts use their installed Next.js development server when the standalone build is absent. Build a production host with `pnpm run build:web-host` in the GSD checkout. The plugin does not install dependencies or build assets during Gateway startup.
+The GSD installation is resolved from `mcp.servers.gsd.env.GSD_CLI_PATH`, or `gsd` on PATH. Packaged installs use the prefixed app at `dist/web/standalone/openclaw/server.js`, sharing dependencies with the ordinary root-relative standalone host. Source checkouts use their installed Next.js development server when the compatible prefixed build is absent. Build production hosts with `pnpm run build:web-host` followed by `pnpm run build:web-host:openclaw` in the GSD checkout. Both variants are included in normal GSD releases; the ordinary standalone URL and saved settings are unchanged. The plugin does not install dependencies or build assets during Gateway startup.
 
 Optional overrides belong under `plugins.entries.open-gsd-openclaw.config.webUi`:
 
@@ -70,15 +70,37 @@ Filesystem events for GSD database/WAL and state projections trigger the public 
 
 OpenClaw project registration requires a Git checkout with at least one commit; a denied or invalid registration is reported and retried on a later GSD event. The adapter does not initialize or commit repositories.
 
-Each canonical GSD state directory gets one native project card and a managed TaskFlow record. Shared state across worktrees is deduplicated. TaskFlow persists bounded project paths, phase, task counts, current milestone/slice/task, and blocker summaries. It waits for external GSD events and succeeds when GSD reports phase `complete`. New work after completion gets a fresh flow and reuses the project card. Updates check native revision/version conflicts; failed writes are reported, not treated as completion.
+Each canonical GSD state directory gets one native project card when Workboard is
+enabled. Shared state across worktrees is deduplicated. A managed block in the
+card's notes persists bounded project paths, phase, task counts, current
+milestone/slice/task, blocker summaries, and whether authoritative state came
+from the database. That provenance survives a restart, so a missing database
+cannot silently fall back to stale Markdown. New work after completion reuses
+the project card. Updates check the native card version; failed writes are
+reported before notification or heartbeat context advances. Earlier cards'
+embedded snapshots are read without accessing obsolete TaskFlow tables.
 
-Workboard status reflects the **workflow phase**: planning is `todo`, execution/verification is `running`, reported blockers are `blocked`, and GSD completion is `done`. These are workflow records, not proof that a worker process is alive or independent verification of the user's broader goal. There are no invented ACP/subagent task IDs or execution bindings. Archived cards remain untouched. The plugin owns the generated card's status and notes; put user discussion in Workboard comments.
+Workboard status reflects the **workflow phase**: planning is `todo`,
+execution/verification is `running`, reported blockers are `blocked`, and GSD
+completion is `done`. These are observations, not proof that a worker process
+is alive or independent verification of the user's broader goal. No execution
+binding is fabricated. Archived cards remain untouched. User notes outside the
+managed block are preserved.
 
-Flows belong to the configured default agent's main session, which is the operator view for these host-local projects. Heartbeat receives current project facts through a native context-contribution hook. Significant state changes also enqueue factual system events and request a native heartbeat wake. This supplies data automatically; it does not inject a recovery procedure or modify the user's heartbeat instructions. Heartbeat enablement, delivery policy, and model availability remain OpenClaw settings.
+Heartbeat receives current project facts through a native context-contribution
+hook in the configured default agent's main session. Significant changes enqueue
+factual system events and request a native heartbeat wake, after a successful
+Workboard write. With Workboard disabled, the adapter keeps observations only in
+memory and backfills cards when enabled again; it creates no replacement ledger.
+Memory-only observations do not survive Gateway restarts. Heartbeat enablement,
+delivery policy, and model availability remain OpenClaw settings.
 
-[TaskFlow](https://docs.openclaw.ai/automation/taskflow) persists state but does not schedule or restart executions. [Tasks](https://docs.openclaw.ai/automation/tasks) is an execution ledger, and native automations own scheduled work. Merely writing a card or flow does not make the heartbeat a supervisor. This integration does not create recurring jobs or supervise or restart GSD coding executions. GSD retains its existing timeouts and sanctioned recovery. A silent hang that produces no event cannot be detected by this event-driven adapter.
-
-Cancelling a TaskFlow cancels synchronization of that observation flow; it does **not** stop an external GSD process. Use `gsd_cancel` to stop execution and GSD's status/results to confirm it. The adapter never launches, cancels, or resumes coding work in response to a board move or flow cancellation. Cancelled flow records remain cancelled while retained by OpenClaw (terminal flows are normally pruned after seven days).
+The adapter creates no recurring jobs and never launches, cancels, or resumes
+coding work in response to a board move. GSD owns execution and recovery. Use
+`gsd_cancel` to stop execution and GSD's status/results to confirm it. Archiving
+an observation card stops its synchronization; it does not stop an external GSD
+process. A silent hang with no event cannot be detected by this event-driven
+adapter.
 
 ## Projects and managed worktrees
 
@@ -112,7 +134,7 @@ Workflow mutation tools are available automatically inside a gsd-pi monorepo che
 
 OpenClaw's MCP tool policy and approvals govern GSD tool calls. Restrict tools with `mcp.servers.gsd.toolFilter.include` / `.exclude` or the session's **Connectors → Tool access** controls.
 
-Automatic synchronization runs as a trusted installed plugin on the Gateway host. It reads the local GSD registry, configured/session checkouts, and GSD progress, then uses the public authenticated Gateway client. The client asks for `operator.read` only for project and card lists. OpenClaw 2026.9.2 declares `projects.register` as `operator.admin`; Workboard card writes ordinarily accept `operator.write`, but attaching an arbitrary discovered local directory is unrestricted only for `operator.admin`. The plugin therefore requests admin scope only for project registration and card create/update calls that carry those local workspaces. The Gateway must authorize those writes; the plugin does not bypass denials or write host databases directly. This local operator feature is separate from the permissions of a chat sender. Install it only where those local projects may appear in the operator's project list, board, TaskFlow, and heartbeat context.
+Automatic synchronization runs as a trusted installed plugin on the Gateway host. It reads the local GSD registry, configured/session checkouts, and GSD progress, then uses the public authenticated Gateway client. The client asks for `operator.read` only for project and card lists. OpenClaw declares `projects.register` as `operator.admin`; Workboard card writes ordinarily accept `operator.write`, but attaching an arbitrary discovered local directory is unrestricted only for `operator.admin`. The plugin therefore requests admin scope only for project registration and card create/update calls that carry those local workspaces. The Gateway must authorize those writes; the plugin does not bypass denials or write host databases directly. This local operator feature is separate from the permissions of a chat sender. Install it only where those local projects may appear in the operator's project list, board, and heartbeat context.
 
 `gsd_execute` currently does **not** apply `validateProjectDir`. An agent permitted to call it can launch GSD against any readable directory on the MCP host, using that process's credentials. Other `projectDir`-taking tools apply `GSD_WORKFLOW_PROJECT_ROOT` when configured. That variable is not confinement for `gsd_execute`; gate execution through tool policy and operator access. These are existing MCP server boundaries, not additional plugin permissions.
 
@@ -135,7 +157,28 @@ pnpm run build:integrations
 OPENCLAW_BIN=/path/to/openclaw pnpm --filter @opengsd/open-gsd-openclaw test
 ```
 
-Tests require OpenClaw 2026.9.2, built GSD core/MCP packages, and Git. They create temporary state, a temporary Git repository, and a local Gateway, and clean them up. They do not use the operator's OpenClaw configuration, connect channels, or make model calls.
+Tests require OpenClaw 2026.9.7 or newer, built GSD core/MCP packages, and Git. They create temporary state, a temporary Git repository, and a local Gateway, and clean them up. They do not use the operator's OpenClaw configuration, connect channels, or make model calls.
+
+The packed-plugin browser acceptance test starts its own disposable Gateway with
+native Control UI enabled. It proves native project registration, standalone
+project/preferences independence, host theme inheritance and live updates,
+sandboxed frame remount, browser activation, and owned web-host shutdown/restart.
+It never uses the operator's Gateway, credentials, or channels. Build the web host
+with its required routing prefix before running it:
+
+```bash
+pnpm run build:core
+pnpm run build:integrations
+pnpm run build:web-host
+pnpm run build:web-host:openclaw
+pnpm exec playwright install chromium
+OPENCLAW_BIN=/path/to/openclaw node integrations/openclaw/test/browser-host.mjs
+```
+
+`CHROME_BIN` can select an existing Chromium executable. Sanitized receipts and
+screenshots go to `integrations/openclaw/reports/browser-host/`, or
+`GSD_BROWSER_EVIDENCE_DIR`. This is also the CI acceptance path. It does not prove
+remote HTTPS ingress, which needs a separate final deployment check.
 
 The opt-in live portal proof uses the selected local Gateway and a fresh headless browser. It opens a temporary native portal, verifies token protection, the real GSD picker/assets/API and folder-browser interaction, then removes its portal and web host. It does not select a project or start coding. It requires Playwright in the GSD checkout and Chrome (`CHROME_BIN` overrides the executable), and writes token-free receipts under `validation/`:
 

@@ -1,10 +1,11 @@
 {
   "id": "open-gsd-openclaw",
   "name": "Open GSD",
-  "description": "GSD Pi over MCP with a native web UI portal and automatic project, TaskFlow, Workboard, and heartbeat synchronization",
-  "version": "1.20.1",
-  "contracts": { "gatewayMethodDispatch": ["authenticated-request"] },
-  "activation": { "onStartup": true },
+  "description": "GSD web UI in native Portals, MCP tools, and automatic project and Workboard synchronization",
+  "version": "1.21.1",
+  "activation": {
+    "onStartup": true
+  },
   "mcpServers": {
     "gsd": {
       "transport": "stdio",
@@ -24,9 +25,21 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "enabled": { "type": "boolean", "description": "Serve the existing GSD web UI in native OpenClaw Portals (default true)." },
-          "packageRoot": { "type": "string", "minLength": 1, "description": "Local GSD installation root; otherwise resolved from GSD_CLI_PATH or gsd on PATH." },
-          "port": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "Optional loopback web host port; otherwise an available port is selected." }
+          "enabled": {
+            "type": "boolean",
+            "description": "Serve the existing GSD web UI in native OpenClaw Portals (default true)."
+          },
+          "packageRoot": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Local GSD installation root; otherwise resolved from GSD_CLI_PATH or gsd on PATH."
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "description": "Optional loopback web host port; otherwise an available port is selected."
+          }
         }
       },
       "embeddedProjects": {
@@ -60,5 +73,14 @@
         }
       }
     }
+  },
+  "contracts": {
+    "gatewayMethodDispatch": [
+      "authenticated-request"
+    ],
+    "tools": []
+  },
+  "controlUi": {
+    "entry": "dist/control-ui/80b853b127690d69a1cf3a0553feb619327f3187b36ef29fa3a79319b9a9cbcb/index.js"
   }
 }
