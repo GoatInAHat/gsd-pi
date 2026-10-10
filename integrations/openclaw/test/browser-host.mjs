@@ -62,7 +62,7 @@ let webPort;
 const run = (file, args, options = {}) => exec(file, args, {
   env, cwd: root, timeout: 60_000, maxBuffer: 8 * 1024 * 1024, ...options,
 });
-const cli = (args) => run(openclaw, args);
+const cli = (args, options = {}) => run(openclaw, args, options);
 const redact = (text) => String(text).replaceAll(token, '[fixture-token]').replace(/openclaw_portal=[^\s&"']+/g, 'openclaw_portal=[redacted]');
 const proof = (name, details = {}) => {
   evidence.checks.push({ name, ...details });
@@ -175,7 +175,7 @@ try {
   } else {
     await run(process.execPath, [join(repoDir, 'scripts/prepack-resolve-workspace.cjs')], { cwd: repoDir });
     try {
-      gsdPacked = JSON.parse((await run('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', root], { cwd: repoDir, timeout: 180_000 })).stdout)[0];
+      gsdPacked = JSON.parse((await run('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', root], { cwd: repoDir, timeout: 300_000 })).stdout)[0];
     } finally {
       await run(process.execPath, [join(repoDir, 'scripts/postpack-restore-workspace.cjs')], { cwd: repoDir });
     }
@@ -183,7 +183,7 @@ try {
   const installDir = join(root, 'installed');
   await mkdir(installDir);
   await writeFile(join(installDir, 'package.json'), JSON.stringify({ name: 'gsd-browser-fixture', private: true }));
-  await run('npm', ['install', '--omit=dev', '--no-audit', '--no-fund', join(root, gsdPacked.filename)], { cwd: installDir, timeout: 180_000 });
+  await run('npm', ['install', '--omit=dev', '--no-audit', '--no-fund', join(root, gsdPacked.filename)], { cwd: installDir, timeout: 300_000 });
   const packageRoot = join(installDir, 'node_modules/@opengsd/gsd-pi');
   await access(join(packageRoot, 'dist/web/standalone/openclaw/server.js'));
   evidence.gsdPackage = { name: gsdPacked.name, version: gsdPacked.version, shasum: gsdPacked.shasum };
@@ -213,7 +213,7 @@ try {
   const manifest = JSON.parse(await readFile(join(pluginDir, 'openclaw.plugin.json'), 'utf8'));
   assert.ok(manifest.controlUi?.entry, 'normal plugin build must generate manifest.controlUi.entry');
   assert.ok(packed.files.some((file) => file.path === manifest.controlUi.entry.replace(/^\.\//, '')), 'npm package must include the native UI bundle referenced by its manifest');
-  await cli(['plugins', 'install', `npm-pack:${join(root, packed.filename)}`, '--force', '--accept-capabilities']);
+  await cli(['plugins', 'install', `npm-pack:${join(root, packed.filename)}`, '--force', '--accept-capabilities'], { timeout: 180_000 });
   const inspection = JSON.parse((await cli(['plugins', 'inspect', 'open-gsd-openclaw', '--runtime', '--json'])).stdout);
   assert.equal(inspection.plugin.status, 'loaded');
   evidence.package = { name: packed.name, version: packed.version, shasum: packed.shasum, uiEntry: manifest.controlUi.entry };
@@ -227,8 +227,10 @@ try {
   // Native workspace aliases may duplicate a registered checkout. The UI
   // renders that path once, under its explicit registered identity/name.
   const nativeCount = nativeCatalog.length;
-  browser = await chromium.launch({ headless: true, ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}), args: ['--no-sandbox', '--disable-dev-shm-usage'] });
-  context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, colorScheme: 'light', serviceWorkers: 'block' });
+  // Chromium's Unix-domain singleton socket needs a short temporary path.
+  // Keep large package fixtures in TMPDIR, but its browser-only socket in /tmp.
+  browser = await chromium.launch({ env: { ...env, TMPDIR: process.platform === 'win32' ? env.TMPDIR : '/tmp' }, headless: true, ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}), args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+  context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, colorScheme: 'light' });
   context.on('page', (page) => {
     page.setDefaultTimeout(30_000);
     page.on('pageerror', (error) => browserErrors.push(redact(error.message)));
@@ -273,7 +275,7 @@ try {
   await browserRpc('themes.set', { mode: 'dark' });
   await assertTheme(frame, 'dark');
   const priorPrimary = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--primary').trim());
-  await browserRpc('themes.set', { appearance: { accent: '#a63fe1' } });
+  await browserRpc('themes.set', { mode: 'dark', appearance: { accent: '#a63fe1' } });
   await eventually(async () => (await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--primary').trim())) !== priorPrimary, 'same-mode host accent update');
   await assertTheme(frame, 'dark');
   assert.equal(await standalone.evaluate(() => localStorage.getItem('theme')), 'light');

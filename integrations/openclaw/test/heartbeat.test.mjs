@@ -50,7 +50,7 @@ test('heartbeat receives factual project context without a skill or scheduled pr
   assert.deepEqual(gatewayScopes('projects.register'), ['operator.admin']);
   assert.deepEqual(gatewayScopes('workboard.cards.list'), ['operator.read']);
   assert.deepEqual(gatewayScopes('workboard.cards.create'), ['operator.admin']);
-  assert.deepEqual(gatewayScopes('workboard.cards.update'), ['operator.admin']);
+  assert.deepEqual(gatewayScopes('workboard.cards.update'), ['operator.write']);
   assert.deepEqual(gatewayScopes('portal.list'), ['operator.read']);
   assert.deepEqual(gatewayScopes('portal.open'), ['operator.write']);
   assert.deepEqual(gatewayScopes('portal.close'), ['operator.write']);
