@@ -85,6 +85,7 @@ export class ProjectSync {
   private lastInputs = new Map<string, string>();
   private failures = new Set<string>();
   private observations = new Map<string, Snapshot>();
+  private boardAvailability?: Promise<boolean>;
 
   constructor(private host: SyncHost, private env: NodeJS.ProcessEnv, private onError: (error: unknown) => void,
     private onHealthy: () => void = () => {}) {}
@@ -92,6 +93,17 @@ export class ProjectSync {
   snapshots(): Snapshot[] { return [...this.observations.values()]; }
 
   private async cards(): Promise<Card[] | undefined> {
+    // Use the host's effective activation decision, not our own interpretation
+    // of allow/deny/default-enabled settings. Cache per service generation;
+    // changes to Workboard or plugin policy restart this service.
+    this.boardAvailability ??= this.host.request("plugins.list", {}).then((result) => {
+      if (!Array.isArray(result.plugins)) throw new Error("Invalid plugin catalog");
+      const board = result.plugins.find((plugin: { id?: string }) => plugin?.id === "workboard");
+      if (!board || board.installed === false || board.enabled === false) return false;
+      if (board.installed !== true || board.enabled !== true) throw new Error("Invalid Workboard availability");
+      return true;
+    }).catch((error) => { this.boardAvailability = undefined; throw error; });
+    if (!await this.boardAvailability) return undefined;
     try {
       const result = await this.host.request("workboard.cards.list", {});
       if (!Array.isArray(result.cards)) throw new Error("Invalid Workboard card list");

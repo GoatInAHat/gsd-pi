@@ -14,6 +14,7 @@ import type { PluginApi } from "./types.js";
 
 const GATEWAY_SCOPES: Record<string, OperatorScope[]> = {
   "projects.list": ["operator.read"],
+  "plugins.list": ["operator.read"],
   "projects.register": ["operator.admin"],
   "workboard.cards.list": ["operator.read"],
   // Workboard only needs operator.write for ordinary card mutations, but an
@@ -133,7 +134,7 @@ const gsdPluginEntry = definePluginEntry({
     let unsubscribe: (() => void) | undefined;
     api.registerService({
       id: "gsd-project-sync",
-      reload: { configPrefixes: ["agents", "session", "mcp.servers.gsd", "plugins.entries.workboard"] },
+      reload: { configPrefixes: ["agents", "session", "mcp.servers.gsd", "plugins.entries.workboard", "plugins.allow", "plugins.deny", "plugins.enabled"] },
       start(context) {
         const cfg = context.config;
         const agentId = resolveDefaultAgentId(cfg);

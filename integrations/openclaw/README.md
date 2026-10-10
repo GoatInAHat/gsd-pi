@@ -2,7 +2,7 @@
 
 [OpenClaw](https://docs.openclaw.ai) plugin integrating [GSD Pi](https://github.com/open-gsd/gsd-pi) as a structured delivery engine. Plugin id `open-gsd-openclaw`, npm package `@opengsd/open-gsd-openclaw`.
 
-The plugin serves GSD's existing web UI in **Control UI → Portals**, declares GSD's MCP server, and automatically synchronizes local GSD projects into OpenClaw's native project registry and optional Workboard. Gateway services own the web host and observe filesystem and session events. Registration and synchronization run in code, without skill instructions, agent bookkeeping, polling timers, or scheduled prompts. GSD owns execution and recovery.
+The plugin serves GSD's existing web UI in the **Control UI → GSD** tab, declares GSD's MCP server, and automatically synchronizes local GSD projects into OpenClaw's native project registry and optional Workboard. Gateway services own the web host and observe filesystem and session events. Registration and synchronization run in code, without skill instructions, agent bookkeeping, polling timers, or scheduled prompts. GSD owns execution and recovery.
 
 ## Install
 
@@ -38,9 +38,9 @@ openclaw gateway restart
 
 Once Workboard is enabled, GSD cards appear automatically. No GSD plugin configuration is needed. Existing projects are reconciled when the Gateway starts, including when Workboard is enabled later.
 
-## Native web UI portal
+## Native web UI
 
-On Gateway startup the plugin opens a native portal titled **GSD**, then starts the existing GSD web host on IPv4 loopback with that portal's `PUBLIC_URL` and the selected `PORT`. Open **Control UI → Portals → GSD**. The app starts at its project picker; selecting a project uses GSD's own UI and APIs. Merely starting the portal does not start a coding run or select another builder's project.
+On Gateway startup the plugin opens a native portal titled **GSD**, then starts the existing GSD web host on IPv4 loopback with that portal's `PUBLIC_URL` and the selected `PORT`. Open the **GSD** dashboard tab. The app starts at its project picker; selecting a project uses GSD's own UI and APIs. Merely starting the portal does not start a coding run or select another builder's project.
 
 The GSD installation is resolved from `mcp.servers.gsd.env.GSD_CLI_PATH`, or `gsd` on PATH. Packaged installs use the prefixed app at `dist/web/standalone/openclaw/server.js`, sharing dependencies with the ordinary root-relative standalone host. Source checkouts use their installed Next.js development server when the compatible prefixed build is absent. Build production hosts with `pnpm run build:web-host` followed by `pnpm run build:web-host:openclaw` in the GSD checkout. Both variants are included in normal GSD releases; the ordinary standalone URL and saved settings are unchanged. The plugin does not install dependencies or build assets during Gateway startup.
 
@@ -60,7 +60,7 @@ The plugin owns only its child process and portal. It does not call `gsd --web`,
 
 The web host relies on native portal access control instead of a second application token, and binds only to `127.0.0.1`. Portal bearer URLs remain Gateway-owned and are not persisted or logged by the plugin. The public authenticated Gateway SDK client requests `operator.read` for `portal.list` and `operator.write` for open/close; it does not use the restricted in-process Gateway facade. These are operator-local services, not remote MCP/worker path translation.
 
-Native portals use a separate listener port and origin. HTTP, Next assets, WebSockets and SSE pass through the native proxy without a custom base path. An HTTPS reverse proxy or tunnel exposing only the main Gateway port does **not** automatically expose portal ports. The dashboard checks reachability before embedding; if it offers retry guidance, the portal's separate listener needs a reachable route. A token-free `publicUrl` alone is not an authenticated launch link. See [OpenClaw Portals](https://docs.openclaw.ai/gateway/portals).
+The dashboard tab uses an authenticated route on the main Gateway origin, including through its HTTPS reverse proxy or tunnel. Its sandboxed frame uses the native Control UI RPC bridge for application operations. The separately registered native portal has its own listener and access control; exposing only the Gateway port does not expose that optional portal listener. See [OpenClaw Portals](https://docs.openclaw.ai/gateway/portals).
 
 ## Automatic discovery and synchronization
 
@@ -118,6 +118,10 @@ GSD defaults to `git.isolation: none`, which uses the selected checkout's branch
 
 This adapter observes state on the Gateway host. A remote MCP server or cloud execution place needs colocated state and a corresponding integration; paths are not automatically translated. See OpenClaw's [managed worktrees](https://docs.openclaw.ai/concepts/managed-worktrees).
 
+## Embedded theme
+
+The dashboard tab inherits OpenClaw's current light/dark mode and semantic colors, including live changes while the tab is open. This is a per-document override: it does not change GSD's saved theme or write host colors into GSD settings. Opening GSD outside the dashboard uses GSD's own saved preference. Embedded theme controls defer to the dashboard while that override is active.
+
 ## GSD tools
 
 All tools come from `packages/mcp-server`; the plugin does not wrap them.
@@ -134,7 +138,7 @@ Workflow mutation tools are available automatically inside a gsd-pi monorepo che
 
 OpenClaw's MCP tool policy and approvals govern GSD tool calls. Restrict tools with `mcp.servers.gsd.toolFilter.include` / `.exclude` or the session's **Connectors → Tool access** controls.
 
-Automatic synchronization runs as a trusted installed plugin on the Gateway host. It reads the local GSD registry, configured/session checkouts, and GSD progress, then uses the public authenticated Gateway client. The client asks for `operator.read` only for project and card lists. OpenClaw declares `projects.register` as `operator.admin`; Workboard card writes ordinarily accept `operator.write`, but attaching an arbitrary discovered local directory is unrestricted only for `operator.admin`. The plugin therefore requests admin scope only for project registration and card create/update calls that carry those local workspaces. The Gateway must authorize those writes; the plugin does not bypass denials or write host databases directly. This local operator feature is separate from the permissions of a chat sender. Install it only where those local projects may appear in the operator's project list, board, and heartbeat context.
+Automatic synchronization runs as a trusted installed plugin on the Gateway host. It reads the local GSD registry, configured/session checkouts, and GSD progress, then uses the public authenticated Gateway client. The client asks for `operator.read` for plugin availability, project, and card lists. OpenClaw declares `projects.register` as `operator.admin`; Workboard card writes ordinarily accept `operator.write`, but attaching an arbitrary discovered local directory is unrestricted only for `operator.admin`. The plugin therefore requests admin scope only for project registration and card create/update calls that carry those local workspaces. The Gateway must authorize those writes; the plugin does not bypass denials or write host databases directly. This local operator feature is separate from the permissions of a chat sender. Install it only where those local projects may appear in the operator's project list, board, and heartbeat context.
 
 `gsd_execute` currently does **not** apply `validateProjectDir`. An agent permitted to call it can launch GSD against any readable directory on the MCP host, using that process's credentials. Other `projectDir`-taking tools apply `GSD_WORKFLOW_PROJECT_ROOT` when configured. That variable is not confinement for `gsd_execute`; gate execution through tool policy and operator access. These are existing MCP server boundaries, not additional plugin permissions.
 
@@ -142,7 +146,7 @@ Progress, project titles, blockers, and final results are project-derived conten
 
 ## Runtimes and compatibility
 
-The plugin targets OpenClaw 2026.9.2+ and uses only public plugin SDK/Gateway surfaces. Model/runtime choice stays with OpenClaw and GSD. The optional skill describes ordinary GSD tool usage; automatic discovery, native records, and heartbeat data do not depend on loading or following it.
+The plugin targets OpenClaw 2026.9.7+ and uses only public plugin SDK/Gateway surfaces. Model/runtime choice stays with OpenClaw and GSD. The optional skill describes ordinary GSD tool usage; automatic discovery, native records, and heartbeat data do not depend on loading or following it.
 
 The installed-host test verifies automatic creation/updates, restart deduplication, new-project discovery, optional Workboard, and native managed worktrees without model calls. It does not establish recovery from arbitrary silent hangs or remote placement.
 

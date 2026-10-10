@@ -74,13 +74,13 @@
       }
     }
   },
+  "controlUi": {
+    "entry": "dist/control-ui/80b853b127690d69a1cf3a0553feb619327f3187b36ef29fa3a79319b9a9cbcb/index.js"
+  },
   "contracts": {
     "gatewayMethodDispatch": [
       "authenticated-request"
     ],
     "tools": []
-  },
-  "controlUi": {
-    "entry": "dist/control-ui/80b853b127690d69a1cf3a0553feb619327f3187b36ef29fa3a79319b9a9cbcb/index.js"
   }
 }

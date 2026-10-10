@@ -45,6 +45,7 @@ test('heartbeat receives factual project context without a skill or scheduled pr
   service.start({ config: cfg, serviceHealth: {
     reportFailure: (error) => failures.push(error), clearFailure() {},
   } });
+  assert.deepEqual(gatewayScopes('plugins.list'), ['operator.read']);
   assert.deepEqual(gatewayScopes('projects.list'), ['operator.read']);
   assert.deepEqual(gatewayScopes('projects.register'), ['operator.admin']);
   assert.deepEqual(gatewayScopes('workboard.cards.list'), ['operator.read']);

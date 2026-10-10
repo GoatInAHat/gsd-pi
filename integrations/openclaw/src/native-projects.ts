@@ -22,7 +22,13 @@ export function nativeProjectsFromPayload(payload: unknown): NativeProject[] {
         typeof path !== "string" || !isAbsolute(path) || projects.has(path)) return
     projects.set(path, { projectId: id, canonicalRoot: path, name })
   }
-  for (const project of payload.projects) {
+  // OpenClaw includes synthetic workspace records alongside registrations.
+  // Preserve the registered identity/name when both refer to one checkout,
+  // regardless of the catalog's display-name ordering.
+  const workspace = (project: unknown) => object(project) &&
+    (project.source === "workspace" || (typeof project.id === "string" && project.id.startsWith("workspace:")))
+  const ordered = [...payload.projects].sort((a, b) => Number(workspace(a)) - Number(workspace(b)))
+  for (const project of ordered) {
     if (object(project)) add(project.id, project.displayName, project.repoRoot)
   }
   return [...projects.values()]

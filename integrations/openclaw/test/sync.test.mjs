@@ -17,6 +17,7 @@ function fixture() {
   const host = {
     async request(method, params) {
       calls.push({ method, params });
+      if (method === 'plugins.list') return { plugins: [{ id: 'workboard', installed: true, enabled: !missingBoard }] };
       if (method === 'projects.register') return { id: 'native-project' };
       if (missingBoard) throw new Error('unknown method: workboard.cards.list');
       if (method === 'workboard.cards.list') return { cards: structuredClone(cards) };
@@ -62,15 +63,18 @@ test('progress, blockers and completion converge in Workboard across controller 
 
 test('without optional Workboard only memory observations exist; enabling it backfills one card', async () => {
   const f = fixture();
-  const sync = new ProjectSync(f.host, {}, assert.fail);
+  let sync = new ProjectSync(f.host, {}, assert.fail);
   f.setMissingBoard(true);
   await sync.reconcile('/repo', '/state/repo', progress());
   assert.equal(sync.snapshots().length, 1);
   assert.equal(f.cards.length, 0);
+  assert.ok(!f.calls.some(({ method }) => method.startsWith('workboard.')));
+  await sync.stop();
   f.setMissingBoard(false);
+  sync = new ProjectSync(f.host, {}, assert.fail);
   await sync.reconcile('/repo', '/state/repo', progress());
   assert.equal(f.cards.length, 1);
-  assert.equal(f.notices.length, 1);
+  assert.equal(f.notices.length, 2);
   await sync.stop();
   assert.deepEqual(sync.snapshots(), []);
 });
@@ -166,4 +170,24 @@ test('legacy cards restore database provenance without reading obsolete TaskFlow
   await restored.markUnavailable('/repo', '/state/repo');
   assert.equal(state(f.cards[0]).stateSource, 'database');
   assert.equal(state(f.cards[0]).unavailable, true);
+});
+
+
+test('host catalog errors are not mistaken for optional absence and may recover', async () => {
+  const f = fixture();
+  const request = f.host.request;
+  let refused = true;
+  f.host.request = async (method, params) => {
+    if (method === 'plugins.list' && refused) throw new Error('FORBIDDEN');
+    return request(method, params);
+  };
+  const sync = new ProjectSync(f.host, {}, assert.fail);
+  await assert.rejects(sync.restore(), /FORBIDDEN/);
+  assert.equal(f.notices.length, 0);
+  refused = false;
+  await sync.restore();
+  await sync.reconcile('/repo', '/state/repo', progress());
+  await sync.reconcile('/repo', '/state/repo', progress());
+  assert.equal(f.calls.filter(({ method }) => method === 'plugins.list').length, 1);
+  assert.equal(f.cards.length, 1);
 });
