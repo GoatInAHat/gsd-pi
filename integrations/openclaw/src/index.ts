@@ -20,7 +20,8 @@ const GATEWAY_SCOPES: Record<string, OperatorScope[]> = {
   // Workboard only needs operator.write for ordinary card mutations, but an
   // admin client is required to attach any discovered local project path.
   "workboard.cards.create": ["operator.admin"],
-  "workboard.cards.update": ["operator.admin"],
+  // Updates only change status/notes, never local workspace authority.
+  "workboard.cards.update": ["operator.write"],
   "portal.list": ["operator.read"],
   "portal.open": ["operator.write"],
   "portal.close": ["operator.write"],

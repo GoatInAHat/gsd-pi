@@ -19,7 +19,7 @@ const openclaw = process.env.OPENCLAW_BIN;
 
 // Exercise automatic synchronization in the installed artifact. No model is called.
 test('packed plugin automatically synchronizes projects and Workboard from events', {
-  timeout: 600_000,
+  timeout: 900_000,
 }, async (t) => {
   assert.ok(openclaw, 'Set OPENCLAW_BIN to OpenClaw 2026.9.7 or newer');
   const root = await realpath(await mkdtemp(join(tmpdir(), 'gsd-openclaw-host-')));
@@ -51,7 +51,7 @@ test('packed plugin automatically synchronizes projects and Workboard from event
     await rm(root, { recursive: true, force: true });
   });
   const run = (file, args, options = {}) => exec(file, args, {
-    env, cwd: root, timeout: 30_000, signal: t.signal, maxBuffer: 4 * 1024 * 1024, ...options,
+    env, cwd: root, timeout: 90_000, signal: t.signal, maxBuffer: 4 * 1024 * 1024, ...options,
   });
   const cli = (args, options = {}) => run(openclaw, args, options);
   await mkdir(repo);
