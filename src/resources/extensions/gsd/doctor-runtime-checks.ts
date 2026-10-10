@@ -4,7 +4,7 @@ import { basename, dirname, join } from "node:path";
 import type { DoctorIssue, DoctorIssueCode } from "./doctor-types.js";
 import { removeLockDirectory } from "./session-lock.js";
 import { cleanNumberedGsdVariants } from "./repo-identity.js";
-import { milestonesDir, gsdRoot, milestoneDirExists } from "./paths.js";
+import { milestonesDir, gsdRoot } from "./paths.js";
 import { deriveState, invalidateStateCache, isGhostMilestone, isReusableGhostMilestone } from "./state.js";
 import { renderStateContent, renderStateProjection } from "./workflow-projections.js";
 import { saveFile } from "./files.js";
@@ -21,8 +21,12 @@ import { loadEffectiveGSDPreferences } from "./preferences.js";
 import { removeLegacyProjectionTreeSync, removeProjectionTreeSync } from "./atomic-write.js";
 import {
   loadUnboundProjectionEvidence,
+  loadUnboundProjectionEvidenceLockFree,
   previewUnboundProjectionEvidenceResolution,
+  previewUnboundProjectionEvidenceResolutionLockFree,
   isControlPublicationIntentName,
+  isStructuralProjectionRootError,
+  scanProjectionRootStructure,
   CONTROL_INTENT_QUARANTINE_MIN_AGE_MS,
 } from "./managed-projection-history.js";
 import {
@@ -36,6 +40,87 @@ import { deleteUatRetryCounter, listUatRetryCounters, readHookStateJson } from "
 
 const MAX_UAT_ATTEMPTS = 3;
 
+type EvidencePreview = ReturnType<typeof previewUnboundProjectionEvidenceResolution>;
+
+function unresolvedProjectionEvidenceIssue(
+  preview: (action: "discard" | "preserve" | "restore") => EvidencePreview,
+  note = "",
+): DoctorIssue {
+  const discard = preview("discard");
+  const preserve = preview("preserve");
+  const restore = preview("restore");
+  return {
+    severity: "error",
+    code: "unresolved_projection_evidence",
+    scope: "project",
+    unitId: "project",
+    message: `Unresolved ${discard.scope} projection evidence for ${discard.logicalPath} is retained at .gsd/${discard.evidencePath}.${note} Review exact content ${discard.contentDigest}. Resolve by ID: /gsd doctor resolve-evidence ${discard.evidenceId} --action=discard --consent=${discard.consent}; --action=preserve --consent=${preserve.consent} retains it at .gsd/${preserve.destinationPath}; or --action=restore --consent=${restore.consent} restores it to .gsd/${restore.destinationPath}.`,
+    file: `.gsd/${discard.evidencePath}`,
+    fixable: false,
+  };
+}
+
+// Structural rejection (#2648): the native lock refuses a node inside the
+// projection root, so every managed open — the evidence assessment included —
+// throws. In the pattern of the #2154 intent scan, name the rejected nodes
+// and keep the retained evidence enumerable without opening the lock.
+function reportRejectedProjectionRoot(
+  basePath: string,
+  issues: DoctorIssue[],
+  listedEvidenceIds: ReadonlySet<string>,
+): void {
+  try {
+    for (const finding of scanProjectionRootStructure(basePath)) {
+      issues.push({
+        severity: "error",
+        code: "unsupported_projection_root_node",
+        scope: "project",
+        unitId: "project",
+        message: `.gsd/${finding.logicalPath} is ${finding.problem}. The native projection lock rejects it, which blocks every managed projection write and the recovery-evidence assessment. With all GSD sessions stopped, move it out of .gsd (keep it for review), then rerun /gsd doctor.`,
+        file: `.gsd/${finding.logicalPath}`,
+        fixable: false,
+      });
+    }
+  } catch (error) {
+    issues.push({
+      severity: "warning",
+      code: "unsupported_projection_root_node",
+      scope: "project",
+      unitId: "project",
+      message: `Projection root structure scan could not read .gsd: ${error instanceof Error ? error.message : String(error)}`,
+      file: ".gsd",
+      fixable: false,
+    });
+  }
+  let retained;
+  try {
+    retained = loadUnboundProjectionEvidenceLockFree(basePath);
+  } catch {
+    // The index is unreadable without the lock too; the assessment failure
+    // and the structure scan above already say why.
+    return;
+  }
+  for (const evidence of retained) {
+    if (listedEvidenceIds.has(evidence.evidenceId)) continue;
+    try {
+      issues.push(unresolvedProjectionEvidenceIssue(
+        (action) => previewUnboundProjectionEvidenceResolutionLockFree(basePath, evidence.evidenceId, action),
+        " Listed without the native projection lock, which is rejecting this projection root: repair the root first, then the commands below apply.",
+      ));
+    } catch (error) {
+      issues.push({
+        severity: "error",
+        code: "unresolved_projection_evidence",
+        scope: "project",
+        unitId: "project",
+        message: `Unresolved ${evidence.scope} projection evidence for ${evidence.logicalPath} is retained at .gsd/${evidence.evidencePath}, but it could not be reviewed without the native projection lock: ${error instanceof Error ? error.message : String(error)}. Repair the projection root, then rerun /gsd doctor for the resolution commands.`,
+        file: `.gsd/${evidence.evidencePath}`,
+        fixable: false,
+      });
+    }
+  }
+}
+
 export async function checkRuntimeHealth(
   basePath: string,
   issues: DoctorIssue[],
@@ -48,20 +133,13 @@ export async function checkRuntimeHealth(
   const manageGitignore = gitPrefs?.manage_gitignore;
 
   if (existsSync(root)) {
+    const listedEvidenceIds = new Set<string>();
     try {
       for (const evidence of loadUnboundProjectionEvidence(basePath)) {
-        const discard = previewUnboundProjectionEvidenceResolution(basePath, evidence.evidenceId, "discard");
-        const preserve = previewUnboundProjectionEvidenceResolution(basePath, evidence.evidenceId, "preserve");
-        const restore = previewUnboundProjectionEvidenceResolution(basePath, evidence.evidenceId, "restore");
-        issues.push({
-          severity: "error",
-          code: "unresolved_projection_evidence",
-          scope: "project",
-          unitId: "project",
-          message: `Unresolved ${evidence.scope} projection evidence for ${evidence.logicalPath} is retained at .gsd/${evidence.evidencePath}. Review exact content ${discard.contentDigest}. Resolve by ID: /gsd doctor resolve-evidence ${evidence.evidenceId} --action=discard --consent=${discard.consent}; --action=preserve --consent=${preserve.consent} retains it at .gsd/${preserve.destinationPath}; or --action=restore --consent=${restore.consent} restores it to .gsd/${restore.destinationPath}.`,
-          file: `.gsd/${evidence.evidencePath}`,
-          fixable: false,
-        });
+        issues.push(unresolvedProjectionEvidenceIssue(
+          (action) => previewUnboundProjectionEvidenceResolution(basePath, evidence.evidenceId, action),
+        ));
+        listedEvidenceIds.add(evidence.evidenceId);
       }
     } catch (error) {
       issues.push({
@@ -73,6 +151,9 @@ export async function checkRuntimeHealth(
         file: ".gsd/migration/unbound-projection-evidence.json",
         fixable: false,
       });
+      if (isStructuralProjectionRootError(error)) {
+        reportRejectedProjectionRoot(basePath, issues, listedEvidenceIds);
+      }
     }
   }
 
@@ -848,30 +929,21 @@ export async function checkRuntimeHealth(
     // Non-fatal — orphan milestone directory check failed
   }
 
-  // ── Orphan milestone DB rows (DB present, filesystem missing) ─────────
-  // A milestone row without a corresponding milestone directory can keep
-  // stale milestones "active" and trigger unwanted continuation behavior.
+  // ── Phantom milestone DB rows ─────────────────────────────────────────
+  // A queued row with no saved CONTEXT or CONTEXT-DRAFT row and no Slice rows
+  // is a reservation from gsd_milestone_generate_id that was never planned
+  // (#1524). The rows decide. A missing milestone directory is not evidence:
+  // the directory is a projection and the rebuild renders it again.
   try {
     if (isDbAvailable()) {
       for (const milestone of getAllMilestones()) {
-        // Every milestone status, including `queued`, is subject to the
-        // missing-directory orphan check below. This is a directory-PRESENCE
-        // check (milestoneDirExists), not a content-bearing one: the workflow
-        // prompts create the milestone directory early (often before any
-        // CONTEXT/ROADMAP is written), so a legitimate in-flight queued
-        // milestone with only a scaffold directory (e.g. an empty slices/)
-        // must not be flagged. resolveMilestonePath alone would return null for
-        // such a legacy scaffold dir and produce a false positive during normal
-        // planning. A `queued` phantom left by gsd_milestone_generate_id (no
-        // directory at all) is correctly reported as an orphan to clean up
-        // (#1524).
-        if (!milestoneDirExists(basePath, milestone.id)) {
+        if (isGhostMilestone(basePath, milestone.id)) {
           issues.push({
             severity: "warning",
             code: "orphan_milestone_db",
             scope: "milestone",
             unitId: milestone.id,
-            message: `Orphan milestone DB row: ${milestone.id} — DB row exists but milestone directory is missing from disk. This can cause stale milestone continuation.`,
+            message: `Orphan milestone DB row: ${milestone.id} — the row is queued and has no saved context and no slices. It was reserved and never planned. This can cause stale milestone continuation.`,
             file: `.gsd/gsd.db`,
             fixable: false,
           });

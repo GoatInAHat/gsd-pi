@@ -65,7 +65,6 @@ import { join } from "node:path";
 import type { CompleteMilestoneParams } from "./complete-milestone.js";
 import { handleCompleteMilestone } from "./complete-milestone.js";
 import {
-  handleCompleteTask,
   normalizeReworkResolution,
   resolveTaskSummaryPath,
   satisfiesBlockingReworkFinding,
@@ -109,6 +108,7 @@ import type { ReplanTaskParams } from "./replan-task.js";
 import { handleReplanTask } from "./replan-task.js";
 import type { ReworkBriefSaveParams } from "./rework-brief.js";
 import { handleReworkBriefSave } from "./rework-brief.js";
+import { saveWorkCheckpoint, type SaveWorkCheckpointParams } from "../work-checkpoint.js";
 import type { ReopenMilestoneParams } from "./reopen-milestone.js";
 import { handleReopenMilestone } from "./reopen-milestone.js";
 import type { ReopenSliceParams } from "./reopen-slice.js";
@@ -129,10 +129,12 @@ import { logError, logWarning } from "../workflow-logger.js";
 import { invalidateStateCache } from "../state.js";
 import { flushWorkflowProjections } from "../projection-flush.js";
 import { renderStateProjection } from "../workflow-projections.js";
-import { loadEffectiveGSDPreferences } from "../preferences.js";
+import { loadEffectiveGSDPreferences, resolvePostUnitHooks } from "../preferences.js";
+import { parseUnitId } from "../unit-id.js";
+import { upsertHookGateVerdict } from "../db/writers/hook-verdicts.js";
 import { parseProject } from "../schemas/parsers.js";
 import { autoSession, getAutoRuntimeSnapshot, isAutoActive } from "../auto-runtime-state.js";
-import { renderPlanCheckboxes, renderPlanFromDb, writeTaskSummaryProjection } from "../markdown-renderer.js";
+import { renderPlanCheckboxes, renderPlanFromDb, renderWorkCheckpoint, writeTaskSummaryProjection } from "../markdown-renderer.js";
 import { readUnitHarnessAbort, type UnitHarnessAbortRecord } from "../unit-runtime.js";
 import {
   prepareUatRun,
@@ -167,6 +169,8 @@ export const SUPPORTED_SUMMARY_ARTIFACT_TYPES = [
   "SUMMARY",
   "RESEARCH",
   "UI-SPEC",
+  "AI-SPEC",
+  "SPEC",
   "CONTEXT",
   "ASSESSMENT",
   "CONTEXT-DRAFT",
@@ -1102,9 +1106,7 @@ export async function executeTaskComplete(
       sliceId: params.sliceId,
       taskId: params.taskId,
     };
-    const authority = resolveTaskCompletionAuthority(task, invocation?.idempotencyKey, {
-      blockerReport: params.blockerDiscovered === true,
-    });
+    const authority = resolveTaskCompletionAuthority(task, invocation?.idempotencyKey);
     if (authority === "canonical") {
       if (!invocation) {
         throw new Error("Canonical Task completion requires private invocation identity");
@@ -1137,8 +1139,7 @@ export async function executeTaskComplete(
           );
         }
       }
-      // Mirror the legacy blocking rework gate (handleCompleteTask) onto the
-      // canonical path (#2231): an unresolved blocking finding rejects the
+      // Blocking rework gate on the canonical path (#2231): an unresolved blocking finding rejects the
       // closeout unless covered by a satisfying reworkResolution.
       const reworkResolutions = normalizeReworkResolution(params);
       const resolvedFindingIds = new Set(
@@ -1266,58 +1267,8 @@ export async function executeTaskComplete(
         },
       };
     }
+    throw new Error("gsd_task_complete resolved no Task completion authority");
 
-    const result = await handleCompleteTask(coerced as any, basePath);
-    if ("error" in result) {
-      return {
-        content: [{ type: "text", text: `Error completing task: ${result.error}` }],
-        details: { operation: "complete_task", error: result.error },
-      isError: true,
-      };
-    }
-    const projectionNotice = result.stale
-      ? "The readable status update is pending repair."
-      : null;
-    if (result.escalation) {
-      const recommended = result.escalation.options.find((option) => option.id === result.escalation?.recommendation);
-      const optionIds = result.escalation.options.map((option) => option.id).join("|");
-      return {
-        content: [{
-          type: "text",
-          text: [
-            `Task completed with escalation decision required: ${result.escalation.question}`,
-            `Recommendation: ${result.escalation.recommendation}${recommended ? ` (${recommended.label})` : ""} — ${result.escalation.recommendationRationale}`,
-            `Resolve with: /gsd escalate resolve ${result.taskId} <${optionIds}|accept|reject-blocker> [rationale...]`,
-            ...(projectionNotice ? [projectionNotice] : []),
-          ].join("\n"),
-        }],
-        details: {
-          operation: "complete_task",
-          taskId: result.taskId,
-          sliceId: result.sliceId,
-          milestoneId: result.milestoneId,
-          summaryPath: result.summaryPath,
-          escalation: result.escalation,
-          ...(result.stale ? { stale: true } : {}),
-          ...(result.duplicate ? { duplicate: true } : {}),
-        },
-      };
-    }
-    return {
-      content: [{
-        type: "text",
-        text: `Completed task ${result.taskId} (${result.sliceId}/${result.milestoneId})${projectionNotice ? `. ${projectionNotice}` : ""}`,
-      }],
-      details: {
-        operation: "complete_task",
-        taskId: result.taskId,
-        sliceId: result.sliceId,
-        milestoneId: result.milestoneId,
-        summaryPath: result.summaryPath,
-        ...(result.stale ? { stale: true } : {}),
-        ...(result.duplicate ? { duplicate: true } : {}),
-      },
-    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logError("tool", `complete_task tool failed: ${msg}`, { tool: "gsd_task_complete", error: String(err) });
@@ -2681,6 +2632,53 @@ export async function executeReplanTask(
   }
 }
 
+/**
+ * Save a Work Checkpoint row for a milestone, slice or task, then render its
+ * CONTINUE file. The row is the resume state; a failed render is retried by
+ * the Projection Work that the operation enqueued.
+ */
+export async function executeCheckpointSave(
+  params: SaveWorkCheckpointParams,
+  basePath: string = process.cwd(),
+  invocation: PlanningInvocation = internalPlanningInvocation(),
+): Promise<ToolExecutionResult> {
+  const dbAvailable = await ensureDbOpen(basePath);
+  if (!dbAvailable) {
+    return {
+      content: [{ type: "text", text: "Error: GSD database is not available. Cannot save the checkpoint." }],
+      details: { operation: "checkpoint_save", error: "db_unavailable" },
+      isError: true,
+    };
+  }
+  try {
+    const saved = saveWorkCheckpoint(params, invocation);
+    const entity = [saved.milestoneId, saved.sliceId, saved.taskId].filter(Boolean).join("/");
+    let stale = false;
+    try {
+      await renderWorkCheckpoint(basePath, saved.milestoneId, saved.sliceId ?? undefined);
+    } catch (err) {
+      stale = true;
+      logWarning("tool", `gsd_checkpoint_save render failed: ${(err as Error).message}`);
+    }
+    return {
+      content: [{
+        type: "text",
+        text: `Saved ${params.kind} checkpoint ${saved.sequence} for ${entity}.` +
+          (stale ? " CONTINUE.md is not rendered yet; the database row is the resume state." : ""),
+      }],
+      details: { operation: "checkpoint_save", ...saved, ...(stale ? { stale: true } : {}) },
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError("tool", `checkpoint_save tool failed: ${msg}`, { tool: "gsd_checkpoint_save", error: String(err) });
+    return {
+      content: [{ type: "text", text: `Error saving checkpoint: ${msg}` }],
+      details: { operation: "checkpoint_save", error: msg },
+      isError: true,
+    };
+  }
+}
+
 export async function executeReworkBriefSave(
   params: ReworkBriefSaveExecutorParams,
   basePath: string = process.cwd(),
@@ -2878,4 +2876,101 @@ export async function executeMilestoneStatus(
       isError: true,
     };
   }
+}
+
+/** The verdict a post-unit hook gate records for its trigger unit (P18d). */
+export interface HookVerdictSaveParams {
+  hookName: string;
+  unitId: string;
+  verdict: string;
+  rationale: string;
+}
+
+/** The verdict vocabulary of a post-unit hook gate. */
+const HOOK_VERDICT_SAVE_VALUES = ["pass", "advisory", "needs-rework", "needs-remediation", "needs-attention"] as const;
+
+/**
+ * Save the verdict of a post-unit hook gate. The verdict is a database row
+ * (owner default: the gate outcome arrives as a tool call); the hook's
+ * artifact file is a render for the operator and decides nothing. The rule
+ * registry reads the row through db/hook-verdicts.ts.
+ */
+export async function executeHookVerdictSave(
+  params: HookVerdictSaveParams,
+  basePath: string = process.cwd(),
+  invocation: PlanningInvocation = internalPlanningInvocation(),
+): Promise<ToolExecutionResult> {
+  const harnessAbort = blockIfHarnessAbortedUnit("hook_verdict_save", basePath);
+  if (harnessAbort) return harnessAbort;
+
+  const dbAvailable = await ensureDbOpen(basePath);
+  if (!dbAvailable) return errorResult("hook_verdict_save", "GSD database is not available.", "db_unavailable");
+
+  const configuredHook = resolvePostUnitHooks(basePath).find(hook => hook.name === params.hookName);
+  if (!configuredHook) {
+    return errorResult(
+      "hook_verdict_save",
+      `Unknown hook "${params.hookName}". It must be a configured post_unit_hooks entry.`,
+      "unknown_hook",
+    );
+  }
+  if (!HOOK_VERDICT_SAVE_VALUES.includes(params.verdict as typeof HOOK_VERDICT_SAVE_VALUES[number])) {
+    return errorResult(
+      "hook_verdict_save",
+      `Invalid verdict "${params.verdict}". Must be one of: ${HOOK_VERDICT_SAVE_VALUES.join(", ")}`,
+      "invalid_verdict",
+    );
+  }
+  const rationale = params.rationale?.trim();
+  if (!rationale) {
+    return errorResult("hook_verdict_save", "A rationale is required.", "missing_rationale");
+  }
+  const { milestone, slice } = parseUnitId(params.unitId);
+  if (!milestone) {
+    return errorResult(
+      "hook_verdict_save",
+      `Invalid unitId "${params.unitId}". Expected a GSD unit id such as M001/S01/T01.`,
+      "invalid_unit_id",
+    );
+  }
+
+  try {
+    executeRecordDomainOperation({
+      operationType: "hook-verdict.save",
+      invocation,
+      payload: { ...params, rationale },
+      eventType: "hook-verdict.saved",
+      entityType: "hook-gate",
+      projectionKeys: [slice ? `planning/${milestone}/${slice}`.toLowerCase() : `planning/${milestone}`.toLowerCase()],
+      mutate: () => {
+        upsertHookGateVerdict({
+          hookName: params.hookName,
+          unitId: params.unitId,
+          milestoneId: milestone,
+          sliceId: slice ?? null,
+          taskId: parseUnitId(params.unitId).task ?? null,
+          verdict: params.verdict,
+          rationale,
+        });
+        return {
+          entityId: `${params.hookName}/${params.unitId}`,
+          result: { hookName: params.hookName, unitId: params.unitId, verdict: params.verdict },
+        };
+      },
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError("tool", `gsd_hook_verdict_save database write failed: ${msg}`, { tool: "gsd_hook_verdict_save", error: String(err) });
+    return errorResult("hook_verdict_save", `Error saving hook verdict: ${msg}`, msg);
+  }
+
+  return {
+    content: [{ type: "text", text: `Hook ${params.hookName} verdict saved for ${params.unitId}: verdict=${params.verdict}` }],
+    details: {
+      operation: "hook_verdict_save",
+      hookName: params.hookName,
+      unitId: params.unitId,
+      verdict: params.verdict,
+    },
+  };
 }

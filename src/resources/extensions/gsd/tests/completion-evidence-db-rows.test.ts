@@ -10,6 +10,7 @@
  */
 import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -22,6 +23,10 @@ import { closeQualityGatesFromEvidence } from "../quality-gate-closure.ts";
 import { checkCloseoutConsistencyGate } from "../closeout-consistency-gate.ts";
 import { _selfHealRuntimeRecordsForTest } from "../guided-flow.ts";
 import { readUnitRuntimeRecord, writeUnitRuntimeRecord } from "../unit-runtime.ts";
+import { seedCanonicalMergeReadyMilestone } from "./merge-ready-fixture.ts";
+import { seedLifecycles } from "./helpers/authority-cutover.ts";
+import { validateMilestone } from "../milestone-validation-domain-operation.ts";
+import { captureMilestoneVerificationSourceRevision } from "../verification-source-integrity.ts";
 import {
   _getAdapter,
   closeDatabase,
@@ -38,15 +43,32 @@ import {
   openDatabase,
   setSliceSketchFlag,
   setSliceUatMd,
-  updateMilestoneStatus,
-  updateSliceStatus,
-  updateTaskStatus,
 } from "../gsd-db.ts";
 import type { GSDPreferences } from "../preferences.ts";
 import type { GSDState } from "../types.ts";
 
 const MID = "M001";
 const SID = "S01";
+
+// Fixture stamps on the unadopted epoch-0 hierarchy: raw SQL, because the
+// generic status writer refuses rows without a canonical lifecycle row.
+function stampFixtureComplete(entity: "milestone" | "slice" | "task", ids: {
+  sliceId?: string; taskId?: string;
+}): void {
+  const completedAt = new Date().toISOString();
+  if (entity === "milestone") {
+    _getAdapter()!.prepare("UPDATE milestones SET status = 'complete', completed_at = :ts WHERE id = :id")
+      .run({ ":ts": completedAt, ":id": MID });
+    return;
+  }
+  if (entity === "slice") {
+    _getAdapter()!.prepare("UPDATE slices SET status = 'complete', completed_at = :ts WHERE milestone_id = :mid AND id = :id")
+      .run({ ":ts": completedAt, ":mid": MID, ":id": ids.sliceId ?? SID });
+    return;
+  }
+  _getAdapter()!.prepare("UPDATE tasks SET status = 'complete', completed_at = :ts WHERE milestone_id = :mid AND slice_id = :sid AND id = :id")
+    .run({ ":ts": completedAt, ":mid": MID, ":sid": ids.sliceId ?? SID, ":id": ids.taskId });
+}
 
 let base: string;
 
@@ -61,6 +83,71 @@ afterEach(() => {
   closeDatabase();
   rmSync(base, { recursive: true, force: true });
 });
+
+/**
+ * The closeout proof binds its validation receipt to the fixture repo's
+ * source revision, so the canonical seeds run inside a git repository.
+ */
+function gitInitBase(): void {
+  const git = (args: string[]) =>
+    execFileSync("git", args, { cwd: base, stdio: ["ignore", "pipe", "pipe"] });
+  git(["init", "--initial-branch=main"]);
+  git(["config", "user.email", "test@test.com"]);
+  git(["config", "user.name", "Test"]);
+  writeFileSync(join(base, ".gitkeep"), "");
+  git(["add", ".gitkeep"]);
+  git(["commit", "-m", "initial"]);
+}
+
+/**
+ * Seed an adopted, open Milestone with a recorded passing validation. The
+ * slice stays open: the canonical completion guard is where an open slice
+ * stops closeout.
+ */
+function seedValidatedMilestoneWithOpenSlice(): void {
+  seedLifecycles("completion-evidence/open-validated", [
+    { itemKind: "milestone", milestoneId: MID, lifecycleStatus: "ready" },
+    { itemKind: "slice", milestoneId: MID, sliceId: SID, lifecycleStatus: "ready" },
+  ]);
+  const source = captureMilestoneVerificationSourceRevision(base, undefined);
+  assert.ok(source.ok, `verification source snapshot failed: ${source.ok ? "" : source.error}`);
+  validateMilestone({
+    invocation: {
+      idempotencyKey: "completion-evidence/open-validated/validate",
+      sourceTransport: "internal",
+      actorType: "agent",
+      actorId: "completion-evidence-fixture",
+    },
+    milestoneId: MID,
+    testedSourceRevision: source.sourceRevision,
+    policyId: "completion-evidence-fixture",
+    policyVersion: "1",
+    verdict: "pass",
+    rationale: "Fixture validation recorded through the canonical operation.",
+    outcome: "succeeded",
+    failureClass: "none",
+    summary: "Fixture checks completed.",
+    output: { testedSourceRevision: source.sourceRevision },
+    criteria: [{
+      criterionKey: "fixture-proof",
+      evidenceClass: "command",
+      description: "Fixture proof passes.",
+      verdict: "pass",
+      rationale: "Fixture proof recorded.",
+      evidence: [{
+        evidenceClass: "command",
+        commandOrTool: "node --test fixture-proof",
+        workingDirectory: ".",
+        startedAt: "2026-07-14T12:00:00.000Z",
+        endedAt: "2026-07-14T12:00:00.000Z",
+        exitCode: 0,
+        observation: "passed",
+        durableOutputRef: "db://completion-evidence-fixture/m001",
+        environment: { runner: "node-test" },
+      }],
+    }],
+  });
+}
 
 function milestoneDir(): string {
   return join(base, ".gsd", "milestones", MID);
@@ -205,7 +292,7 @@ const UNIT_CASES: UnitCase[] = [
     unitType: "complete-slice",
     unitId: `${MID}/${SID}`,
     setup: () => insertSlice({ id: SID, milestoneId: MID, title: "Slice", status: "active" }),
-    recordResult: () => updateSliceStatus(MID, SID, "complete", new Date().toISOString()),
+    recordResult: () => stampFixtureComplete("slice", {}),
     writeProjections: () => {
       writeFile(join(sliceDir(), `${SID}-SUMMARY.md`), ["# Slice summary", "", "Done."]);
       writeFile(join(sliceDir(), `${SID}-UAT.md`), ["# UAT", "", "Checks."]);
@@ -220,8 +307,8 @@ const UNIT_CASES: UnitCase[] = [
       insertTask({ id: "T02", sliceId: SID, milestoneId: MID, title: "Second task", status: "pending" });
     },
     recordResult: () => {
-      updateTaskStatus(MID, SID, "T01", "complete", new Date().toISOString());
-      updateTaskStatus(MID, SID, "T02", "complete", new Date().toISOString());
+      stampFixtureComplete("task", { taskId: "T01" });
+      stampFixtureComplete("task", { taskId: "T02" });
     },
     writeProjections: () => {
       writeFile(join(sliceDir(), "tasks", "T01-SUMMARY.md"), ["---", "id: T01", "---", "# T01: Done"]);
@@ -248,15 +335,10 @@ describe("verifyExpectedArtifact reads DB rows only", () => {
   }
 
   test("complete-milestone: a closed milestone verifies with no SUMMARY file", () => {
+    gitInitBase();
     insertSlice({ id: SID, milestoneId: MID, title: "Slice", status: "complete" });
-    insertAssessment({
-      path: `milestones/${MID}/${MID}-VALIDATION.md`,
-      milestoneId: MID,
-      status: "pass",
-      scope: "milestone-validation",
-      fullContent: "---\nverdict: pass\n---\n",
-    });
-    updateMilestoneStatus(MID, "complete", new Date().toISOString());
+    seedCanonicalMergeReadyMilestone(base, MID);
+    openDatabase(join(base, ".gsd", "gsd.db"));
 
     assert.equal(verifyExpectedArtifact("complete-milestone", MID, base), true);
   });
@@ -340,7 +422,7 @@ describe("/gsd start cleanup of stale runtime records is read-only", () => {
 
   test("an unproven milestone gets no assessment, gate run or VALIDATION file, and keeps its record", () => {
     insertSlice({ id: SID, milestoneId: MID, title: "Slice", status: "complete" });
-    updateMilestoneStatus(MID, "complete", new Date().toISOString());
+    stampFixtureComplete("milestone", {});
     staleCompleteMilestoneRecord();
 
     const { cleared } = _selfHealRuntimeRecordsForTest(base, notifyCtx);
@@ -354,6 +436,7 @@ describe("/gsd start cleanup of stale runtime records is read-only", () => {
   });
 
   test("a proven milestone has its record cleared and its pending gate left pending", () => {
+    gitInitBase();
     insertSlice({ id: SID, milestoneId: MID, title: "Slice", status: "complete" });
     insertGateRow({ milestoneId: MID, sliceId: SID, gateId: "Q3", scope: "slice" });
     insertArtifact({
@@ -364,14 +447,8 @@ describe("/gsd start cleanup of stale runtime records is read-only", () => {
       task_id: null,
       full_content: [`# ${SID}: Slice`, "", "## Threat Surface", "", "- Reviewed, none."].join("\n"),
     });
-    insertAssessment({
-      path: `milestones/${MID}/${MID}-VALIDATION.md`,
-      milestoneId: MID,
-      status: "pass",
-      scope: "milestone-validation",
-      fullContent: "---\nverdict: pass\n---\n",
-    });
-    updateMilestoneStatus(MID, "complete", new Date().toISOString());
+    seedCanonicalMergeReadyMilestone(base, MID);
+    openDatabase(join(base, ".gsd", "gsd.db"));
     staleCompleteMilestoneRecord();
 
     const { cleared } = _selfHealRuntimeRecordsForTest(base, notifyCtx);
@@ -415,10 +492,8 @@ describe("a heading in a projection file closes no quality gate", () => {
     assert.deepEqual(getPendingGates(MID, SID), []);
   });
 
-  test("the closeout gate reads the PLAN row section with no project root", () => {
-    closeDatabase();
-    openDatabase(":memory:");
-    insertMilestone({ id: MID, title: "Evidence", status: "active" });
+  test("the closeout gate reads the PLAN row section with the file absent", () => {
+    gitInitBase();
     seedPendingGate();
     insertArtifact({
       path: `milestones/${MID}/slices/${SID}/${SID}-PLAN.md`,
@@ -428,20 +503,15 @@ describe("a heading in a projection file closes no quality gate", () => {
       task_id: null,
       full_content: [`# ${SID}: Slice`, "", "## Threat Surface", "", "- Reviewed, none."].join("\n"),
     });
-    insertAssessment({
-      path: `milestones/${MID}/${MID}-VALIDATION.md`,
-      milestoneId: MID,
-      status: "pass",
-      scope: "milestone-validation",
-      fullContent: "---\nverdict: pass\n---\n",
-    });
-    updateMilestoneStatus(MID, "complete", new Date().toISOString());
+    seedCanonicalMergeReadyMilestone(base, MID);
+    openDatabase(join(base, ".gsd", "gsd.db"));
 
     const result = checkCloseoutConsistencyGate(MID);
 
     assert.deepEqual(result, { ok: true });
-    assert.deepEqual(getPendingGates(MID, SID), []);
-    assert.equal(getGateResults(MID, SID).find((gate) => gate.gate_id === "Q3")?.verdict, "pass");
+    // The gate inspects closure from the PLAN row but never writes it: the
+    // pending row is closed by the completion write, not by the gate.
+    assert.deepEqual(getPendingGates(MID, SID).map((gate) => gate.gate_id), ["Q3"]);
   });
 });
 
@@ -582,14 +652,19 @@ describe("milestone validation and closeout read slice status from the DB", () =
     assert.equal(dispatchedUnit(action), "validate-milestone");
   });
 
-  test("a SUMMARY file does not let an open slice into milestone validation", async () => {
+  test("a SUMMARY file does not let an open slice complete the milestone", async () => {
+    gitInitBase();
     insertSlice({ id: SID, milestoneId: MID, title: "Slice", status: "active" });
     writeFile(join(sliceDir(), `${SID}-SUMMARY.md`), ["# Slice summary", "", "Done."]);
+    seedValidatedMilestoneWithOpenSlice();
 
-    const action = await matchRule("validating-milestone → validate-milestone", validating());
+    const action = await evaluateGuardedCompleteMilestoneDispatch({
+      ...dispatchContext(planningState({ phase: "completing-milestone", activeSlice: null })),
+      preview: true,
+    });
 
-    assert.equal(action?.action, "stop");
-    assert.match(action?.action === "stop" ? action.reason : "", new RegExp(`${SID} are not closed`));
+    assert.equal(action.action, "stop");
+    assert.match(action.action === "stop" ? action.reason : "", new RegExp(`${SID} status is "active"`));
   });
 });
 

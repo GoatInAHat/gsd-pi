@@ -24,7 +24,21 @@ import {
   hasAnyIssues,
 } from "../workflow-logger.js";
 import { debugLog } from "../debug-logger.js";
-import { releaseUnitRetry } from "../db/unit-dispatch-retries.js";
+import {
+  releaseCommitRepairRetry,
+  releaseUnitRetry,
+} from "../db/unit-dispatch-retries.js";
+import {
+  readUnitBudget,
+  resetUnitBudget,
+  spendUnitBudget,
+} from "../db/unit-dispatch-budgets.js";
+import { setVerificationRetry } from "./verification-retry-state.js";
+import { MAX_GIT_COMMIT_REMEDIATION_RETRIES } from "../auto-post-unit.js";
+import {
+  TaskSourceCommitRefusedError,
+  settleTaskSourceCommitEffect,
+} from "./task-source-commit.js";
 import { buildPhaseHandoffOutcome, setAutoOutcomeWidget } from "../auto-dashboard.js";
 import {
   applyVerificationRetryPolicy,
@@ -97,6 +111,10 @@ export async function failClosedOnFinalizeTimeout(
 /**
  * Phase 5: Post-unit finalize — pre/post verification, UAT pause, step-wizard.
  * Returns break/continue/next to control the outer loop.
+ *
+ * `resumeStage` is the stage a killed process stored for the unit (ADR-048).
+ * At `verify` the pre-verification of the unit passed before the kill, so it
+ * does not run again.
  */
 export async function runFinalize(
   ic: IterationContext,
@@ -105,6 +123,7 @@ export async function runFinalize(
   sidecarItem?: SidecarItem,
   publishVerifiedTask?: () => Promise<void>,
   onExecuteWorkComplete?: () => void,
+  resumeStage?: "verify",
 ): Promise<PhaseResult> {
   const { ctx, pi, s, deps } = ic;
   const { pauseAfterUatDispatch } = iterData;
@@ -156,11 +175,13 @@ export async function runFinalize(
   };
   clearCurrentPhase();
   setBeforeAgentStartContext(undefined);
-  const preResultGuard = await withTimeout(
-    deps.postUnitPreVerification(postUnitCtx, preVerificationOpts),
-    FINALIZE_PRE_TIMEOUT_MS,
-    "postUnitPreVerification",
-  );
+  const preResultGuard = resumeStage === "verify"
+    ? { value: "continue" as const, timedOut: false as const }
+    : await withTimeout(
+      deps.postUnitPreVerification(postUnitCtx, preVerificationOpts),
+      FINALIZE_PRE_TIMEOUT_MS,
+      "postUnitPreVerification",
+    );
 
   if (preResultGuard.timedOut) {
     return failClosedOnFinalizeTimeout(
@@ -388,6 +409,91 @@ export async function runFinalize(
       && iterData.unitType === "execute-task"
       && publishVerifiedTask
     ) {
+      // ADR-050: the source commit of an adopted Task is Closeout Effect
+      // ordinal 1 of its Task Closeout Plan — the loop prepares the plan,
+      // commits, records the Settlement Receipt, and only then publishes.
+      // A refused commit records no receipt: the Task stays unpublished with
+      // its Attempt settled, and the stored git-commit repair retry (#2618)
+      // re-selects it. A Task whose commit GSD does not own (no canonical
+      // lifecycle, git.auto_commit off, isolation none) skips the effect and
+      // keeps the legacy order.
+      try {
+        await settleTaskSourceCommitEffect({
+          basePath: s.basePath,
+          unitType: iterData.unitType,
+          unitId: iterData.unitId,
+          traceId: s.currentTraceId ?? `turn:${s.currentUnit?.startedAt ?? iterData.unitId}`,
+          turnId: s.currentTurnId ??
+            `${iterData.unitType}/${iterData.unitId}/${s.currentUnit?.startedAt ?? iterData.unitId}`,
+        });
+        // The commit settled: release only what the git action owns, the same
+        // release the legacy post-verification commit performs on success.
+        resetUnitBudget(s.unclaimedUnitBudgets, { unitType: iterData.unitType, unitId: iterData.unitId, kind: "git-commit" });
+        releaseCommitRepairRetry(iterData.unitType, iterData.unitId);
+      } catch (error) {
+        if (error instanceof TaskSourceCommitRefusedError) {
+          const detail = error.message;
+          const gitCommitBudget = { unitType: iterData.unitType, unitId: iterData.unitId, kind: "git-commit" } as const;
+          const attempt = readUnitBudget(s.unclaimedUnitBudgets, gitCommitBudget) + 1;
+          if (attempt <= MAX_GIT_COMMIT_REMEDIATION_RETRIES) {
+            spendUnitBudget(s.unclaimedUnitBudgets, gitCommitBudget);
+            setVerificationRetry(s, iterData.unitType, {
+              unitId: iterData.unitId,
+              failureContext:
+                "Git commit failed after task verification. The commit hook rejected the staged task changes; " +
+                "fix the reported issue and complete the task again so GSD can retry the commit.\n\n" +
+                detail,
+              signature: `git-commit:${attempt}:${detail}`,
+              attempt,
+            });
+            ctx.ui.notify(
+              `Git commit failed: ${detail.split("\n")[0]}. Retrying task remediation (attempt ${attempt}/${MAX_GIT_COMMIT_REMEDIATION_RETRIES}).`,
+              "warning",
+            );
+            debugLog("autoLoop", {
+              phase: "task-source-commit-remediation-retry",
+              unitType: iterData.unitType,
+              unitId: iterData.unitId,
+              attempt,
+            });
+            // #2119: the durable git-commit repair retry is journaled as a
+            // verification-retry, never a pre-execution-retry.
+            deps.emitJournalEvent({
+              ts: new Date().toISOString(),
+              flowId: ic.flowId,
+              seq: ic.nextSeq(),
+              eventType: "verification-retry",
+              data: {
+                unitType: iterData.unitType,
+                unitId: iterData.unitId,
+                attempt,
+              },
+            });
+            const retryPolicyResult = await applyVerificationRetryPolicy(
+              ic,
+              iterData.unitType,
+              "verification-retry",
+            );
+            clearFinalizingUnit();
+            return retryPolicyResult ?? { action: "continue" };
+          }
+          // The repair used all its attempts: release the stored retry and pause.
+          s.pendingVerificationRetry = null;
+          resetUnitBudget(s.unclaimedUnitBudgets, gitCommitBudget);
+          releaseUnitRetry(iterData.unitType, iterData.unitId);
+          const exhaustedReason =
+            `Git commit failed after ${MAX_GIT_COMMIT_REMEDIATION_RETRIES} remediation attempts: ${detail.split("\n")[0]}. Pausing auto-mode.`;
+          ctx.ui.notify(exhaustedReason, "error");
+          await deps.pauseAuto(ctx, pi, "machine_fixable");
+          clearFinalizingUnit();
+          return { action: "break", reason: "task-source-commit-refused" };
+        }
+        const reason = error instanceof Error ? error.message : String(error);
+        ctx.ui.notify(reason, "error");
+        await deps.stopAuto(ctx, pi, reason);
+        clearFinalizingUnit();
+        return { action: "break", reason };
+      }
       try {
         await publishVerifiedTask();
       } catch (error) {

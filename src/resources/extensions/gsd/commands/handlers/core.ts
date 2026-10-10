@@ -87,7 +87,6 @@ export function showHelp(ctx: ExtensionCommandContext, args = ""): void {
     "  /gsd new-project    Bootstrap a new project (use --deep for staged project-level discovery)",
     "  /gsd quick          Quick task  [--discuss] [--research] [--validate] [--full]",
     "  /gsd dispatch       Dispatch a specific phase directly  [research|plan|execute|complete|validate|reassess|uat|replan]",
-    "  /gsd verdict <v>    Override unadopted compatibility validation  [pass|needs-attention|needs-remediation] [--milestone Mxxx] [--rationale \"...\"]",
     "  /gsd uat-answer     Answer an open subjective UAT question  [accept|reject] --rationale \"...\" [--question <id>]",
     "  /gsd parallel       Parallel milestone orchestration  [start|status|stop|pause|resume|merge|watch]",
     "  /gsd workflow       Custom workflow lifecycle  [new|run|list|validate|pause|resume]",
@@ -173,6 +172,7 @@ export function showHelp(ctx: ExtensionCommandContext, args = ""): void {
     "  /gsd recover           Preview an evidence-bound DB import after loss/corruption",
     "  /gsd recover <id>      Resume one repaired Task recovery abort (prompts for repair evidence)",
     "  /gsd db restore-backup List or restore a verified pre-migration database backup (destructive)",
+    "  /gsd db prune-quarantine List, or with --apply delete, quarantined projection copies (destructive)",
     "  /gsd task settle  Settle an orphaned running task Attempt (dry-run first)  <M001/S01/T01> --reason \"...\" [--apply] [--reconcile-lifecycle] [--blocker-accepted]",
     "  /gsd worktree       Manage worktrees from the TUI  [list|merge|clean|remove]",
     "  /gsd migrate        Migrate .planning/ (v1) to DB-backed .gsd/ with backup + audit",
@@ -218,6 +218,22 @@ export async function handleStatus(ctx: ExtensionCommandContext): Promise<void> 
   // No .gsd dir means no project yet. Any other open failure is reported,
   // never shown as "no milestones" (ADR-046).
   if (!opened.ok && opened.reason !== "missing-gsd-dir") {
+    // A live GSD process holding the workflow DB is a lock-holder situation,
+    // not a broken store: report the holder like auto-mode does instead of a
+    // raw open error (#2712).
+    if (opened.reason === "locked") {
+      const { formatLockedWorkflowDatabaseNotice, listWorkflowDbLockHolderPids } =
+        await import("../../workflow-db-locks.js");
+      const { resolveProjectRootDbPath } = await import("../../db-workspace.js");
+      ctx.ui.notify(
+        formatLockedWorkflowDatabaseNotice(
+          listWorkflowDbLockHolderPids(resolveProjectRootDbPath(basePath)),
+          "Cannot read GSD status",
+        ),
+        "error",
+      );
+      return;
+    }
     ctx.ui.notify(`Cannot read GSD status: ${formatWorkflowDatabaseOpenFailure(opened)}`, "error");
     return;
   }

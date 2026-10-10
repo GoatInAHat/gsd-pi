@@ -36,7 +36,7 @@ function fakeWindow(origin: string, marker: boolean) {
       const source = opts && "source" in opts ? opts.source : parent
       const eventOrigin = opts?.eventOrigin ?? "https://parent.test"
       const ports = opts?.ports ?? []
-      for (const l of [...listeners]) l({ data, source, origin: eventOrigin, ports } as MessageEvent)
+      for (const l of [...listeners]) l({ data, source, origin: eventOrigin, ports } as unknown as MessageEvent)
     },
     listenerCount: () => listeners.length,
   }

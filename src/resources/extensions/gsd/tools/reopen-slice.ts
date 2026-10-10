@@ -23,15 +23,14 @@
 import {
   getSliceRunUatAssessment,
   getSliceTasks,
-  getDb,
 } from "../gsd-db.js";
+import { getMilestoneCanonicalLifecycleStatus } from "../db/lifecycle-queries.js";
 import {
   isCurrentSliceReopenOperation,
   reopenSlice,
   SliceLifecycleValidationError,
 } from "../slice-lifecycle-domain-operation.js";
 import { repairSliceShadowsForReopen } from "../lifecycle-shadow-repair-domain-operation.js";
-import { isMilestoneLifecycleAdopted } from "../db/milestone-closeout-readiness.js";
 import { readDomainOperationFence } from "../db/writers/lifecycle-commands.js";
 import type { ExecutionInvocation } from "../execution-invocation.js";
 import { invalidateStateCache } from "../state.js";
@@ -45,6 +44,7 @@ import { join } from "node:path";
 import {
   _setProjectionCleanupInterleaveForTest,
   removeProjectionIfCurrent,
+  reopenProjectionRoots,
 } from "../projection-cleanup.js";
 import {
   buildFlatTaskFileName,
@@ -89,17 +89,7 @@ export function _setReopenSliceCleanupInterleaveForTest(hook: (() => void) | nul
  */
 function milestoneCanonicalTerminal(milestoneId: string): boolean {
   try {
-    const row = getDb().prepare(`
-      SELECT lifecycle.lifecycle_status AS status
-      FROM milestones milestone
-      LEFT JOIN workflow_item_lifecycles lifecycle
-        ON lifecycle.project_id = (SELECT project_id FROM project_authority WHERE singleton = 1)
-       AND lifecycle.item_kind = 'milestone'
-       AND lifecycle.milestone_id = milestone.id
-       AND lifecycle.slice_id IS NULL
-      WHERE milestone.id = :milestone_id
-    `).get({ ":milestone_id": milestoneId }) as Record<string, unknown> | undefined;
-    const status = row?.["status"];
+    const status = getMilestoneCanonicalLifecycleStatus(milestoneId);
     return status === "completed" || status === "cancelled";
   } catch {
     return false;
@@ -127,10 +117,9 @@ export async function handleReopenSlice(
   const hadUatVerdict = getSliceRunUatAssessment(params.milestoneId, params.sliceId) !== null;
   // Converge drifted descendants before the reopen's terminal-parity checks
   // (#2440). Evidence-gated: unverifiable drift fails here, listed, instead of
-  // aborting inside the Domain Operation. Legacy (non-adopted) hierarchies —
-  // including the #1205 desync escape — have no canonical authority to repair
-  // against and keep their cascade path.
-  if (isMilestoneLifecycleAdopted(params.milestoneId) && !milestoneCanonicalTerminal(params.milestoneId)) {
+  // aborting inside the Domain Operation. A canonically terminal milestone
+  // keeps refusing without a repair ahead of that refusal.
+  if (!milestoneCanonicalTerminal(params.milestoneId)) {
     // A replayed invocation skips the repair — its stored receipt must be
     // returned as-is, not preceded by fresh mutations against newer state.
     if (!readDomainOperationFence(invocation.idempotencyKey).replay) {
@@ -192,50 +181,51 @@ export async function handleReopenSlice(
   try {
     const slice = { milestoneId: params.milestoneId, sliceId: params.sliceId };
     const isCurrent = () => isCurrentSliceReopenOperation(operationId, slice);
-    const milestoneDir = resolveMilestonePath(basePath, params.milestoneId);
-    const legacyBase = legacyMilestonesDir(basePath);
-    const isLegacy = !!milestoneDir && (
-      milestoneDir.startsWith(legacyBase + "/") || milestoneDir.startsWith(legacyBase + "\\")
-    );
-    const tasksDir = resolveTasksDir(basePath, params.milestoneId, params.sliceId);
     const tasks = getSliceTasks(params.milestoneId, params.sliceId);
-    cleanup: for (const task of tasks) {
-      const summaryPaths = isLegacy
-        ? (tasksDir ? [join(tasksDir, buildTaskFileName(task.id, "SUMMARY"))] : [])
-        : milestoneDir
-          ? [
-            join(milestoneDir, buildFlatTaskFileName(params.sliceId, task.id, "SUMMARY")),
-            join(milestoneDir, buildTaskFileName(task.id, "SUMMARY")),
-          ]
-          : [];
-      for (const summaryPath of summaryPaths) {
-        if (!removeProjectionIfCurrent({ artifactPath: summaryPath, operationId, isCurrent })) {
-          projectionStale = true;
-          break cleanup;
+    cleanup: for (const root of reopenProjectionRoots(basePath)) {
+      const milestoneDir = resolveMilestonePath(root, params.milestoneId);
+      const legacyBase = legacyMilestonesDir(root);
+      const isLegacy = !!milestoneDir && (
+        milestoneDir.startsWith(legacyBase + "/") || milestoneDir.startsWith(legacyBase + "\\")
+      );
+      const tasksDir = resolveTasksDir(root, params.milestoneId, params.sliceId);
+      for (const task of tasks) {
+        const summaryPaths = isLegacy
+          ? (tasksDir ? [join(tasksDir, buildTaskFileName(task.id, "SUMMARY"))] : [])
+          : milestoneDir
+            ? [
+              join(milestoneDir, buildFlatTaskFileName(params.sliceId, task.id, "SUMMARY")),
+              join(milestoneDir, buildTaskFileName(task.id, "SUMMARY")),
+            ]
+            : [];
+        for (const summaryPath of summaryPaths) {
+          if (!removeProjectionIfCurrent({ artifactPath: summaryPath, operationId, isCurrent })) {
+            projectionStale = true;
+            break cleanup;
+          }
         }
       }
-    }
-    const sliceDir = projectionStale ? null : resolveSlicePath(basePath, params.milestoneId, params.sliceId);
-    if (sliceDir) {
+      const sliceDir = resolveSlicePath(root, params.milestoneId, params.sliceId);
+      if (!sliceDir) continue;
       const sliceArtifacts = new Set([
-        targetSliceFile(basePath, params.milestoneId, params.sliceId, "SUMMARY"),
-        targetSliceFile(basePath, params.milestoneId, params.sliceId, "UAT"),
+        targetSliceFile(root, params.milestoneId, params.sliceId, "SUMMARY"),
+        targetSliceFile(root, params.milestoneId, params.sliceId, "UAT"),
         join(sliceDir, `${params.sliceId}-SUMMARY.md`),
         join(sliceDir, `${params.sliceId}-UAT.md`),
       ]);
-      const existingSummary = resolveSliceFile(basePath, params.milestoneId, params.sliceId, "SUMMARY");
-      const existingUat = resolveSliceFile(basePath, params.milestoneId, params.sliceId, "UAT");
+      const existingSummary = resolveSliceFile(root, params.milestoneId, params.sliceId, "SUMMARY");
+      const existingUat = resolveSliceFile(root, params.milestoneId, params.sliceId, "UAT");
       if (existingSummary) sliceArtifacts.add(existingSummary);
       if (existingUat) sliceArtifacts.add(existingUat);
       if (hadUatVerdict) {
-        sliceArtifacts.add(targetSliceFile(basePath, params.milestoneId, params.sliceId, "ASSESSMENT"));
-        const existingAssessment = resolveSliceFile(basePath, params.milestoneId, params.sliceId, "ASSESSMENT");
+        sliceArtifacts.add(targetSliceFile(root, params.milestoneId, params.sliceId, "ASSESSMENT"));
+        const existingAssessment = resolveSliceFile(root, params.milestoneId, params.sliceId, "ASSESSMENT");
         if (existingAssessment) sliceArtifacts.add(existingAssessment);
       }
       for (const artifactPath of sliceArtifacts) {
         if (!removeProjectionIfCurrent({ artifactPath, operationId, isCurrent })) {
           projectionStale = true;
-          break;
+          break cleanup;
         }
       }
     }

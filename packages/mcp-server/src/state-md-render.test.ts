@@ -14,14 +14,14 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { clearPathCache } from "../../../src/resources/extensions/gsd/paths.ts";
-import { _getAdapter, closeDatabase, insertMilestone, openDatabase, updateTaskStatus } from "../../../src/resources/extensions/gsd/gsd-db.ts";
+import { _getAdapter, closeDatabase, insertMilestone, openDatabase } from "../../../src/resources/extensions/gsd/gsd-db.ts";
 import { claimTaskAttempt } from "../../../src/resources/extensions/gsd/task-execution-domain-operation.ts";
 import { registerDbTools } from "../../../src/resources/extensions/gsd/bootstrap/db-tools.ts";
 import { discardMilestone, parkMilestone, unparkMilestone } from "../../../src/resources/extensions/gsd/milestone-actions.ts";
 import { handleUndo, handleUndoTask } from "../../../src/resources/extensions/gsd/undo.ts";
 import { handleQueueReorder } from "../../../src/resources/extensions/gsd/guided-flow-queue.ts";
 import { mergeCompletedMilestone } from "../../../src/resources/extensions/gsd/parallel-merge.ts";
-import { seedMergeReadyMilestone } from "../../../src/resources/extensions/gsd/tests/merge-ready-fixture.ts";
+import { seedCanonicalMergeReadyMilestone } from "../../../src/resources/extensions/gsd/tests/merge-ready-fixture.ts";
 import { handleEscalateCommand } from "../../../src/resources/extensions/gsd/commands/handlers/escalate.ts";
 import { withCommandCwd } from "../../../src/resources/extensions/gsd/commands/context.ts";
 import { buildEscalationArtifact, openTaskEscalation } from "../../../src/resources/extensions/gsd/escalation.ts";
@@ -97,6 +97,14 @@ function callTool(transport: Transport, base: string, name: string, args: Record
 
 async function openFixture(t: TestContext): Promise<WorkflowAuthorityFixture> {
   const fixture = await createWorkflowAuthorityFixture();
+  // The canonical validate records verification evidence against the project's
+  // source revision, so the fixture project must be a git repository. Pin LF:
+  // on Windows a later checkout would otherwise materialize CRLF and change
+  // the bytes the source-revision hash covers.
+  execSync("git init -b main && git config core.autocrlf false && git add -A && git -c user.email=fixture@test -c user.name=fixture commit -m fixture --allow-empty", {
+    cwd: fixture.root,
+    stdio: "ignore",
+  });
   seedPrerequisiteCompletionEvidence();
   t.after(() => fixture.cleanup());
   return fixture;
@@ -311,7 +319,9 @@ describe("STATE.md render after workflow commands and rebuild", () => {
     await assertRendersState(base, "unpark", async () => assert.equal(await unparkMilestone(base, "M001"), true));
     insertMilestone({ id: "M002", title: "Discarded milestone", status: "queued" });
     await assertRendersState(base, "discard", async () => assert.equal(await discardMilestone(base, "M002"), true));
-    updateTaskStatus("M001", "S02", "T01", "complete");
+    // Fixture stamp on the unadopted milestone: raw SQL, the generic status
+    // writer refuses rows without a canonical lifecycle row.
+    _getAdapter()!.prepare("UPDATE tasks SET status = 'complete' WHERE milestone_id = 'M001' AND slice_id = 'S02' AND id = 'T01'").run();
     await assertRendersState(base, "undo-task", () => handleUndoTask("M001/S02/T01 --force", ctx, {} as Parameters<typeof handleUndoTask>[2], base));
   });
 
@@ -340,7 +350,9 @@ describe("STATE.md render after workflow commands and rebuild", () => {
   it("/gsd undo --force renders STATE.md", async (t) => {
     const fixture = await openFixture(t);
     const base = fixture.root;
-    updateTaskStatus("M001", "S02", "T01", "complete");
+    // Fixture stamp on the unadopted milestone: raw SQL, the generic status
+    // writer refuses rows without a canonical lifecycle row.
+    _getAdapter()!.prepare("UPDATE tasks SET status = 'complete' WHERE milestone_id = 'M001' AND slice_id = 'S02' AND id = 'T01'").run();
     // Undo selects the last completed Unit from the unit_dispatches ledger.
     const db = _getAdapter();
     assert.ok(db, "fixture database must be open");
@@ -445,6 +457,9 @@ describe("STATE.md render after a parallel merge", () => {
     run("git init -b main", repo);
     run("git config user.email test@test.com", repo);
     run("git config user.name Test", repo);
+    // Pin LF: the merge checks the milestone branch out before the closeout
+    // gate re-captures the source hash, and autocrlf would change the bytes.
+    run("git config core.autocrlf false", repo);
     mkdirSync(join(repo, ".gsd", "milestones", "M010"), { recursive: true });
     writeFileSync(join(repo, ".gitignore"), ".gsd/worktrees/\n.gsd/gsd.db*\n.gsd/STATE.md\n");
     writeFileSync(join(repo, ".gsd", "preferences.md"), "## Git\n- isolation: branch\n");
@@ -455,8 +470,10 @@ describe("STATE.md render after a parallel merge", () => {
     writeFileSync(join(repo, "merged.ts"), "export const merged = true;\n");
     run("git add .", repo);
     run("git commit -m feat", repo);
+    // The validation receipt must bind the milestone branch's tree: the merge
+    // body checks the branch out before the closeout gate re-captures the hash.
+    seedCanonicalMergeReadyMilestone(repo, "M010");
     run("git checkout main", repo);
-    seedMergeReadyMilestone(repo, "M010");
     assert.ok(openDatabase(join(repo, ".gsd", "gsd.db")), "merge test database must open");
     process.chdir(repo);
 

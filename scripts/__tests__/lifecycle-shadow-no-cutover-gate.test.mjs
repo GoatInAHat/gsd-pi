@@ -27,6 +27,8 @@ import {
   getMilestone,
   getMilestoneSlices,
   getMilestoneStatusCounts,
+  getOpenBlockers,
+  getOpenQuestions,
   getProjectAuthorityRow,
   getSliceStatusSummary,
   getSliceTaskCounts,
@@ -62,6 +64,11 @@ export function readMilestone(milestoneId) {
   return row ? toMilestoneRead(row, cutoverHasRun() ? readLifecycleItems() : null) : null;
 }
 
+export function readMilestoneDoneIn(db, milestoneId) {
+  const status = db.prepare("SELECT status FROM milestones WHERE id = :id").get({ ":id": milestoneId })?.status;
+  return cutoverHasRun(db) ? readLifecycleItems(db).length > 0 : isClosedStatus(status);
+}
+
 export function readMilestoneSlices(milestoneId) {
   const items = cutoverHasRun() ? readLifecycleItems() : null;
   return getMilestoneSlices(milestoneId).map((row) => toSliceRead(row, items));
@@ -93,6 +100,16 @@ export function readMilestoneStatus(milestoneId) {
 
 export function readProgressCounts() {
   return [getHierarchyCompletionCounts(), getInFlightSliceCount(), getMilestoneStatusCounts()];
+}
+
+// The canonical blockers and questions have no legacy row: the answer is the
+// same at every Authority Epoch, so these never ask cutoverHasRun.
+export function readOpenBlockers() {
+  return getOpenBlockers();
+}
+
+export function readOpenQuestions() {
+  return getOpenQuestions();
 }
 `;
 }

@@ -51,6 +51,7 @@ import {
   runDoctorViaBridge,
   registerWorkflowTools,
   runSerializedWorkflowOperation,
+  resolvePersistedBlockerViaBridge,
   validateProjectDir,
   warmWorkflowToolBridges,
 } from './workflow-tools.js';
@@ -513,6 +514,11 @@ interface AskUserQuestionsStructuredContent {
    * and pauses auto-mode (#852).
    */
   timed_out?: boolean;
+  /**
+   * Depth-verification gate ids the round verified (#2653). Absent when no
+   * gate questions were answered or none verified.
+   */
+  verified_gates?: string[];
 }
 
 interface AskUserQuestionsWriteGateModule {
@@ -617,6 +623,7 @@ export function buildAskUserQuestionsElicitRequest(questions: AskUserQuestion[])
 export function formatAskUserQuestionsElicitResult(
   questions: AskUserQuestion[],
   result: AskUserQuestionsElicitResult,
+  verifiedGateIds: string[] = [],
 ): string {
   const answers: Record<string, { answers: string[] }> = {};
   const content = result.content ?? {};
@@ -634,7 +641,11 @@ export function formatAskUserQuestionsElicitResult(
     answers[question.id] = { answers: answerList };
   }
 
-  return JSON.stringify({ answers });
+  // Depth-verification gates the round verified are embedded as an additive
+  // JSON key (not appended text — consumers JSON.parse this content) so the
+  // caller learns which gates unlocked without hitting a later HARD BLOCK
+  // (#2653).
+  return JSON.stringify(verifiedGateIds.length > 0 ? { answers, verified_gates: verifiedGateIds } : { answers });
 }
 
 /**
@@ -767,23 +778,34 @@ async function recordAskUserQuestionsPendingGate(
   });
 }
 
+/**
+ * Record the gate outcome of an ask_user_questions round and return the gate
+ * ids the round verified, so the tool result can tell the caller which gates
+ * unlocked (#2653) instead of leaving it to a later HARD BLOCK.
+ */
 async function recordAskUserQuestionsGateResult(
   structured: AskUserQuestionsStructuredContent,
   deps: AskUserQuestionsHandlerDeps,
-): Promise<void> {
-  if (structured.cancelled || !structured.response) return;
+): Promise<string[]> {
+  if (structured.cancelled || !structured.response) return [];
   const writeGate = await resolveAskUserQuestionsWriteGate(deps);
-  if (!writeGate) return;
+  if (!writeGate) return [];
 
   const basePath = askUserQuestionsWriteGateBasePath(deps);
   const response = structured.response;
+  let verifiedGateIds: string[] = [];
   await runSerializedWorkflowOperation(async () => {
     if (writeGate.applyAskUserQuestionsGateResult) {
-      writeGate.applyAskUserQuestionsGateResult({
+      // Partial rounds (some gates verified, another declined/unanswered)
+      // still report the gates they did verify (#2653).
+      const result = writeGate.applyAskUserQuestionsGateResult({
         basePath,
         questions: structured.questions,
         details: structured,
-      });
+      }) as { verifiedGateIds?: string[] } | undefined;
+      if (Array.isArray(result?.verifiedGateIds)) {
+        verifiedGateIds = result.verifiedGateIds.filter((id): id is string => typeof id === 'string');
+      }
       return;
     }
 
@@ -795,8 +817,10 @@ async function recordAskUserQuestionsGateResult(
       writeGate.markApprovalGateVerified(question.id, basePath);
       writeGate.markDepthVerified(writeGate.extractDepthVerificationMilestoneId(question.id), basePath);
       writeGate.clearPendingGate(basePath);
+      verifiedGateIds.push(question.id);
     }
   });
+  return verifiedGateIds;
 }
 
 /**
@@ -898,9 +922,13 @@ export async function askUserQuestionsHandler(
           response: buildAskUserQuestionsRoundResult(questions, elicitation),
           cancelled: false,
         };
-        await recordAskUserQuestionsGateResult(structured, deps);
+        const verifiedGateIds = await recordAskUserQuestionsGateResult(structured, deps);
+        if (verifiedGateIds.length > 0) structured.verified_gates = verifiedGateIds;
         return {
-          content: [{ type: 'text' as const, text: formatAskUserQuestionsElicitResult(questions, elicitation) }],
+          content: [{
+            type: 'text' as const,
+            text: formatAskUserQuestionsElicitResult(questions, elicitation, verifiedGateIds),
+          }],
           structuredContent: structured as unknown as Record<string, unknown>,
         };
       }
@@ -1007,7 +1035,8 @@ export async function askUserQuestionsHandler(
               response: null,
               cancelled: true,
             };
-        await recordAskUserQuestionsGateResult(acceptedStructured, deps);
+        const remoteVerifiedGateIds = await recordAskUserQuestionsGateResult(acceptedStructured, deps);
+        if (remoteVerifiedGateIds.length > 0) acceptedStructured.verified_gates = remoteVerifiedGateIds;
         return {
           content: [{ type: 'text' as const, text: remoteResult.content[0]?.text ?? '' }],
           structuredContent: acceptedStructured as unknown as Record<string, unknown>,
@@ -1392,18 +1421,41 @@ export async function createMcpServer(
   // -----------------------------------------------------------------------
   // gsd_resolve_blocker — resolve a pending blocker
   // -----------------------------------------------------------------------
+  //
+  // Two kinds of blocker:
+  //   1. A UI request that a live session waits on. It exists only while the
+  //      session's child process runs, so it is answered through the session.
+  //   2. An open escalation question in the project database. It is a row, so
+  //      it is resolved from the database and needs no session (it works after
+  //      a server restart).
+  // -----------------------------------------------------------------------
   server.tool(
     'gsd_resolve_blocker',
-    'Resolve a pending blocker in a GSD session by sending a response to the UI request.',
+    'Resolve a pending blocker. With sessionId: answer the UI request that the session waits on. With projectDir: resolve the open escalation stored in the project database (this works after a server restart); sessionId is then not used. For an escalation the response is "<choice> [rationale]"; choice is an option id, "accept" (the recommendation), or "reject-blocker".',
     {
-      sessionId: z.string().describe('Session ID returned from gsd_execute'),
+      sessionId: z.string().optional().describe('Session ID returned from gsd_execute'),
+      projectDir: z.string().optional().describe('Absolute path to the project directory. Resolves the open escalation in the project database.'),
+      questionId: z.string().optional().describe('The open question to resolve (openQuestions in gsd_project_snapshot). Required only when more than one escalation is open.'),
       response: z.string().describe('Response to send for the pending blocker'),
     },
-    async (args: Record<string, unknown>) => {
-      const { sessionId, response } = args as { sessionId: string; response: string };
+    async (args: Record<string, unknown>, extra?: McpToolExtra) => {
+      const { sessionId, projectDir, questionId, response } = args as {
+        sessionId?: string; projectDir?: string; questionId?: string; response: string;
+      };
       try {
-        await sessionManager.resolveBlocker(sessionId, response);
-        return jsonContent({ resolved: true });
+        if (!projectDir) {
+          if (!sessionId) return errorContent('Either sessionId or projectDir must be provided');
+          if (!sessionManager.getSession(sessionId)) {
+            return errorContent(`Session not found: ${sessionId}. Pass projectDir to resolve a blocker that the project database holds.`);
+          }
+          await sessionManager.resolveBlocker(sessionId, response);
+          return jsonContent({ resolved: true });
+        }
+        const result = await resolvePersistedBlockerViaBridge(validateProjectDir(projectDir), response, questionId, extra);
+        if (result.status !== 'resolved' && result.status !== 'rejected-to-blocker') {
+          return errorContent(result.message);
+        }
+        return jsonContent({ resolved: true, source: 'database', ...result });
       } catch (err) {
         return errorContent(err instanceof Error ? err.message : String(err));
       }

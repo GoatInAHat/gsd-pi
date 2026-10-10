@@ -59,6 +59,7 @@ const SCHEMA_DB_WRITER_FILES = new Set([
   "db-canonical-foundation-schema.ts",
   "db-attempt-recovery-schema.ts",
   "db-conversation-foundation-schema.ts",
+  "db-decision-statement-impact-schema.ts",
   "db-lifecycle-coverage-schema.ts",
   "db-lifecycle-foundation-schema.ts",
   "db-projection-import-kernel-closeout-foundation-schema.ts",
@@ -368,6 +369,7 @@ test("dead legacy writers, importers and readers are not exported", async () => 
   const removed: Array<[string, string[]]> = [
     ["../gsd-db.js", [
       "reopenMilestoneStatus",
+      "updateMilestoneStatus",
       "deleteTask",
       "deleteSlice",
       "syncSliceDependencies",

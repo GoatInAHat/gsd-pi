@@ -59,6 +59,24 @@ interface GsdMcpBridge {
   saveRequirementToDb: (...args: any[]) => any;
   updateRequirementInDb: (...args: any[]) => any;
   queryJournal: (...args: any[]) => any;
+  resolvePendingEscalation: (
+    projectDir: string,
+    response: string,
+    invocation: ExecutionInvocation,
+    questionId?: string,
+  ) => Promise<PersistedBlockerResolution>;
+}
+
+/** The outcome of answering the open escalation question in the project database. */
+export interface PersistedBlockerResolution {
+  status: "resolved" | "not-found" | "already-resolved" | "invalid-choice" | "rejected-to-blocker";
+  message: string;
+  questionId: string;
+  milestoneId: string;
+  sliceId: string;
+  taskId: string;
+  decisionId?: string;
+  decisionError?: string;
 }
 
 type WorkflowDatabaseOpenResult =
@@ -224,6 +242,20 @@ type WorkflowToolExecutors = {
     basePath: string,
     invocation: PlanningInvocation,
   ) => Promise<unknown>;
+  executeCheckpointSave: (
+    params: {
+      milestoneId: string;
+      sliceId?: string;
+      taskId?: string;
+      kind: "pause" | "handoff";
+      confirmedContext: string;
+      unresolved?: string;
+      evidence?: string;
+      nextAction: string;
+    },
+    basePath: string,
+    invocation: PlanningInvocation,
+  ) => Promise<unknown>;
   executeSliceComplete: (
     params: {
       sliceId: string;
@@ -361,6 +393,16 @@ type WorkflowToolExecutors = {
       verdict: "pass" | "flag" | "omitted";
       rationale: string;
       findings?: string;
+    },
+    basePath: string,
+    invocation: ExecutionInvocation,
+  ) => Promise<unknown>;
+  executeHookVerdictSave: (
+    params: {
+      hookName: string;
+      unitId: string;
+      verdict: string;
+      rationale: string;
     },
     basePath: string,
     invocation: ExecutionInvocation,
@@ -808,44 +850,94 @@ function parseWorkflowArgs<T extends { projectDir?: string }>(
   };
 }
 
+/**
+ * Required function exports for a workflow executor bridge module. Kept beside
+ * {@link isWorkflowToolExecutors} so the shape check and its mismatch
+ * diagnostics (#2741) can never drift apart.
+ */
+const WORKFLOW_TOOL_EXECUTOR_FUNCTION_EXPORTS = [
+  "runInToolSession",
+  "executeMilestoneStatus",
+  "executePlanMilestone",
+  "executePlanSlice",
+  "executeReplanSlice",
+  "executeReplanTask",
+  "executeReworkBriefSave",
+  "executeCheckpointSave",
+  "executeSliceComplete",
+  "executeCompleteMilestone",
+  "executeValidateMilestone",
+  "executeReassessRoadmap",
+  "executeSaveGateResult",
+  "executeHookVerdictSave",
+  "executeSummarySave",
+  "executeUatResultSave",
+  "executeTaskComplete",
+  "executeTaskReopen",
+  "executeTaskRecoveryResume",
+  "executeTaskSettle",
+  "executeSliceReopen",
+  "executeSkipSlice",
+  "executeMilestoneReopen",
+  "executeMilestoneGenerateId",
+  "executeMilestonePark",
+  "executeMilestoneUnpark",
+  "executeMilestoneDiscard",
+  "executeMilestoneReorder",
+  "executeMilestoneSetDependencies",
+  "executeResearchDecisionSave",
+  "executeCaptureResolve",
+  "executeCaptureComplete",
+] as const;
+
+const WORKFLOW_WRITE_GATE_FUNCTION_EXPORTS = [
+  "loadWriteGateSnapshot",
+  "shouldBlockPendingGateInSnapshot",
+  "shouldBlockQueueExecutionInSnapshot",
+] as const;
+
 function isWorkflowToolExecutors(value: unknown): value is WorkflowToolExecutors {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
-  const functionExports = [
-    "runInToolSession",
-    "executeMilestoneStatus",
-    "executePlanMilestone",
-    "executePlanSlice",
-    "executeReplanSlice",
-    "executeReplanTask",
-    "executeReworkBriefSave",
-    "executeSliceComplete",
-    "executeCompleteMilestone",
-    "executeValidateMilestone",
-    "executeReassessRoadmap",
-    "executeSaveGateResult",
-    "executeSummarySave",
-    "executeUatResultSave",
-    "executeTaskComplete",
-    "executeTaskReopen",
-    "executeTaskRecoveryResume",
-    "executeTaskSettle",
-    "executeSliceReopen",
-    "executeSkipSlice",
-    "executeMilestoneReopen",
-    "executeMilestoneGenerateId",
-    "executeMilestonePark",
-    "executeMilestoneUnpark",
-    "executeMilestoneDiscard",
-    "executeMilestoneReorder",
-    "executeMilestoneSetDependencies",
-    "executeResearchDecisionSave",
-    "executeCaptureResolve",
-    "executeCaptureComplete",
-  ];
-
   return Array.isArray(record.SUPPORTED_SUMMARY_ARTIFACT_TYPES) &&
-    functionExports.every((key) => typeof record[key] === "function");
+    WORKFLOW_TOOL_EXECUTOR_FUNCTION_EXPORTS.every((key) => typeof record[key] === "function");
+}
+
+/**
+ * Name exactly why a module failed the workflow executor shape check (#2741)
+ * so a bridge author sees the missing exports instead of a bare
+ * "module shape mismatch".
+ */
+function describeWorkflowExecutorShapeMismatch(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return `module does not export an object (got ${value === null ? "null" : typeof value})`;
+  }
+  const record = value as Record<string, unknown>;
+  const problems: string[] = [];
+  if (!Array.isArray(record.SUPPORTED_SUMMARY_ARTIFACT_TYPES)) {
+    problems.push("SUPPORTED_SUMMARY_ARTIFACT_TYPES is missing or not an array");
+  }
+  const missing = WORKFLOW_TOOL_EXECUTOR_FUNCTION_EXPORTS.filter(
+    (key) => typeof record[key] !== "function",
+  );
+  if (missing.length > 0) {
+    problems.push(`missing function exports: ${missing.join(", ")}`);
+  }
+  return problems.length > 0 ? problems.join("; ") : "unknown shape mismatch";
+}
+
+/** Same diagnostics for the write-gate bridge shape (#2741). */
+function describeWorkflowWriteGateShapeMismatch(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return `module does not export an object (got ${value === null ? "null" : typeof value})`;
+  }
+  const record = value as Record<string, unknown>;
+  const missing = WORKFLOW_WRITE_GATE_FUNCTION_EXPORTS.filter(
+    (key) => typeof record[key] !== "function",
+  );
+  return missing.length > 0
+    ? `missing function exports: ${missing.join(", ")}`
+    : "unknown shape mismatch";
 }
 
 function getSupportedSummaryArtifactTypes(executors: WorkflowToolExecutors): readonly string[] {
@@ -898,23 +990,39 @@ function buildBridgeImportCandidates(relativePath: string): string[] {
   return [...new Set(candidates)];
 }
 
-function getWriteGateModuleCandidates(): string[] {
-  const candidates: string[] = [];
+function getWriteGateModuleCandidates(): { candidate: string; explicit: boolean }[] {
+  const candidates: { candidate: string; explicit: boolean }[] = [];
   const explicitModule = process.env.GSD_WORKFLOW_WRITE_GATE_MODULE?.trim();
   if (explicitModule) {
     if (/^[a-z]{2,}:/i.test(explicitModule) && !explicitModule.startsWith("file:")) {
       throw new Error("GSD_WORKFLOW_WRITE_GATE_MODULE only supports file: URLs or filesystem paths.");
     }
     warnCustomWorkflowModule("GSD_WORKFLOW_WRITE_GATE_MODULE", explicitModule);
-    candidates.push(explicitModule.startsWith("file:") ? explicitModule : toFileUrl(explicitModule));
+    candidates.push({
+      candidate: explicitModule.startsWith("file:") ? explicitModule : toFileUrl(explicitModule),
+      explicit: true,
+    });
   }
 
   candidates.push(
     ...buildBridgeImportCandidates("../../../src/resources/extensions/gsd/mcp-bridge.js")
-      .map((p) => new URL(p, import.meta.url).href),
+      .map((p) => new URL(p, import.meta.url).href)
+      .map((candidate) => ({ candidate, explicit: false })),
   );
 
-  return [...new Set(candidates)];
+  // Dedupe by candidate URL, keeping first-seen position. If the configured
+  // module collides with an auto-discovered candidate, it stays marked
+  // explicit so its failure still fails closed (#2741).
+  const deduped = new Map<string, { candidate: string; explicit: boolean }>();
+  for (const entry of candidates) {
+    const existing = deduped.get(entry.candidate);
+    if (existing) {
+      existing.explicit = existing.explicit || entry.explicit;
+    } else {
+      deduped.set(entry.candidate, { ...entry });
+    }
+  }
+  return [...deduped.values()];
 }
 
 function toFileUrl(modulePath: string): string {
@@ -997,23 +1105,41 @@ async function loadProjectPreferences(projectDir: string): Promise<unknown | nul
   }
 }
 
-function getWorkflowExecutorModuleCandidates(env: NodeJS.ProcessEnv = process.env): string[] {
-  const candidates: string[] = [];
+function getWorkflowExecutorModuleCandidates(
+  env: NodeJS.ProcessEnv = process.env,
+): { candidate: string; explicit: boolean }[] {
+  const candidates: { candidate: string; explicit: boolean }[] = [];
   const explicitModule = env.GSD_WORKFLOW_EXECUTORS_MODULE?.trim();
   if (explicitModule) {
     if (/^[a-z]{2,}:/i.test(explicitModule) && !explicitModule.startsWith("file:")) {
       throw new Error("GSD_WORKFLOW_EXECUTORS_MODULE only supports file: URLs or filesystem paths.");
     }
     warnCustomWorkflowModule("GSD_WORKFLOW_EXECUTORS_MODULE", explicitModule);
-    candidates.push(explicitModule.startsWith("file:") ? explicitModule : toFileUrl(explicitModule));
+    candidates.push({
+      candidate: explicitModule.startsWith("file:") ? explicitModule : toFileUrl(explicitModule),
+      explicit: true,
+    });
   }
 
   candidates.push(
     ...buildBridgeImportCandidates("../../../src/resources/extensions/gsd/tools/workflow-tool-executors.js")
-      .map((p) => new URL(p, import.meta.url).href),
+      .map((p) => new URL(p, import.meta.url).href)
+      .map((candidate) => ({ candidate, explicit: false })),
   );
 
-  return [...new Set(candidates)];
+  // Dedupe by candidate URL, keeping first-seen position. If the configured
+  // module collides with an auto-discovered candidate, it stays marked
+  // explicit so its failure still fails closed (#2741).
+  const deduped = new Map<string, { candidate: string; explicit: boolean }>();
+  for (const entry of candidates) {
+    const existing = deduped.get(entry.candidate);
+    if (existing) {
+      existing.explicit = existing.explicit || entry.explicit;
+    } else {
+      deduped.set(entry.candidate, { ...entry });
+    }
+  }
+  return [...deduped.values()];
 }
 
 export function hasWorkflowToolBridgeConfiguration(
@@ -1053,16 +1179,41 @@ async function getWorkflowToolExecutors(): Promise<WorkflowToolExecutors> {
   if (!workflowToolExecutorsPromise) {
     workflowToolExecutorsPromise = (async () => {
       const attempts: string[] = [];
-      for (const candidate of getWorkflowExecutorModuleCandidates()) {
+      for (const { candidate, explicit } of getWorkflowExecutorModuleCandidates()) {
+        let loaded: unknown;
         try {
-          const loaded = await import(candidate);
-          if (isWorkflowToolExecutors(loaded)) {
-            return loaded;
-          }
-          attempts.push(`${candidate} (module shape mismatch)`);
+          loaded = await import(candidate);
         } catch (err) {
-          attempts.push(`${candidate} (${err instanceof Error ? err.message : String(err)})`);
+          const reason = err instanceof Error ? err.message : String(err);
+          if (explicit) {
+            // #2741: an operator-configured module is a statement of intent.
+            // Silently substituting the packaged executors would fail open
+            // while the startup warning still announces the custom module, so
+            // configured bridge failures stay fail-closed (see README:
+            // "the MCP host sees a startup failure instead of a partially
+            // advertised workflow surface"). Only auto-discovered co-located
+            // candidates fall through.
+            throw new Error(
+              `GSD_WORKFLOW_EXECUTORS_MODULE is set to ${candidate} but the module failed to import (${reason}). ` +
+              `Refusing to fall back to the packaged workflow executors; fix the module or unset GSD_WORKFLOW_EXECUTORS_MODULE.`,
+            );
+          }
+          attempts.push(`${candidate} (${reason})`);
+          continue;
         }
+        if (isWorkflowToolExecutors(loaded)) {
+          return loaded;
+        }
+        const detail = describeWorkflowExecutorShapeMismatch(loaded);
+        if (explicit) {
+          // #2741: fail loud on a configured module that imports but does not
+          // satisfy the executor contract — see the import-error branch above.
+          throw new Error(
+            `GSD_WORKFLOW_EXECUTORS_MODULE is set to ${candidate} but the module failed the workflow executor shape check (${detail}). ` +
+            `Refusing to fall back to the packaged workflow executors; fix the module or unset GSD_WORKFLOW_EXECUTORS_MODULE.`,
+          );
+        }
+        attempts.push(`${candidate} (module shape mismatch: ${detail})`);
       }
 
       throw new Error(
@@ -1109,21 +1260,42 @@ async function getWorkflowWriteGateModule(): Promise<WorkflowWriteGateModule> {
   if (!workflowWriteGatePromise) {
     workflowWriteGatePromise = (async () => {
       const attempts: string[] = [];
-      for (const candidate of getWriteGateModuleCandidates()) {
+      for (const { candidate, explicit } of getWriteGateModuleCandidates()) {
+        let loaded: unknown;
         try {
-          const loaded = await import(candidate);
-          if (
-            loaded &&
-            typeof loaded.loadWriteGateSnapshot === "function" &&
-            typeof loaded.shouldBlockPendingGateInSnapshot === "function" &&
-            typeof loaded.shouldBlockQueueExecutionInSnapshot === "function"
-          ) {
-            return loaded as WorkflowWriteGateModule;
-          }
-          attempts.push(`${candidate} (module shape mismatch)`);
+          loaded = await import(candidate);
         } catch (err) {
-          attempts.push(`${candidate} (${err instanceof Error ? err.message : String(err)})`);
+          const reason = err instanceof Error ? err.message : String(err);
+          if (explicit) {
+            // #2741: fail closed for a configured write-gate module — same
+            // rationale as the executor loader.
+            throw new Error(
+              `GSD_WORKFLOW_WRITE_GATE_MODULE is set to ${candidate} but the module failed to import (${reason}). ` +
+              `Refusing to fall back to the packaged write gate; fix the module or unset GSD_WORKFLOW_WRITE_GATE_MODULE.`,
+            );
+          }
+          attempts.push(`${candidate} (${reason})`);
+          continue;
         }
+        const record = loaded as Record<string, unknown> | null | undefined;
+        if (
+          record &&
+          typeof record.loadWriteGateSnapshot === "function" &&
+          typeof record.shouldBlockPendingGateInSnapshot === "function" &&
+          typeof record.shouldBlockQueueExecutionInSnapshot === "function"
+        ) {
+          return loaded as WorkflowWriteGateModule;
+        }
+        const detail = describeWorkflowWriteGateShapeMismatch(loaded);
+        if (explicit) {
+          // #2741: fail loud on a configured module that imports but does not
+          // satisfy the write-gate contract — see the executor loader.
+          throw new Error(
+            `GSD_WORKFLOW_WRITE_GATE_MODULE is set to ${candidate} but the module failed the write-gate shape check (${detail}). ` +
+            `Refusing to fall back to the packaged write gate; fix the module or unset GSD_WORKFLOW_WRITE_GATE_MODULE.`,
+          );
+        }
+        attempts.push(`${candidate} (module shape mismatch: ${detail})`);
       }
 
       throw new Error(
@@ -1376,6 +1548,31 @@ async function readDbViaBridge<T>(
   });
 }
 
+/**
+ * Resolve the pending blocker that the project database holds
+ * (gsd_resolve_blocker): the open escalation question, through its answer
+ * Domain Operation. It needs no session, so it works after a server restart.
+ * It is a workflow mutation: the write gate applies, and the answer records
+ * the MCP caller, not the user.
+ */
+export async function resolvePersistedBlockerViaBridge(
+  projectDir: string,
+  response: string,
+  questionId?: string,
+  extra?: WorkflowMcpRequestExtra,
+): Promise<PersistedBlockerResolution> {
+  await enforceWorkflowWriteGate("gsd_resolve_blocker", projectDir);
+  const invocation = mcpExecutionInvocation("gsd_resolve_blocker", extra);
+  return runSerializedWorkflowOperation(async () => {
+    const bridge = await importBridgeModule();
+    const opened = bridge.openExistingWorkflowDatabase(projectDir);
+    if (!opened.ok) {
+      throw opened.error ?? new Error(`No pending blocker: the project database is not available (${opened.reason}).`);
+    }
+    return bridge.resolvePendingEscalation(projectDir, response, invocation, questionId);
+  });
+}
+
 /** Progress payload from the project database (gsd_progress). */
 export async function readProjectProgressViaBridge(projectDir: string): Promise<unknown | null> {
   return readDbViaBridge(projectDir, (bridge) => bridge.readProgressFromDb(projectDir));
@@ -1483,6 +1680,7 @@ type DecisionRowLike = {
 	revisable?: unknown;
 	source?: unknown;
 	superseded_by?: unknown;
+	impacts?: unknown;
 };
 
 function decisionField(value: unknown): string {
@@ -1494,6 +1692,28 @@ function decisionField(value: unknown): string {
 // values for full-row fidelity.
 function decisionListField(value: unknown): string {
 	return decisionField(value).replace(/\s+/g, " ").trim();
+}
+
+function decisionImpactRows(decision: DecisionRowLike): Array<Record<string, unknown>> {
+	return Array.isArray(decision.impacts)
+		? decision.impacts.filter(
+				(impact): impact is Record<string, unknown> =>
+					impact !== null && typeof impact === "object",
+			)
+		: [];
+}
+
+function decisionImpactTarget(impact: Record<string, unknown>): string {
+	const triple = [impact.milestone_id, impact.slice_id, impact.task_id]
+		.filter((value) => value !== null && value !== undefined)
+		.map((value) => String(value))
+		.join("/");
+	return triple || decisionField(impact.target_scope);
+}
+
+function formatDecisionImpact(impact: Record<string, unknown>): string {
+	const note = decisionListField(impact.payload);
+	return `Impact: ${decisionField(impact.impact_kind) || "?"} ${decisionImpactTarget(impact)}${note ? ` — ${note}` : ""}`;
 }
 
 function formatDecisionGetContent(decision: DecisionRowLike): string {
@@ -1509,6 +1729,7 @@ function formatDecisionGetContent(decision: DecisionRowLike): string {
 		...(source ? [`Source: ${source}`] : []),
 		`Revisable: ${field(decision.revisable, "-")}`,
 		`Superseded by: ${field(decision.superseded_by, "none")}`,
+		...decisionImpactRows(decision).map(formatDecisionImpact),
 	].join("\n");
 }
 
@@ -1517,10 +1738,14 @@ function formatDecisionListLine(decision: DecisionRowLike): string {
 	const excerpt = rationale.length > DECISION_LIST_RATIONALE_EXCERPT_CHARS
 		? `${rationale.slice(0, DECISION_LIST_RATIONALE_EXCERPT_CHARS)}…`
 		: rationale;
+	const impactRows = decisionImpactRows(decision);
 	const segments = [
 		`${decisionListField(decision.id) || "?"} [${decisionListField(decision.scope) || "-"}] ${decisionListField(decision.decision) || "-"}`,
 		decisionListField(decision.choice) ? `choice: ${decisionListField(decision.choice)}` : "",
 		excerpt ? `rationale: ${excerpt}` : "",
+		impactRows.length > 0
+			? `impacts: ${impactRows.map((impact) => `${decisionListField(impact.impact_kind)} ${decisionImpactTarget(impact)}`).join("; ")}`
+			: "",
 	].filter(Boolean);
 	const supersededBy = decisionListField(decision.superseded_by);
 	return `- ${segments.join(" | ")}${supersededBy ? ` (superseded by ${supersededBy})` : ""}`;
@@ -1773,6 +1998,19 @@ async function handleReworkBriefSave(
   );
 }
 
+async function handleCheckpointSave(
+  projectDir: string,
+  args: z.infer<typeof checkpointSaveSchema>,
+  invocation: PlanningInvocation,
+): Promise<unknown> {
+  await enforceWorkflowWriteGate("gsd_checkpoint_save", projectDir, args.milestoneId);
+  const { executeCheckpointSave } = await getWorkflowToolExecutors();
+  const { projectDir: _projectDir, ...params } = args;
+  return adaptExecutorResult(
+    await runSerializedWorkflowOperation(() => executeCheckpointSave(params, projectDir, invocation)),
+  );
+}
+
 async function handleCompleteMilestone(
   projectDir: string,
   args: z.infer<typeof completeMilestoneSchema>,
@@ -1926,6 +2164,18 @@ async function handleSaveGateResult(
   const { projectDir: _projectDir, ...params } = args;
   return adaptExecutorResult(
     await runSerializedWorkflowOperation(() => executeSaveGateResult(params, projectDir, invocation)),
+  );
+}
+
+async function handleHookVerdictSave(
+  projectDir: string,
+  args: z.infer<typeof hookVerdictSaveSchema>,
+  invocation: ExecutionInvocation,
+): Promise<unknown> {
+  const { executeHookVerdictSave } = await getWorkflowToolExecutors();
+  const { projectDir: _projectDir, ...params } = args;
+  return adaptExecutorResult(
+    await runSerializedWorkflowOperation(() => executeHookVerdictSave(params, projectDir, invocation)),
   );
 }
 
@@ -2294,6 +2544,15 @@ const saveGateResultParams = {
 };
 const saveGateResultSchema = z.object(saveGateResultParams);
 
+const hookVerdictSaveParams = {
+  projectDir: projectDirParam,
+  hookName: nonEmptyString("hookName").describe("Configured post_unit_hooks entry name"),
+  unitId: nonEmptyString("unitId").describe("Trigger unit id, e.g. M001/S01/T01 or M001"),
+  verdict: z.enum(["pass", "advisory", "needs-rework", "needs-remediation", "needs-attention"]).describe("Hook gate verdict"),
+  rationale: nonEmptyString("rationale").describe("Why the hook reached the verdict"),
+};
+const hookVerdictSaveSchema = z.object(hookVerdictSaveParams);
+
 const saveGateResultIncomingParams = {
   projectDir: projectDirParam,
   milestoneId: z.string().optional().describe("Milestone ID (e.g. M001). Required unless it can be inferred from the active worktree or pending gate row."),
@@ -2395,6 +2654,19 @@ const reworkBriefSaveParams = {
 };
 const reworkBriefSaveSchema = z.object(reworkBriefSaveParams);
 
+const checkpointSaveParams = {
+  projectDir: projectDirParam,
+  milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M001)"),
+  sliceId: z.string().optional().describe("Slice ID (e.g. S01); omit for a milestone checkpoint"),
+  taskId: z.string().optional().describe("Task ID (e.g. T01); pass it when a task is in progress"),
+  kind: z.enum(["pause", "handoff"]).describe("pause: work stops and the same work resumes; handoff: another session or a later phase picks the work up"),
+  confirmedContext: nonEmptyString("confirmedContext").describe("What is done and confirmed, with evidence"),
+  unresolved: z.string().optional().describe("Remaining work, open questions, and what not to do"),
+  evidence: z.string().optional().describe("Commands, files and results that support the confirmed context"),
+  nextAction: nonEmptyString("nextAction").describe("The one concrete action the next session takes first"),
+};
+const checkpointSaveSchema = z.object(checkpointSaveParams);
+
 const sliceCompleteParams = {
   projectDir: projectDirParam,
   sliceId: nonEmptyString("sliceId").describe("Slice ID (e.g. S01)"),
@@ -2494,6 +2766,14 @@ const decisionSaveParams = {
   when_context: z.string().optional().describe("When/context for the decision"),
   made_by: z.enum(["human", "agent", "collaborative"]).optional().describe("Who made the decision"),
   supersedes: z.string().optional().describe("ID of the active decision that this decision replaces (e.g. D003). The old decision is marked superseded."),
+  impacts: z.array(z.object({
+    kind: z.enum(["revalidates", "supersedes", "blocks"]).describe("Impact kind: 'revalidates' marks scope work that must be revisited, 'supersedes' names the decision this replaces, 'blocks' marks scope work that cannot proceed."),
+    milestone_id: z.string().optional().describe("Target milestone ID (e.g. M001)."),
+    slice_id: z.string().optional().describe("Target slice ID; requires milestone_id."),
+    task_id: z.string().optional().describe("Target task ID; requires milestone_id and slice_id."),
+    scope: z.string().optional().describe("Free scope text for targets that have no unit ID. Give milestone_id/slice_id/task_id or scope."),
+    note: z.string().optional().describe("Why this impact holds."),
+  })).optional().describe("Optional downstream impacts recorded with the decision. Omit or pass [] for none. Each needs a target: milestone_id (optionally slice_id/task_id) or free-text scope."),
 };
 const decisionSaveSchema = z.object(decisionSaveParams);
 
@@ -3523,6 +3803,20 @@ export function registerWorkflowTools(
   );
 
   server.tool(
+    "gsd_checkpoint_save",
+    "Save a Work Checkpoint row (pause or handoff) for a milestone, slice or task. The row is the resume state; CONTINUE.md is rendered from it.",
+    checkpointSaveParams,
+    async (args: Record<string, unknown>, extra?: WorkflowMcpRequestExtra) => {
+      const parsed = parseWorkflowArgs(checkpointSaveSchema, args);
+      return handleCheckpointSave(
+        parsed.projectDir,
+        parsed,
+        mcpPlanningInvocation("gsd_checkpoint_save", extra),
+      );
+    },
+  );
+
+  server.tool(
     "gsd_slice_complete",
     "Commit evidence-backed Slice completion in one revision- and Authority-Epoch-fenced SQLite operation, then refresh readable projections; projection failure is reported as stale.",
     sliceCompleteParams,
@@ -3689,6 +3983,17 @@ export function registerWorkflowTools(
         parsed,
         mcpWorkflowExecutionInvocation("gsd_save_gate_result", extra),
       );
+    },
+  );
+
+  server.tool(
+    "gsd_hook_verdict_save",
+    "Record a post-unit hook gate verdict in the GSD database. The workflow reads this recorded verdict; the artifact file is a report for the operator.",
+    hookVerdictSaveParams,
+    async (args: Record<string, unknown>, extra?: WorkflowMcpRequestExtra) => {
+      const parsed = parseWorkflowArgs(hookVerdictSaveSchema, args);
+      const invocation = mcpWorkflowExecutionInvocation("gsd_hook_verdict_save", extra);
+      return handleHookVerdictSave(parsed.projectDir, parsed, invocation);
     },
   );
 

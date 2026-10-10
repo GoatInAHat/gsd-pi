@@ -7,9 +7,10 @@
 //
 //   Gate                       Expected-fail checks and the package that makes them pass
 //   G1 files deleted           none
-//   G2 files poisoned          prompt P23, no projection reads P23
+//   G2 files poisoned          none
 //   G3 canonical wins          P23
-//   G4 operation-only writes   gsd_slice_complete P35, gsd_summary_save task SUMMARY P12
+//   G4 operation-only writes   gsd_summary_save task SUMMARY P12
+//                              (gsd_slice_complete is operation-only since P35)
 //   G5 render failure          handler writes no projection P12
 //   G6 evidence before unlock  slice P24, milestone P27
 //   G7 epoch fence             none
@@ -170,8 +171,8 @@ describe("G2: files-poisoned run", () => {
     assert.deepEqual(poisoned.dispatch, control.dispatch, "dispatch decision comes from DB rows");
     assert.deepEqual(poisoned.artifacts, control.artifacts, "artifact verification ignores file content");
     assert.deepEqual(snapshotWorkflowTables(), tablesBefore, "decision reads write no workflow row");
-    expectedFail("P23", () => assert.equal(poisoned.prompt, control.prompt));
-    expectedFail("P23", () => assert.deepEqual(projectionReads, []));
+    assert.equal(poisoned.prompt, control.prompt, "the prompt takes its narrative from artifact rows");
+    assert.deepEqual(projectionReads, [], "a decision reads no projection file");
 
     await reconcileBeforeDispatch(base);
     assert.deepEqual(snapshotWorkflowTables(), tablesBefore, "reconciliation writes no workflow row from a file");
@@ -282,8 +283,14 @@ describe("G4: the write fence used by the per-tool gates", () => {
       };
     });
     const fenceAfterOperation = [...fence.violations];
+    // The task row is adopted with its aligned canonical status so the generic
+    // writer's own guards pass and the write reaches the fenced SQL below.
+    seedLifecycle(
+      { itemKind: "task", milestoneId: "M001", sliceId: "S02", taskId: "T01", lifecycleStatus: "ready" },
+      "fence-t01",
+    );
     assert.throws(
-      () => updateTaskStatus("M001", "S02", "T01", "complete"),
+      () => updateTaskStatus("M001", "S02", "T01", "in_progress"),
       /write to workflow table "tasks" outside a Domain Operation/,
     );
     const refused = /write to workflow table "tasks" outside a Domain Operation/;
@@ -445,8 +452,13 @@ describe("G8: zero legacy counters", () => {
       "decision reads hit no counted legacy path",
     );
 
-    // updateTaskStatus is a legacy-only status writer: no Domain Operation, no lifecycle row.
-    updateTaskStatus("M001", "S02", "T01", "complete");
+    // The generic status writer refuses rows without a canonical lifecycle row
+    // (the fixture rows are unadopted) — and either way no telemetry counter is
+    // wired for a raw status write (P36).
+    assert.throws(
+      () => updateTaskStatus("M001", "S02", "T01", "complete"),
+      /no canonical lifecycle row/,
+    );
     expectedFail("P36", () =>
       assert.ok(Object.values(getLegacyTelemetry()).some((count) => count > 0)));
   });

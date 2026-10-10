@@ -16,8 +16,8 @@
 // The separate `.gsd/unit-claims.db` (unit-ownership.ts) is an intentionally
 // independent store and is excluded from this invariant.
 import { createHash } from "node:crypto";
-import { dirname, join } from "node:path";
-import { renamePhaseDirOnTitleChange } from "./phase-dir-rename.js";
+import { basename, dirname, join } from "node:path";
+import { canonicalPhaseDirExists, renamePhaseDirOnTitleChange } from "./phase-dir-rename.js";
 import type { Decision, Requirement, GateRow, GateId, GateScope, GateStatus, GateVerdict } from "./types.js";
 import { GSDError, GSD_STALE_STATE } from "./errors.js";
 import { getGateIdsForTurn, type OwnerTurn } from "./gate-registry.js";
@@ -77,14 +77,12 @@ export * from "./legacy-import-restore-assessment.js";
 export * from "./legacy-import-live-restore.js";
 // Query Module (read-only seam) — extracted from the single-writer file.
 export * from "./db/queries.js";
-// Domain Write Operations (Hierarchy Status Cascades).
-export * from "./db/writers/cascades.js";
 
 export type { ArtifactRow, MilestoneRow } from "./db-milestone-artifact-rows.js";
 export type { ActiveTaskSummary, IdStatusSummary, TaskStatusCounts } from "./db-lightweight-query-rows.js";
 export type { SliceRow, TaskRow } from "./db-task-slice-rows.js";
 
-import { TASK_HAS_ESCALATION_SQL, TERMINAL_STATUS_SQL } from "./db/sql-constants.js";
+import { TERMINAL_STATUS_SQL } from "./db/sql-constants.js";
 import { applyStatusTransition } from "./db/writers/status.js";
 export { projectCanonicalStatusToLegacy } from "./db/writers/status.js";
 import {
@@ -345,6 +343,41 @@ export function insertMilestone(m: {
   return (result.changes ?? 0) > 0;
 }
 
+/**
+ * Base path for the post-title phase-dir rename. `dirname(dirname(dbPath))` is
+ * a project root only when the database lives directly under a `.gsd`
+ * directory. Under external state (`.gsd` → a per-project state directory) the
+ * resolved dbPath has a different parent, and the real checkout root is the
+ * binding recorded in `project_authority` at open (#2633). Falls back to the
+ * legacy derivation when no binding is readable.
+ */
+function resolvePhaseRenameBase(dbPath: string): string {
+  if (basename(dirname(dbPath)) === ".gsd") return dirname(dirname(dbPath));
+  try {
+    const row = getDbOrNull()!.prepare(
+      "SELECT project_root_realpath FROM project_authority WHERE singleton = 1",
+    ).get() as { project_root_realpath?: unknown } | undefined;
+    const bound = row?.project_root_realpath;
+    if (typeof bound === "string" && bound.trim()) return bound;
+  } catch {
+    // Unreadable/absent binding — keep the legacy derivation.
+  }
+  return dirname(dirname(dbPath));
+}
+
+/** True when the milestone has artifact rows under a phase directory. */
+function milestoneHasPhaseArtifactRows(milestoneId: string): boolean {
+  const phaseNumPrefix = String(milestoneIdToPhaseNum(milestoneId)).padStart(2, "0");
+  return getDbOrNull()!.prepare(
+    `SELECT 1 AS present FROM artifacts
+      WHERE milestone_id = :milestone_id
+        AND path LIKE :phase_prefix LIMIT 1`,
+  ).get({
+    ":milestone_id": milestoneId,
+    ":phase_prefix": `${LAYOUT_SEGMENTS.level1}/${phaseNumPrefix}-%/%`,
+  }) !== undefined;
+}
+
 export function upsertMilestonePlanning(milestoneId: string, planning: Partial<MilestonePlanningRecord> & { title?: string; status?: string; depends_on?: string[] }): void {
   if (!getDbOrNull()!) throw new GSDError(GSD_STALE_STATE, "gsd-db: No database open");
   const previousTitle = (getDbOrNull()!.prepare(
@@ -391,18 +424,36 @@ export function upsertMilestonePlanning(milestoneId: string, planning: Partial<M
       ":requirement_coverage": planning.requirementCoverage ?? null,
       ":boundary_map_markdown": planning.boundaryMapMarkdown ?? null,
     });
-    const finalTitle = planning.title?.trim();
-    if (finalTitle) reconcileMilestonePhaseArtifactPaths(milestoneId, finalTitle);
   });
+  // Rename first, reconcile rows only when disk agrees (#2633): rewriting the
+  // rows while the rename silently no-ops (external state, missing dir) left
+  // the DB pointing at a directory that does not exist. A pathless database
+  // (`:memory:`) has no disk to agree with — keep the unconditional row
+  // reconcile it always had.
   const finalTitle = planning.title?.trim();
   const dbPath = getDbPath();
-  if (finalTitle && dbPath && dbPath !== ":memory:") {
-    try {
-      renamePhaseDirOnTitleChange(dirname(dirname(dbPath)), milestoneId, previousTitle, finalTitle);
-    } catch (error) {
-      logWarning("db", `phase dir rename after title update failed: ${(error as Error).message}`);
-    }
+  if (!finalTitle) return;
+  if (!dbPath || dbPath === ":memory:") {
+    transaction(() => reconcileMilestonePhaseArtifactPaths(milestoneId, finalTitle));
+    return;
   }
+  let diskAgrees = false;
+  try {
+    const base = resolvePhaseRenameBase(dbPath);
+    diskAgrees = renamePhaseDirOnTitleChange(base, milestoneId, previousTitle, finalTitle)
+      || canonicalPhaseDirExists(base, milestoneId, finalTitle);
+  } catch (error) {
+    logWarning("db", `phase dir rename after title update failed: ${(error as Error).message}`);
+  }
+  if (!diskAgrees) {
+    if (milestoneHasPhaseArtifactRows(milestoneId)) {
+      logWarning("db", `phase dir for ${milestoneId} was not renamed to its canonical name; artifact rows left at their on-disk paths`);
+    }
+    return;
+  }
+  // Outside the rename's try/catch: a reconciliation failure must propagate,
+  // not surface as a warned-and-ignored rename miss.
+  transaction(() => reconcileMilestonePhaseArtifactPaths(milestoneId, finalTitle));
 }
 
 export function insertSlice(s: {
@@ -436,6 +487,11 @@ export function insertSlice(s: {
     )
     ON CONFLICT (milestone_id, id) DO UPDATE SET
       title = CASE WHEN :raw_title IS NOT NULL THEN excluded.title ELSE slices.title END,
+      -- The ELSE arm is the pre-adoption import path: /gsd migrate writes
+      -- hierarchy rows before the Authority Epoch cutover (the import's
+      -- Restore Window defers the cutover), so no lifecycle row exists yet and
+      -- the imported status must land. Once a lifecycle row exists the status
+      -- is canonical and never changes here.
       status = CASE
         WHEN slices.status IN (${TERMINAL_STATUS_SQL}) OR EXISTS (
           SELECT 1 FROM workflow_item_lifecycles lifecycle
@@ -589,6 +645,8 @@ export function insertTask(t: {
     )
     ON CONFLICT(milestone_id, slice_id, id) DO UPDATE SET
       title = CASE WHEN NULLIF(:title, '') IS NOT NULL THEN :title ELSE tasks.title END,
+      -- Pre-adoption import path: see the insertSlice status CASE. With a
+      -- lifecycle row the status is canonical and never changes here.
       status = CASE WHEN EXISTS (
         SELECT 1 FROM workflow_item_lifecycles lifecycle
         WHERE lifecycle.project_id = (SELECT project_id FROM project_authority WHERE singleton = 1)
@@ -846,40 +904,10 @@ export function setSliceUatMd(milestoneId: string, sliceId: string, uatMd: strin
 // ─── ADR-011 Phase 2 escalation helpers ──────────────────────────────────
 
 /**
- * Set pause-on-escalation state on a task. Mutually exclusive with awaiting_review.
- * A new escalation has a new answer to deliver, so the override claim is reset.
+ * Clear the pause flags of an escalation from before the database stored
+ * escalations. A new escalation does not set these flags: its open question
+ * is the pause.
  */
-export function setTaskEscalationPending(
-  milestoneId: string, sliceId: string, taskId: string,
-): void {
-  if (!getDbOrNull()!) throw new GSDError(GSD_STALE_STATE, "gsd-db: No database open");
-  transaction(() => getDbOrNull()!.prepare(
-    `UPDATE tasks
-       SET escalation_pending = 1,
-           escalation_awaiting_review = 0,
-           escalation_override_applied_at = NULL
-     WHERE milestone_id = :mid AND slice_id = :sid AND id = :tid`,
-  ).run({ ":mid": milestoneId, ":sid": sliceId, ":tid": taskId }));
-}
-
-/**
- * Set awaiting-review state (the escalation requires explicit user review). Mutually exclusive with pending.
- * A new escalation has a new answer to deliver, so the override claim is reset.
- */
-export function setTaskEscalationAwaitingReview(
-  milestoneId: string, sliceId: string, taskId: string,
-): void {
-  if (!getDbOrNull()!) throw new GSDError(GSD_STALE_STATE, "gsd-db: No database open");
-  transaction(() => getDbOrNull()!.prepare(
-    `UPDATE tasks
-       SET escalation_awaiting_review = 1,
-           escalation_pending = 0,
-           escalation_override_applied_at = NULL
-     WHERE milestone_id = :mid AND slice_id = :sid AND id = :tid`,
-  ).run({ ":mid": milestoneId, ":sid": sliceId, ":tid": taskId }));
-}
-
-/** Clear escalation-pending and awaiting-review flags once the user has resolved it. */
 export function clearTaskEscalationFlags(
   milestoneId: string, sliceId: string, taskId: string,
 ): void {
@@ -891,31 +919,6 @@ export function clearTaskEscalationFlags(
      WHERE milestone_id = :mid AND slice_id = :sid AND id = :tid`,
   ).run({ ":mid": milestoneId, ":sid": sliceId, ":tid": taskId }));
 }
-
-/**
- * Atomically claim a resolved escalation override for injection into a downstream
- * task's prompt. Returns true if this caller claimed it (must inject), false if
- * another caller already claimed it (must skip).
- */
-export function claimEscalationOverride(
-  milestoneId: string, sliceId: string, sourceTaskId: string,
-): boolean {
-  if (!getDbOrNull()!) throw new GSDError(GSD_STALE_STATE, "gsd-db: No database open");
-  return immediateTransaction(() => {
-    const now = new Date().toISOString();
-    const result = getDbOrNull()!.prepare(
-      `UPDATE tasks
-         SET escalation_override_applied_at = :now
-       WHERE milestone_id = :mid AND slice_id = :sid AND id = :tid
-         AND escalation_override_applied_at IS NULL
-         AND ${TASK_HAS_ESCALATION_SQL}`,
-    ).run({ ":now": now, ":mid": milestoneId, ":sid": sliceId, ":tid": sourceTaskId });
-    // node:sqlite surfaces `changes` on the run result.
-    const changes = (result as { changes?: number }).changes ?? 0;
-    return changes > 0;
-  });
-}
-
 
 /** Set the blocker_source provenance field (used when rejecting an escalation). */
 export function setTaskBlockerSource(
@@ -970,23 +973,6 @@ export function setMilestoneQueueOrder(order: string[]): void {
     });
   });
 }
-
-/**
- * Update a milestone's status in the database.
- *
- * Generic status updates may close unadopted milestones, park/unpark open
- * milestones, or advance planned milestones. Adopted milestones close through
- * the canonical operation. Closed milestones reopen through
- * gsd_milestone_reopen.
- */
-export function updateMilestoneStatus(milestoneId: string, status: string, completedAt?: string | null, preserveCompletion?: boolean): void {
-  applyStatusTransition({ entity: "milestone", milestoneId, status, completedAt, preserveCompletion });
-}
-
-
-
-
-
 
 // ─── Lightweight Query Variants (hot-path optimized) ─────────────────────
 
@@ -1716,14 +1702,15 @@ export function setProjectRootBinding(root: string): void {
 
 /**
  * Stamp the `replan_triggered_at` column on a slice. Used by triage-resolution
- * when a user capture requests a replan so the dispatcher can detect the
- * trigger via DB in addition to the on-disk REPLAN-TRIGGER.md marker.
+ * when a user capture requests a replan. The column is the replan trigger that
+ * the dispatcher reads. Returns false when the slice has no row.
  */
-export function setSliceReplanTriggeredAt(milestoneId: string, sliceId: string, ts: string): void {
+export function setSliceReplanTriggeredAt(milestoneId: string, sliceId: string, ts: string): boolean {
   if (!getDbOrNull()!) throw new GSDError(GSD_STALE_STATE, "gsd-db: No database open");
-  transaction(() => getDbOrNull()!.prepare(
+  const updated = transaction(() => getDbOrNull()!.prepare(
     "UPDATE slices SET replan_triggered_at = :ts WHERE milestone_id = :mid AND id = :sid",
   ).run({ ":ts": ts, ":mid": milestoneId, ":sid": sliceId }));
+  return Number((updated as { changes?: number }).changes ?? 0) === 1;
 }
 
 /**

@@ -48,10 +48,22 @@ import {
   hasAutoPauseSchema,
 } from "./db-auto-pause-schema.js";
 import {
+  createAutoPauseBlockerColumn,
+  hasAutoPauseBlockerColumn,
+} from "./db-auto-pause-blocker-schema.js";
+import {
   createProjectMilestoneSequenceSchema,
   hasProjectMilestoneSequenceSchema,
 } from "./db-project-milestone-sequence-schema.js";
 import { createWriteGateSchema, hasWriteGateSchema } from "./db-write-gate-schema.js";
+import {
+  createRemoteQuestionPromptSchema,
+  hasRemoteQuestionPromptSchema,
+} from "./db-remote-question-prompt-schema.js";
+import {
+  createDecisionStatementImpactSchema,
+  hasDecisionStatementImpactSchema,
+} from "./db-decision-statement-impact-schema.js";
 
 interface RequiredSchemaFeature {
   readonly id: string;
@@ -121,6 +133,11 @@ const REQUIRED_SCHEMA_FEATURES = [
     create: createAutoPauseSchema,
   },
   {
+    id: "auto-pause-blocker-link",
+    isPresent: hasAutoPauseBlockerColumn,
+    create: createAutoPauseBlockerColumn,
+  },
+  {
     id: "project-milestone-sequence",
     isPresent: hasProjectMilestoneSequenceSchema,
     create: createProjectMilestoneSequenceSchema,
@@ -129,6 +146,16 @@ const REQUIRED_SCHEMA_FEATURES = [
     id: "write-gate-state",
     isPresent: hasWriteGateSchema,
     create: createWriteGateSchema,
+  },
+  {
+    id: "remote-question-prompts",
+    isPresent: hasRemoteQuestionPromptSchema,
+    create: createRemoteQuestionPromptSchema,
+  },
+  {
+    id: "decision-statement-impacts",
+    isPresent: hasDecisionStatementImpactSchema,
+    create: createDecisionStatementImpactSchema,
   },
 ] as const satisfies readonly RequiredSchemaFeature[];
 

@@ -12,14 +12,16 @@
 import { join } from "node:path";
 
 import type { CompleteSliceParams } from "../types.js";
-import { getDb, getSlice } from "../gsd-db.js";
+import { getSlice } from "../gsd-db.js";
+import { getSliceCompletedEventPayloadRow } from "../db/lifecycle-queries.js";
 import { clearPathCache, relSliceFile } from "../paths.js";
 import { resolveCanonicalMilestoneRoot } from "../worktree-manager.js";
 import { checkOwnership, sliceUnitKey } from "../unit-ownership.js";
 import { loadFile, saveFile, clearParseCache } from "../files.js";
 import { classifyUatContent, escalatesArtifactUatToBrowser } from "../uat-policy.js";
 import { invalidateStateCache } from "../state.js";
-import { renderMilestoneShellProjections } from "../workflow-projections.js";
+import { renderStateProjection, renderTopLevelQueueFromDb } from "../workflow-projections.js";
+import { renderRoadmapToDisk } from "../markdown-renderer.js";
 import { writeManifestAndFlush } from "../workflow-manifest.js";
 import { appendEvent } from "../workflow-events.js";
 import { logWarning } from "../workflow-logger.js";
@@ -231,24 +233,12 @@ function readPriorCloseout(
   params: Pick<CompleteSliceParams, "milestoneId" | "sliceId">,
   invocation: ExecutionInvocation,
 ): SliceCompletionCloseout | undefined {
-  const query = (where: string, bindings: Record<string, string>) => getDb().prepare(`
-    SELECT event.payload_json
-    FROM workflow_domain_events event
-    JOIN workflow_operations operation ON operation.operation_id = event.operation_id
-    WHERE event.event_type = 'slice.completed'
-      AND event.entity_type = 'slice'
-      AND event.entity_id = :entity_id
-      AND ${where}
-    ORDER BY event.project_revision DESC
-    LIMIT 1
-  `).get({
-    ":entity_id": `${params.milestoneId}/${params.sliceId}`,
-    ...bindings,
-  }) as Record<string, unknown> | undefined;
-  const row = query(
+  const entityId = `${params.milestoneId}/${params.sliceId}`;
+  const row = getSliceCompletedEventPayloadRow(
+    entityId,
     "operation.idempotency_key = :idempotency_key",
     { ":idempotency_key": invocation.idempotencyKey },
-  ) ?? query("1 = 1", {});
+  ) ?? getSliceCompletedEventPayloadRow(entityId, "1 = 1", {});
   if (!row) return undefined;
   const payload = JSON.parse(String(row["payload_json"])) as { closeout?: SliceCompletionCloseout };
   return payload.closeout;
@@ -467,7 +457,14 @@ export async function handleCompleteSlice(
       superseded = true;
       projectionStale = true;
     } else {
-      const rendered = await renderMilestoneShellProjections(artifactBasePath, params.milestoneId);
+      // P35: the shell render's ROADMAP store writes a workflow table outside
+      // the completion operation. Render the ROADMAP file to disk without the
+      // artifacts store — the operation enqueued the slice-lifecycle
+      // projection work whose drain stores the row — plus the store-free root
+      // projections.
+      await renderRoadmapToDisk(artifactBasePath, params.milestoneId);
+      renderTopLevelQueueFromDb(artifactBasePath);
+      const rendered = await renderStateProjection(artifactBasePath);
       projectionStale ||= rendered.stale;
       if (!isCurrent()) {
         superseded = true;

@@ -289,9 +289,9 @@ D012 is a decision. It is not the cutover:
 - Runtime behavior does not change with this record. Hierarchy reads still come
   from legacy database rows while the Authority Epoch of the Project is 0. Since
   2026-10-04 the first open of an existing project database advances its
-  Authority Epoch (`authority-cutover-on-open.ts`) when
-  `GSD_AUTHORITY_CUTOVER=1` is set. This is opt-in for now; `CONTEXT.md`
-  (State layer) states when it becomes the default.
+  Authority Epoch (`authority-cutover-on-open.ts`). This is the default;
+  `GSD_AUTHORITY_CUTOVER=0` is the opt-out. `CONTEXT.md` (State layer) owns
+  that contract.
 - `gate:lifecycle-shadow-no-cutover` stays in `verify:pr`. Its checks for a
   Project at Authority Epoch 0 are unchanged. Step 2 inverted its
   read-interface check (see below). The work that removes the legacy reads
@@ -360,9 +360,10 @@ D012 is a decision. It is not the cutover:
   - `auto-recovery.ts`: the closed check of a Milestone with no lifecycle row.
   - `auto-post-unit.ts`: the incomplete-Slice check, the Tasks of the file
     change check, the rogue SUMMARY check for a Task and a Slice, the ROADMAP
-    repair after `complete-slice`, and the Tasks that the pre-execution checks
+    repair after `complete-slice`, the Tasks that the pre-execution checks
     receive (`pre-execution-checks.ts` applies the status vocabulary to the
-    label of those Tasks).
+    label of those Tasks), and the Task status of the hook retry. The hook
+    retry compares the status label of the interface with the lifecycle row.
   - `auto-verification.ts`: the count of incomplete Slices and the completed
     Tasks that the post-execution checks receive.
   - `unit-runtime.ts`: the durable state of an `execute-task` unit.
@@ -371,7 +372,9 @@ D012 is a decision. It is not the cutover:
   - `unmerged-milestone-guard.ts`: the closed Milestones with an unmerged
     branch.
   - `milestone-actions.ts`: the parked and closed checks of park, unpark and
-    discard, and `isParked`.
+    discard, `isParked`, and the row loop of the discard operation. The loop
+    keeps a Slice or a Task that the interface answers as closed and cancels
+    the rest.
   - `closeout-wizard.ts`: the stranded Milestone check.
   - `interrupted-session.ts`: the stale scoped pause check.
   - `undo.ts`: the "already open" check of `/gsd undo`.
@@ -398,6 +401,26 @@ D012 is a decision. It is not the cutover:
   - `tools/complete-task.ts`: the closed Milestone, Slice and Task checks of
     the legacy completion writer. After the Cutover every Task has a lifecycle
     row, and that writer runs only for a blocker report.
+  - `tools/complete-milestone.ts`: the closed Milestone check that keeps the
+    SUMMARY file of a superseded completion, and the closed Milestone, Slice
+    and Task checks of the legacy completion.
+  - `state-reconciliation/drift/artifact-db.ts`: the closed Milestone, Slice
+    and Task checks of the two drift checks that block dispatch (a SUMMARY of
+    open work, and a completed closeout dispatch of an open Milestone).
+  - `doctor-engine-checks.ts`: the same two checks of doctor
+    (`artifact_db_status_divergence`, `completed_milestone_reopened`), the
+    closed Milestones of the validation source check, the discarded
+    Milestones of the missing artifact file check, and the terminal Task of
+    the stranded succeeded Attempt check.
+  - `doctor-state-checks.ts`: the done Slices and Tasks and the pending and
+    skipped Slice labels of the directory, plan and REPLAN checks, and the
+    live Milestone of the `planning_blocked` check.
+  - `milestone-implementation-evidence.ts`: the completed Tasks whose files
+    attribute a commit with no trailer to a Milestone. This replaces
+    `getCompletedMilestoneTaskFileHints` of `db/queries.ts`.
+  - `parallel-merge.ts`: the complete Milestones of the merge order. It reads
+    the project database through its own connection, so the interface has one
+    question that takes a connection (`readMilestoneDoneIn`).
   - `commands-maintenance.ts`: the complete check of the stale milestone
     branch cleanup (`/gsd cleanup`).
   - `doctor.ts`: the default doctor scope.
@@ -423,10 +446,33 @@ D012 is a decision. It is not the cutover:
     managed worktree directory has checked out (for example the project
     root), and git refuses to delete a checked-out branch. The test observes
     the refused delete.
-  - Before the Cutover the answers do not change, with one exception: the
+  - Before the Cutover the answers do not change, with three exceptions. The
     stale-branch cleanup now also treats the legacy aliases `closed` and
-    `blocker-accepted` of a Milestone as complete, as the interface does.
-  The behavior tests are in `tests/lifecycle-read-cutover.test.ts`. A
+    `blocker-accepted` of a Milestone as complete, as the interface does. The
+    parallel merge now also treats `done`, `closed` and `blocker-accepted` as
+    complete. The stranded succeeded Attempt check now also treats `done`,
+    `skipped` and `closed` of a Task as terminal.
+  - The legacy completion of `tools/complete-milestone.ts` runs only for a
+    Milestone with no lifecycle row. After the Cutover the database refuses a
+    hierarchy row with no lifecycle row (`db-lifecycle-coverage-schema.ts`),
+    so it does not run, and it has no test after the Cutover. The same holds
+    for the hook retry of a Task with no lifecycle row.
+  - The doctor check `db_done_task_no_summary` is deleted. Its query named a
+    `summary` column that the `tasks` table does not have, so the query
+    failed and the check never reported.
+  - The superseded completion test proves one direction only: the SUMMARY
+    file of a Milestone that only the lifecycle row closes is kept. When only
+    the legacy row is complete, the file is still there after the completion
+    returns. The cause was not examined; the SUMMARY renderer reads legacy
+    rows.
+  The behavior tests are in `tests/lifecycle-read-cutover.test.ts`,
+  `tests/lifecycle-read-cutover-decision-sites.test.ts`, and beside the
+  tests of the same site in `tests/complete-milestone-projection-stale.test.ts`,
+  `tests/post-unit-retry-on-orchestrator-bridge.test.ts`,
+  `tests/auto-recovery.test.ts`,
+  `tests/task-completion-compatibility-adapter.test.ts`,
+  `tests/doctor-planning-blocked-2510.test.ts` and
+  `tests/adopted-milestone-validation-waiver.test.ts`. A
   cut-over Project cannot reach three of the routed lines, so they have no
   test after the Cutover: the closed check of a Milestone with no lifecycle
   row in `milestone-closeout.ts` (`isCompletedMilestoneTerminal`) and in
@@ -444,6 +490,104 @@ D012 is a decision. It is not the cutover:
   lifecycle vocabulary has no word for queued. `auto/orchestrator.ts`,
   `guided-flow-queue.ts` and `guided-flow.ts` apply the status vocabulary to
   the registry of `deriveState`, which reads the interface.
+- Since 2026-10-04 every reader that decides or reports takes the Milestone
+  universe from `readListedMilestoneIds` of the read interface: the listed
+  rows in workflow order, with no discarded Milestone. These readers do not
+  scan the milestone directories:
+  - `commands/handlers/auto.ts`: the target check of `/gsd auto <id>` and
+    `/gsd next <id>`. A directory with no row is not a target, and a row with
+    no directory is one.
+  - `guided-flow.ts`: the first-Milestone decision of the `/gsd` entry and the
+    greenfield decision of a new Milestone discussion. A Milestone row with no
+    directory is a Milestone; before, such a project got the new-project
+    prompt.
+  - `guided-flow-queue.ts` (`/gsd queue`) and `rethink.ts` (`/gsd rethink`):
+    the "no milestones" check and the Milestone list of the prompt.
+  - `auto-start.ts`: the queue pre-flight message.
+  - `auto-prompts.ts`: the prior Milestone summaries of the discuss-milestone
+    and plan-milestone prompts.
+- A scan of the milestone directories (`findMilestoneIds`) stays only where
+  the directories are the subject:
+  - Id reservation, so that a directory with no row keeps its id:
+    `guided-flow.ts` (each call of `nextMilestoneIdReserved`),
+    `commands-backlog.ts`, `tools/milestone-hierarchy.ts`, and the next-id hint
+    in the `/gsd queue` add prompt (`guided-flow-queue.ts`). The reservation
+    adds the database ids to the scan.
+  - The `/gsd` entry check for a milestone directory that has entries and no
+    recognized Milestone (#456, `guided-flow.ts`).
+  - Doctor and drift checks, which compare the directories with the rows:
+    `doctor-runtime-checks.ts` (orphan directories),
+    `doctor-state-checks.ts` (only when the registry is empty),
+    `state-reconciliation/drift/artifact-db.ts`,
+    `state-reconciliation/drift/roadmap.ts`,
+    `state-reconciliation/drift/project-md.ts`, and
+    `migration-auto-check.ts` (markdown hierarchy scan).
+  - `workspace-index.ts`: only when no database is open. With a database it
+    reads the rows.
+- Since 2026-10-04 the prompt builders of `auto-prompts.ts`, the
+  discuss-slice prompt (`guided-flow.ts`) and the queue context
+  (`guided-flow-queue.ts`) take ROADMAP, CONTEXT, CONTEXT-DRAFT, RESEARCH,
+  PLAN and SUMMARY text from artifact rows (`getScopedArtifact`: Milestone,
+  Slice or Task, and artifact type). They do not read the projection file.
+  A file with no artifact row is not narrative: the prompt shows the same
+  "not found" note as for a missing file. The Task SUMMARY list of a Slice
+  comes from the rows; the tasks directory is not listed. The source path in
+  the prompt is the path of the artifact row. With no artifact row it is the
+  path where the projection file is rendered; for the Task plan of the
+  execute-task and reactive-execute prompts it is then the text "durable
+  task planning state".
+  Behavior tests:
+  `tests/prompt-narrative-gate-g1.test.ts` (Gate G1 for these prompts: the
+  files deleted, and the files changed). The G2 prompt check and the G2
+  projection read check of `tests/db-authority-gates.test.ts` are enforced.
+- A SUMMARY follows the item row, not the artifact row alone. A Slice or Task
+  that is not done has no SUMMARY narrative: a reopen removes the file and
+  keeps the artifact row. One precedence rule applies to all narrative that
+  has a carrier column (`tasks.full_plan_md`, `tasks.full_summary_md`,
+  `slices.full_summary_md`): the carrier is the first source, because the
+  Domain Operation writes it in the transaction of the lifecycle change and
+  a reopen or a re-plan clears or replaces it. The artifact row is the
+  second source: a projection drain writes it later, and it gives the text
+  only when the carrier is empty (an imported summary). So a Task that
+  `gsd_task_complete` just committed gives its summary to the next prompt
+  before its projection is rendered, and the recovery re-plan prompt has the
+  Task plan from the carrier. Narrative with no carrier (ROADMAP, CONTEXT,
+  CONTEXT-DRAFT, RESEARCH, Slice PLAN) comes from the artifact row. A CONTEXT-DRAFT
+  row is a discussion seed only while the Milestone has no saved CONTEXT:
+  saving the final CONTEXT removes the draft file and keeps the draft row.
+  Behavior tests: `tests/prompt-summary-narrative.test.ts` (the real
+  completion and reopen handlers) and the draft seed tests of
+  `tests/discuss-routing-fixes.test.ts`.
+- These prompt inputs are still read from files: VALIDATION, slice
+  ASSESSMENT, CONTINUE, RUNTIME.md, QUEUE.md, the DECISIONS.md register of
+  the discuss prompts, and the file lists of the rewrite-docs prompt. The
+  root file entries of the source file list (PROJECT, REQUIREMENTS, DECISIONS,
+  QUEUE) are listed when the file exists. Display paths of an artifact with no
+  row, and directory paths, come from the directory layout on disk; Gate G1
+  for prompts therefore deletes the files and keeps the directories.
+  `bootstrap/system-context.ts`, `preparation.ts` and the task graph of
+  `reactive-graph.ts` also read PLAN and SUMMARY files.
+- Since 2026-10-04 the progress widget (`auto-dashboard.ts`) and the dashboard
+  overlay (`dashboard-overlay.ts`) take the Slices, the Tasks and their done
+  flags from the read interface. A Slice or Task that needs no further work
+  counts as done; before, only the raw statuses `complete` and `done` counted.
+- Since 2026-10-05 the remaining prompt-content decision sites also ask the
+  read interface; the prompt narrative cutover (#2630) had left their status
+  reads on legacy rows. The Slices whose summaries the `complete-milestone`
+  and `validate-milestone` prompts of `auto-prompts.ts` inline, the complete
+  Slices whose summaries the slice-discussion prompt of `guided-flow.ts`
+  inlines, and the Slice counts of the rethink prompt (`rethink.ts`) take the
+  Slices from `readMilestoneSlices`; the open Tasks that the `rewrite-docs`
+  prompt of `auto-prompts.ts` lists take the Tasks from `readSliceTasks`.
+  Each site applies its own status vocabulary to the status label of the
+  interface, so before the Cutover the answers do not change. After the
+  Cutover the label follows the lifecycle rows: a Slice that only the legacy
+  row skips leaves the complete-milestone and validate-milestone lists and a
+  Slice that only the lifecycle row skips joins them, the slice discussion
+  inlines the summaries of the Slices that the lifecycle rows complete, the
+  rewrite-docs prompt lists the Tasks that the lifecycle rows leave open, and
+  the rethink counts count the lifecycle rows. Behavior tests:
+  `tests/lifecycle-read-cutover-decision-sites.test.ts`.
 - Step 2 is done in the read interface (2026-10-04). The project Authority
   Epoch chooses the read source, in one function (`cutoverHasRun`) and per
   Project, never per item:
@@ -469,6 +613,56 @@ D012 is a decision. It is not the cutover:
     progress.
   - A read that cannot query `project_authority` fails. It does not answer
     from either source.
+- Since 2026-10-05 the read interface answers two more questions: the open
+  canonical blockers (`readOpenBlockers`) and the open canonical questions
+  (`readOpenQuestions`). Canonical storage has no legacy row, so the Authority
+  Epoch does not choose a source for them: the answer is the same at every
+  Epoch. The project snapshot, the display read of the blockers outside
+  recovery, asks them through the interface and not at the query module. The
+  gate lists both as entries of the interface. Behavior tests:
+  `tests/lifecycle-read-questions.test.ts`.
+- Since 2026-10-05 a queued shell is a canonical answer of the interface, not
+  a status label. `queuedShell` of `MilestoneRead` is true when the Milestone
+  lifecycle row is `ready` with no CONTEXT artifact row and no Slice rows;
+  before the Cutover the legacy status `queued` answers, and there is no new
+  lifecycle status. The Milestone readiness class of `state/derive/from-db.ts`
+  routes to the field; readers that do not ask the interface (the web project
+  picker, the headless readiness) keep the legacy label. Behavior tests: the
+  queued-shell tests of `tests/lifecycle-read-cutover.test.ts`.
+- Since 2026-10-05 the SELECTs on the canonical lifecycle tables that decision
+  and report code asked at its own SQL live in `db/lifecycle-queries.ts`: the
+  completion identity of the execute-task hook (`rule-registry.ts`), the hook
+  retry of `auto-post-unit.ts`, the undo reads, the milestone terminal check
+  of `tools/reopen-slice.ts`, the escalation reads of `escalation.ts` and
+  `escalation-resolution.ts`, the discard row loop of `milestone-actions.ts`,
+  the reopen diagnosis (`reopen-reason.ts`), the task-settle reads, the
+  doctor engine checks, the drift execution history, and the recovery action
+  lookup. No behavior changed. The reads inside the Domain Operation modules
+  are not moved: they run on the writer connection inside the Domain
+  Operation, and moving them is separate work.
+  **Amended 2026-10-05:** the prior-closeout read of `tools/complete-slice.ts`
+  is moved too, as `getSliceCompletedEventPayloadRow` (the payload of the
+  newest `slice.completed` event of one Slice, preferring the event of the
+  retrying invocation's idempotency key). No behavior changed. What still
+  asks its own SQL outside `db/lifecycle-queries.ts`, with the reason each
+  stays: the reads inside the Domain Operation modules (15
+  `*-domain-operation.ts` files) run on the writer connection inside the
+  Domain Operation transaction, and moving them changes the write-path seam,
+  so they need their own package; the lease check of `task-settle.ts` reads
+  `milestone_leases`, the runtime coordination table that
+  `db/milestone-leases.ts` owns, not a canonical lifecycle row; the
+  completed-units read of `undo.ts` (`unit_dispatches`) and the
+  `artifacts`/`quality_gates`/`assessments` reads of `auto-post-unit.ts` read
+  coordination and validation tables, not canonical lifecycle rows.
+- Since 2026-10-05 `ProjectProgress` (`@opengsd/contracts`) has the optional
+  `blockerRows` field: the open canonical blocker rows at the revision of the
+  read, the same rows the project snapshot returns, so `gsd_progress` and
+  `gsd_project_snapshot` can give equal blockers at one revision. The change
+  is additive only: nothing was removed or retyped, the derived blockers of
+  `deriveState` stay, and the projection fallback does not set the field. The
+  DB progress reader takes the rows in the same read transaction as its
+  counts. Behavior test: the blocker-rows test of
+  `tests/progress-from-db.test.ts`.
 - The gate check `read-interface-epoch-authority` is the inverse of the former
   `read-interface-legacy-authority` check. It fails when the read interface
   does not read the Authority Epoch, reads it in more than one function, does
@@ -483,26 +677,11 @@ D012 is a decision. It is not the cutover:
   (`db-lifecycle-coverage-schema.ts`). After the Cutover every hierarchy row
   has a lifecycle row, and a branch for a row with no lifecycle row does not
   run.
-- These decision sites still read legacy rows directly (2026-10-04). On a
-  cut-over Project authority is split for them: the callers of the interface
-  follow canonical rows, and these sites follow legacy rows. The two agree
-  while Domain Operations keep the legacy row aligned with the lifecycle row.
-  They differ when the rows disagree. Each site has a reason that puts it in
-  other work:
-  - `auto-prompts.ts`: the Slices whose summaries the `complete-milestone` and
-    `validate-milestone` prompts inline, and the open Tasks that the
-    `rewrite-docs` prompt lists. `guided-flow.ts`: the complete Slices whose
-    summaries the slice-discussion prompt inlines. `rethink.ts`: the Slice
-    counts in the rethink prompt. They choose prompt content. The prompt
-    content is separate work (P23e).
-  - `auto-post-unit.ts`: the hook retry of a Task compares the legacy status
-    and the lifecycle row with its own SQL. `milestone-actions.ts`: the row
-    loop of the discard operation keeps a Slice or a Task closed from the
-    legacy status that its own SQL reads. SQL outside `db/` is separate work
-    (P23f).
-  - `tools/complete-milestone.ts`: the legacy completion. It refuses an
-    adopted Milestone. After the Cutover every Milestone is adopted, so the
-    legacy completion does not run. It is deleted with the legacy path.
+- These sites still read legacy rows directly (2026-10-05). No decision site
+  is left among them: every site that decides from a status read asks the read
+  interface. All of these are deleted with the legacy path. On a cut-over
+  Project the first follows the legacy row; the other two serve legacy data
+  only:
   - `db/writers/task-execution.ts` and `stageTaskCompletion` in
     `task-completion-compatibility-adapter.ts`: a staged completion refuses a
     Task whose legacy row is `complete`, `done` or `closed`. The check is a
@@ -513,37 +692,45 @@ D012 is a decision. It is not the cutover:
     `listUnappliedLegacyEscalations`) requires an open Slice, an open
     Milestone and an open next Task by legacy status. It serves legacy data
     only. It is deleted with the legacy path.
-- These checks still read legacy rows directly, and they have no such reason.
-  They were not routed in the work of 2026-10-04. The read cutover is not
-  complete while they are open:
-  - The drift checks in `state-reconciliation/drift/` (`artifact-db.ts`,
-    `roadmap.ts`). They compare the legacy rows with the ROADMAP, PLAN and
-    SUMMARY files and with the closeout dispatch history. A drift pauses
-    auto-mode, and the drift repair renders the files again.
-  - The doctor checks in `doctor-state-checks.ts` and
-    `doctor-engine-checks.ts`. They compare the legacy rows with the
-    projection files and the artifact rows and report the difference.
-    `doctor --fix` renders files again and removes stale artifact rows.
-  The renderers write the projection files from the legacy rows (see the
-  next list). A check that reads other rows than its renderer reports a
-  difference that a new render cannot remove, and then auto-mode stays
-  paused. So these checks cannot be routed alone: the owner must decide
-  whether the checks and the renderers move to the lifecycle rows together,
-  or stay on the legacy rows until the legacy path is deleted.
+  - `db/writers/cascades.ts`: `reopenMilestoneCascade` reopens a legacy
+    closed Milestone. It refuses a Milestone that has a lifecycle row. After
+    the Cutover every Milestone has one, so it does not run. It is deleted
+    with the legacy path.
+- These checks compare a projection file with the rows that its renderer
+  reads. They read legacy rows, as the renderers do (see the next list), and
+  they move to the lifecycle rows with the renderers. A check that reads
+  other rows than its renderer reports a difference that a new render cannot
+  remove. None of them is part of pre-dispatch reconciliation
+  (`state-reconciliation/registry.ts`): they run in the Projection Worker or
+  in doctor, and they do not block dispatch:
+  - `state-reconciliation/drift/roadmap.ts`: the ROADMAP file against the
+    Slice rows (presence, order, depends, checkbox), and the Milestones whose
+    missing ROADMAP file a render restores (`isRoadmapRenderable`).
+  - `state-reconciliation/drift/stale-render.ts`: `detectStaleRenders` of
+    `markdown-renderer.ts`.
+  - `doctor-engine-checks.ts`: the checkbox check
+    (`checkbox_db_status_divergence`) and the Milestones whose files a render
+    restores (`milestonesWithMissingFiles`).
+  - `doctor-state-checks.ts`: the `missing_roadmap` check, which uses
+    `isRoadmapRenderable`.
   `doctor-git-checks.ts` is not in this group: it applies the status
   vocabulary to the registry of `deriveState`, which reads the interface.
+  Doctor reports each row whose legacy status and lifecycle status disagree
+  (`lifecycle_shadow_mismatch`).
 - These sites read legacy rows directly and stay as they are, because they
   only display or render a status, or they map a legacy status for adoption:
   - `markdown-renderer.ts`, `workflow-projections.ts`, `projection-worker.ts`,
-    `state-contract.ts`, the Milestone Sequence of PROJECT.md in
+    `state-contract.ts`, the PARKED marker and the park reason in
+    `milestone-park-projection.ts`, the Milestone Sequence of PROJECT.md in
     `tools/workflow-tool-executors.ts`, the removal of stale PLAN files and
     the checkbox render after `tools/plan-slice.ts` and
     `tools/replan-slice.ts`, and the SUMMARY file removal in
     `tools/complete-milestone.ts`: they render projections.
-  - `auto-dashboard.ts`, `dashboard-overlay.ts`, `parallel-monitor-overlay.ts`,
-    `visualizer-data.ts`, `visualizer-views.ts`, `export.ts`,
-    `export-html.ts` and `commands/handlers/core.ts`: they draw progress in
-    the terminal, the visualizer and the exported reports.
+  - `parallel-monitor-overlay.ts`
+    (with `getParallelMonitorSliceProgress` and the completion list of
+    `db/queries.ts`), `visualizer-data.ts`, `visualizer-views.ts`,
+    `export.ts`, `export-html.ts` and `commands/handlers/core.ts`: they draw
+    progress in the terminal, the visualizer and the exported reports.
   - `workspace-index.ts`: the `done` flags of the workspace index that the
     web interface shows. Its Milestone list and Milestone status come from
     the interface.
@@ -563,6 +750,11 @@ D012 is a decision. It is not the cutover:
   The files `custom-workflow-engine.ts`, `run-manager.ts`, `graph.ts`,
   `quality-gate-closure.ts` and `auto/unit-phase.ts` compare the status of a
   workflow step or of a gate row. That is not a hierarchy status.
+  The other status helpers of `db/queries.ts` (`getHierarchyCompletionCounts`,
+  `getMilestoneStatusCounts`, `getInFlightSliceCount`, `getSliceStatusSummary`,
+  `getSliceTaskCounts`) answer the interface before the Cutover;
+  `forensics.ts` also reads the first one. `TERMINAL_STATUS_SQL` of
+  `db/sql-constants.ts` has no reader outside `db/` and `gsd-db.ts`.
 
 **Database record — pending.** The project database is the source of truth for
 decisions, and on 2026-10-02 it has no row for this decision: the last decision

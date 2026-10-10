@@ -19,7 +19,7 @@ export interface GsdCommandDefinition {
 type CompletionMap = Record<string, readonly GsdCommandDefinition[]>;
 
 export const GSD_COMMAND_DESCRIPTION =
-  "GSD — Git Ship Done: /gsd help|start|templates|next|auto|stop|pause|status|widget|visualize|brief|report|queue|quick|discuss|capture|triage|dispatch|verdict|history|undo|undo-task|reset-slice|rate|skip|export|cleanup|closeout|recover|rebuild|db|model|mode|prefs|config|keys|hooks|run-hook|skill-health|doctor|debug|logs|forensics|changelog|migrate|remote|steer|knowledge|memory|new-milestone|new-project|parallel|cmux|park|unpark|discard|init|setup|onboarding|inspect|extensions|update|upgrade|fast|mcp|rethink|workflow|codebase|notifications|ship|do|usage|context|session-report|backlog|pr-branch|add-tests|scan|language|worktree|eval-review";
+  "GSD — Git Ship Done: /gsd help|start|templates|next|auto|stop|pause|status|widget|visualize|brief|report|queue|quick|discuss|capture|triage|dispatch|history|undo|undo-task|reset-slice|rate|skip|export|cleanup|closeout|recover|rebuild|db|model|mode|prefs|config|keys|hooks|run-hook|skill-health|doctor|debug|logs|forensics|changelog|migrate|remote|steer|knowledge|memory|new-milestone|new-project|parallel|cmux|park|unpark|discard|init|setup|onboarding|inspect|extensions|update|upgrade|fast|mcp|rethink|workflow|codebase|notifications|ship|do|usage|context|session-report|backlog|pr-branch|add-tests|scan|language|worktree|eval-review";
 
 export const TOP_LEVEL_SUBCOMMANDS: readonly GsdCommandDefinition[] = [
   { cmd: "help", desc: "Categorized command reference with descriptions" },
@@ -38,7 +38,6 @@ export const TOP_LEVEL_SUBCOMMANDS: readonly GsdCommandDefinition[] = [
   { cmd: "changelog", desc: "Show categorized release notes" },
   { cmd: "triage", desc: "Manually trigger triage of pending captures" },
   { cmd: "dispatch", desc: "Dispatch a specific phase directly" },
-  { cmd: "verdict", desc: "Override an unadopted compatibility milestone validation verdict" },
   { cmd: "uat-answer", desc: "Answer an open subjective UAT question (accept or reject); only you can record it" },
   { cmd: "history", desc: "View execution history" },
   { cmd: "undo", desc: "Revert last completed unit" },
@@ -73,7 +72,7 @@ export const TOP_LEVEL_SUBCOMMANDS: readonly GsdCommandDefinition[] = [
   { cmd: "init", desc: "Project init wizard — detect, configure, bootstrap .gsd/" },
   { cmd: "setup", desc: "Configuration hub: status + sub-routes (llm, model, search, remote, keys, prefs, onboarding)" },
   { cmd: "onboarding", desc: "Re-run the setup wizard  [--resume|--reset|--step <name>]" },
-  { cmd: "migrate", desc: "Migrate a v1 .planning directory to DB-backed .gsd with backup + audit" },
+  { cmd: "migrate", desc: "Preview a v1 .planning migration to DB-backed .gsd; apply it with --preview=<hash>" },
   { cmd: "remote", desc: "Control remote auto-mode" },
   { cmd: "steer", desc: "Hard-steer plan documents during execution" },
   { cmd: "inspect", desc: "Show SQLite DB diagnostics" },
@@ -253,6 +252,7 @@ const NESTED_COMPLETIONS: CompletionMap = {
     { cmd: "start-empty", desc: "Start from an empty database on purpose, beside projections from an earlier database (a re-clone)" },
     { cmd: "adopt", desc: "Preview, or with --apply run, the one-time lifecycle backfill of every unadopted row" },
     { cmd: "restore-backup", desc: "List or restore a verified pre-migration database backup (destructive; requires --consent)" },
+    { cmd: "prune-quarantine", desc: "List, or with --apply delete, quarantined copies of projections changed outside GSD (destructive; requires --apply)" },
   ],
   task: [
     { cmd: "settle <M001/S01/T01> --reason \"...\"", desc: "Dry-run: show the running Attempt that would be settled" },
@@ -313,11 +313,6 @@ const NESTED_COMPLETIONS: CompletionMap = {
     { cmd: "reassess", desc: "Reassess current progress" },
     { cmd: "uat", desc: "Run user acceptance testing" },
     { cmd: "replan", desc: "Replan the current slice" },
-  ],
-  verdict: [
-    { cmd: "pass", desc: "Override an unadopted verdict to pass" },
-    { cmd: "needs-attention", desc: "Override an unadopted verdict to needs-attention (requires --rationale)" },
-    { cmd: "needs-remediation", desc: "Override an unadopted verdict to needs-remediation (requires --rationale)" },
   ],
   rate: [
     { cmd: "over", desc: "Model was overqualified for this task" },

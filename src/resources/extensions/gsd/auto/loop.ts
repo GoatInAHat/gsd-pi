@@ -12,7 +12,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@gsd/pi-coding-agent";
 
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import type { AutoSession } from "./session.js";
 import type { AutoTerminalOutcome } from "./contracts.js";
@@ -30,7 +30,8 @@ import {
 import { _clearCurrentResolve } from "./resolve.js";
 import { runGuards } from "./phases.js";
 import { runFinalize } from "./finalize.js";
-import { handlePendingHookOutcome, resolveVerificationFailureMarkerPath } from "../auto-post-unit.js";
+import { handlePendingHookOutcome } from "../auto-post-unit.js";
+import { readStoredCloseoutRefusal } from "../db/unit-dispatch-retries.js";
 import {
   resetSessionTimeoutState,
   restoreTaskHostVerificationContext,
@@ -66,7 +67,6 @@ import {
 } from "../db/milestone-leases.js";
 import { heartbeatAutoWorker, isDeadLocalAutoWorker } from "../db/auto-workers.js";
 import { resolveUokFlags } from "../uok/flags.js";
-import { scheduleSidecarQueue } from "../uok/execution-graph.js";
 import { normalizeRealPath } from "../paths.js";
 import {
   decideCooldownRecovery,
@@ -81,11 +81,9 @@ import {
   decideWorkflowLoop,
   formatDispatchExceptionSummary,
   resolveUnitRequestTimestamp,
-  shouldUseCustomEnginePath,
 } from "./workflow-kernel.js";
 import {
   hydrateCustomStepVerifyRetryCount,
-  hydrateCustomVerifyRetryCounts,
   saveCustomStepVerifyRetryCount,
 } from "./custom-verify-retry-store.js";
 import {
@@ -101,9 +99,8 @@ import { createWorkflowJournalReporter } from "./workflow-journal-reporter.js";
 import { createWorkflowPhaseReporter } from "./workflow-phase-reporter.js";
 import { createWorkflowTurnReporter } from "./workflow-turn-reporter.js";
 import { validateWorkflowSessionLock } from "./workflow-session-lock.js";
-import { dequeueSidecarItem } from "./workflow-sidecar-queue.js";
+import { kernelAdvance } from "./lifecycle-kernel.js";
 import { releaseUnitRetry } from "../db/unit-dispatch-retries.js";
-import { listQueuedSidecarItems } from "../db/unit-dispatch-sidecars.js";
 import { settleSidecarItem } from "../db/writers/unit-dispatch-sidecars.js";
 import { maintainWorkerHeartbeat, runWithWorkerHeartbeat } from "./workflow-worker-heartbeat.js";
 import { gsdRoot } from "../paths.js";
@@ -149,15 +146,15 @@ import { readTerminalTaskRecoveryAbort } from "../artifact-verification.js";
 import { IS_DISPATCH_OWNER_DEAD, IS_RUN_DISPATCH_OWNER_GONE, RECLAIM_DEAD_DISPATCH_OWNER } from "./unit-run.js";
 
 /**
- * Path of the `*VERIFICATION-FAILED` / `*CLOSEOUT-VERIFICATION-FAILED` marker
- * for the unit when one exists on disk — a deliberate closeout refusal
- * (#2046). Flagged on the finalize input so the kernel stops instead of
- * identical-input retrying. Unknown unit types resolve to no marker and keep
- * the retry default.
+ * The closeout refusal recorded on the unit's newest dispatch row, when one
+ * exists — a deliberate closeout refusal (#2046). Flagged on the finalize
+ * input so the kernel stops instead of identical-input retrying. The refusal
+ * is the dispatch row; the `*VERIFICATION-FAILED` report on disk is a render
+ * that the pre-verification ingest probes once. Unknown unit types have no
+ * refusal row and keep the retry default.
  */
-function resolvePresentVerificationFailureMarker(unitType: string, unitId: string, basePath: string): string | null {
-  const markerPath = resolveVerificationFailureMarkerPath(unitType, unitId, basePath);
-  return markerPath !== null && existsSync(markerPath) ? markerPath : null;
+function resolvePresentVerificationFailureMarker(unitType: string, unitId: string, _basePath: string): string | null {
+  return readStoredCloseoutRefusal(unitType, unitId);
 }
 
 function resolveCompletionStopFromState(
@@ -309,13 +306,6 @@ function logDispatchLeaseRecoveryFailed(details: {
   debugLog("autoLoop", {
     phase: "dispatch-lease-recovery-failed",
     ...details,
-  });
-}
-
-function logCustomVerifyRetryLoadFailure(err: unknown): void {
-  debugLog("autoLoop", {
-    phase: "load-custom-verify-retries-failed",
-    error: err instanceof Error ? err.message : String(err),
   });
 }
 
@@ -486,8 +476,8 @@ export async function autoLoop(
     }
   }
   let iteration = 0;
-  // Load the persisted verification retry counts of custom-engine steps.
-  hydrateCustomVerifyRetryCounts(s, { logFailure: logCustomVerifyRetryLoadFailure });
+  // A custom workflow step keeps its verification retry count on its step row;
+  // the count is loaded when a retry needs it.
   const loopState: LoopState = {
     consecutiveFinalizeTimeouts: 0,
   };
@@ -822,21 +812,6 @@ export async function autoLoop(
         break;
       }
 
-      // ── Check sidecar queue before deriveState ──
-      // NOTE: Sidecar dequeue MUST run before validateWorkflowSessionLock so a
-      // queued item is popped (and the `sidecar-dequeue` journal event emitted)
-      // even when the session lock invalidates this iteration. Inverting this
-      // order silently drops queued items on lock-loss. Refs #5308.
-      const sidecarItem = await dequeueSidecarItem({
-        queue: listQueuedSidecarItems(),
-        executionGraphEnabled: uokFlags.executionGraph,
-        scheduleQueue: scheduleSidecarQueue,
-        warnSchedulingFailure: message => logWarning("dispatch", `sidecar queue scheduling failed: ${message}`),
-        logDequeue: payload => debugLog("autoLoop", { phase: "sidecar-dequeue", ...payload }),
-        emitDequeue: payload => journalReporter.emit("sidecar-dequeue", payload),
-      });
-      dequeuedSidecarId = sidecarItem?.id ?? null;
-
       const sessionLockOutcome = validateWorkflowSessionLock({
         active: s.active,
         iteration,
@@ -860,6 +835,20 @@ export async function autoLoop(
         break;
       }
 
+      // ── Lifecycle Kernel: select the next unit from database rows ──
+      // The selection runs after the session-lock check. A process that lost
+      // the lock selects nothing, so a queued sidecar row stays queued for the
+      // process that holds the lock (ADR-048).
+      const advanceResult = await kernelAdvance(s, {
+        executionGraphEnabled: uokFlags.executionGraph,
+        emitSidecarDequeue: payload => journalReporter.emit("sidecar-dequeue", payload),
+      });
+      const sidecarItem = advanceResult.kind === "sidecar" ? advanceResult.item : undefined;
+      // A unit that a killed process left in the verify stage. It does not run
+      // again: this iteration continues at the verification gate.
+      const stageContinuation = advanceResult.kind === "stage" ? advanceResult : undefined;
+      dequeuedSidecarId = sidecarItem?.id ?? null;
+
       const ic: IterationContext = {
         ctx,
         pi,
@@ -879,11 +868,7 @@ export async function autoLoop(
       //
       // GSD_ENGINE_BYPASS=1 skips the engine layer entirely — falls through
       // to the dev path below.
-      if (shouldUseCustomEnginePath({
-        activeEngineId: s.activeEngineId,
-        hasSidecarItem: Boolean(sidecarItem),
-        engineBypass: process.env.GSD_ENGINE_BYPASS === "1",
-      })) {
+      if (advanceResult.kind === "engine") {
         debugLog("autoLoop", { phase: "custom-engine-derive", iteration, engineId: s.activeEngineId });
 
         const { engine, policy } = resolveEngine({
@@ -1278,21 +1263,9 @@ export async function autoLoop(
         continue;
       }
 
-      if (!sidecarItem) {
-        const orchestration = s.orchestration;
-        if (orchestration) {
-          const existingPendingDispatch = s.pendingOrchestrationDispatch;
-          let orchestrationResult = existingPendingDispatch
-            ? {
-                kind: "advanced" as const,
-                unit: {
-                  unitType: existingPendingDispatch.unitType,
-                  unitId: existingPendingDispatch.unitId,
-                },
-                stateSnapshot: existingPendingDispatch.state,
-                dispatchId: existingPendingDispatch.dispatchId ?? 0,
-              }
-            : await orchestration.advance();
+      if (advanceResult.kind !== "sidecar" && advanceResult.kind !== "stage") {
+        if (advanceResult.kind !== "unavailable") {
+          const orchestrationResult = advanceResult;
 
           if (
             orchestrationResult.kind === "skipped" &&
@@ -1644,7 +1617,9 @@ export async function autoLoop(
         }
       } else {
         iterData = await buildSidecarIterationData({
-          sidecarItem,
+          sidecarItem: advanceResult.kind === "sidecar"
+            ? advanceResult.item
+            : { unitType: advanceResult.unit.unitType, unitId: advanceResult.unit.unitId, prompt: "" },
           basePath: s.basePath,
           canonicalProjectRoot: s.canonicalProjectRoot,
           deriveState: deps.deriveState,
@@ -1655,10 +1630,10 @@ export async function autoLoop(
         });
         observedUnitType = iterData.unitType;
         observedUnitId = iterData.unitId;
-        phaseReporter.report("dispatch", "sidecar", {
+        phaseReporter.report("dispatch", advanceResult.kind, {
           unitType: iterData.unitType,
           unitId: iterData.unitId,
-          sidecarKind: sidecarItem.kind,
+          ...(advanceResult.kind === "sidecar" ? { sidecarKind: advanceResult.item.kind } : {}),
         });
       }
 
@@ -1786,6 +1761,9 @@ export async function autoLoop(
       }
       dispatchId = dispatchDecision.dispatchId;
       }
+      // The new dispatch row of a continued unit starts where the row of the
+      // killed process stopped.
+      if (stageContinuation) checkpointStage(stageContinuation.stage);
 
       let unitPhaseResult: UnitPhaseResult;
       try {
@@ -1808,7 +1786,9 @@ export async function autoLoop(
                 dispatchSettled = true;
               },
             },
-            () => runUnitPhase(ic, unitIterData, loopState, sidecarItem),
+            stageContinuation
+              ? async () => ({ action: "next" as const, data: {} })
+              : () => runUnitPhase(ic, unitIterData, loopState, sidecarItem),
             TASK_EXECUTION_CUTOVER_DEPS,
           ),
         );
@@ -1865,9 +1845,11 @@ export async function autoLoop(
       });
       if (
         unitPhaseResult.action === "next" &&
-        iterData.unitType === "execute-task" &&
         !s.currentUnit &&
-        isTaskExecutionReadyForHostVerification(iterData.unitType, iterData.unitId)
+        (stageContinuation || (
+          iterData.unitType === "execute-task" &&
+          isTaskExecutionReadyForHostVerification(iterData.unitType, iterData.unitId)
+        ))
       ) {
         restoreTaskHostVerificationContext(ic, iterData.unitType, iterData.unitId);
       }
@@ -1930,7 +1912,7 @@ export async function autoLoop(
               turnId,
               basePath: s.basePath,
             }, VERIFIED_TASK_PUBLICATION_DEPS);
-          }, () => checkpointStage("verify")),
+          }, () => checkpointStage("verify"), stageContinuation?.stage),
         );
       } catch (err) {
         const error = formatDispatchExceptionSummary({ error: err });
@@ -2013,7 +1995,7 @@ export async function autoLoop(
           // The unit deliberately declined closeout: stopping here must be
           // legible to the operator, not a silent exit after a "retry" report.
           ctx.ui.notify(
-            `${iterData.unitType} ${iterData.unitId} declined closeout${refusalMarkerPath ? ` (see ${relative(s.basePath, refusalMarkerPath)})` : ""}. Stopping instead of retrying — an identical-input retry cannot change a refusal.`,
+            `${iterData.unitType} ${iterData.unitId} declined closeout${refusalMarkerPath ? ` (see ${refusalMarkerPath})` : ""}. Stopping instead of retrying — an identical-input retry cannot change a refusal.`,
             "error",
           );
         }

@@ -38,7 +38,9 @@ import {
   settleTaskAttempt,
 } from "../task-execution-domain-operation.js";
 import { reopenTask } from "../task-lifecycle-domain-operation.js";
+import { executeSummarySave, executeTaskReopen } from "../tools/workflow-tool-executors.js";
 import { assertWorkerRendersStaleProjection } from "./projection-render-failure-gate.ts";
+import { cutOver, seedLifecycles } from "./helpers/authority-cutover.ts";
 import {
   recordFailureAndSelectRecovery,
   resumeTaskRecovery,
@@ -799,6 +801,89 @@ test("#1983: an unreopened pending Task SUMMARY with no Attempt lineage stays fa
   );
 });
 
+function taskSummaryArtifactRows(): number {
+  return Number(row(`
+    SELECT COUNT(*) AS count FROM artifacts
+    WHERE artifact_type = 'SUMMARY' AND milestone_id = 'M001' AND slice_id = 'S01' AND task_id = 'T01'
+  `).count);
+}
+
+test("a Task reopened after verified publication keeps no SUMMARY that claims completion", async () => {
+  const { publishVerifiedTaskCompletion, stageTaskCompletion } = await subject();
+  const { basePath, attemptId } = createFixture();
+  const staged = await stageTaskCompletion(stageInput(basePath));
+  recordPassingHostVerdict(basePath, attemptId);
+  await publishVerifiedTaskCompletion(publishInput(basePath, attemptId));
+  assert.equal(taskState().status, "complete");
+  assert.equal(taskSummaryArtifactRows(), 1, "the real completion path records the Task SUMMARY artifact row");
+
+  const reopened = await executeTaskReopen(
+    { ...TASK, reason: "slice closeout found a regression" },
+    basePath,
+    invocation("task-completion/reopen-published"),
+  );
+  assert.notEqual(reopened.isError, true, JSON.stringify(reopened.content));
+
+  assert.equal(taskState().status, "pending");
+  assert.equal(taskSummaryArtifactRows(), 0, "the SUMMARY artifact row of the voided completion is removed");
+  assert.equal(existsSync(staged.summaryPath), false, "the SUMMARY projection of the voided completion is gone");
+  assert.deepEqual(
+    await taskSummaryDivergence(basePath),
+    { doctorDivergence: false, reconciliationDivergence: false },
+    "a reopened Task must be dispatchable",
+  );
+  const reopenPayload = JSON.parse(String(row(`
+    SELECT payload_json FROM workflow_domain_events WHERE event_type = 'task.reopened'
+  `).payload_json)) as { invalidatedEvidence: { artifacts: Array<{ path: string; full_content: string }> } };
+  assert.deepEqual(
+    reopenPayload.invalidatedEvidence.artifacts.map((artifact) => artifact.path),
+    ["phases/01-test/S01-T01-SUMMARY.md"],
+    "the reopen event keeps the removed SUMMARY row",
+  );
+  assert.match(reopenPayload.invalidatedEvidence.artifacts[0]!.full_content, /Implemented the compatibility seam/);
+});
+
+test("a Task reopened inside a milestone worktree is not artifact/DB drift at the project root", async () => {
+  const { publishVerifiedTaskCompletion, stageTaskCompletion } = await subject();
+  const { basePath, planPath, attemptId } = createFixture();
+  writeFileSync(join(basePath, ".git", "info", "exclude"), ".gsd-worktrees/\n");
+  const worktreePath = join(basePath, ".gsd-worktrees", "M001");
+  const worktreePhaseDir = join(worktreePath, ".gsd", "phases", "01-test");
+  mkdirSync(worktreePhaseDir, { recursive: true });
+  writeFileSync(join(worktreePhaseDir, "01-01-PLAN.md"), readFileSync(planPath, "utf8"));
+  await stageTaskCompletion(stageInput(worktreePath));
+  recordPassingHostVerdict(basePath, attemptId);
+  const published = await publishVerifiedTaskCompletion(publishInput(worktreePath, attemptId));
+  const { resolveTaskFile } = await import("../paths.js");
+  const rootSummary = resolveTaskFile(basePath, "M001", "S01", "T01", "SUMMARY");
+  assert.ok(rootSummary, "publication writes the project-root SUMMARY");
+  assert.equal(existsSync(published.summaryPath), true, "publication writes the worktree SUMMARY");
+
+  // The complete-slice unit runs in the milestone worktree and reopens there.
+  const reopened = await executeTaskReopen(
+    { ...TASK, reason: "slice closeout found a regression" },
+    worktreePath,
+    invocation("task-completion/reopen-published-worktree"),
+  );
+  assert.notEqual(reopened.isError, true, JSON.stringify(reopened.content));
+  assert.equal(taskState().status, "pending");
+
+  // The next /gsd auto runs the pre-dispatch drift guard at the project root.
+  clearPathCache();
+  assert.deepEqual(
+    await taskSummaryDivergence(basePath),
+    { doctorDivergence: false, reconciliationDivergence: false },
+    "the reopened Task must be dispatchable from the project root",
+  );
+  assert.deepEqual(
+    await taskSummaryDivergence(worktreePath),
+    { doctorDivergence: false, reconciliationDivergence: false },
+    "the reopened Task must be dispatchable from the milestone worktree",
+  );
+  assert.equal(existsSync(published.summaryPath), false, "the worktree SUMMARY is removed");
+  assert.equal(existsSync(rootSummary), false, "the project-root SUMMARY is removed");
+});
+
 test("#1763: staging from a milestone worktree dual-writes the SUMMARY to the project root", async () => {
   const { stageTaskCompletion } = await subject();
   const { basePath } = createFixture();
@@ -935,6 +1020,32 @@ test("#2417: doctor reports a settled succeeded verify-stage Attempt on a non-te
   assert.equal(stranded.length, 1);
   assert.equal(stranded[0].unitId, "M001/S01/T01");
   assert.match(stranded[0].message, new RegExp(attemptId));
+});
+
+test("after the Cutover doctor reports a stranded succeeded Attempt of a Task that only the legacy row closes", async () => {
+  const { stageTaskCompletion } = await subject();
+  const { basePath } = createFixture();
+  await stageTaskCompletion(stageInput(basePath));
+  // Only the legacy row closes the Task. Its lifecycle row stays open.
+  db().exec("UPDATE tasks SET status = 'complete' WHERE id = 'T01'");
+  const adopted = new Set(
+    db().prepare("SELECT item_kind FROM workflow_item_lifecycles").all().map((item) => item["item_kind"]),
+  );
+  seedLifecycles("stranded-attempt", [
+    { itemKind: "milestone" as const, milestoneId: "M001", lifecycleStatus: "ready" as const },
+    { itemKind: "slice" as const, milestoneId: "M001", sliceId: "S01", lifecycleStatus: "ready" as const },
+  ].filter((lifecycle) => !adopted.has(lifecycle.itemKind)));
+  const stranded = async () => {
+    const issues: DoctorIssue[] = [];
+    await checkEngineHealth(basePath, issues, []);
+    return issues.filter((issue) => issue.code === "unpublished_succeeded_attempt").map((issue) => issue.unitId);
+  };
+
+  assert.deepEqual(await stranded(), [], "before the Cutover the legacy row answers that the Task is terminal");
+
+  cutOver();
+
+  assert.deepEqual(await stranded(), ["M001/S01/T01"]);
 });
 
 test("#1677: inside a worktree the classifier falls back to the project-root copy", async () => {
@@ -1272,6 +1383,134 @@ test("#2427: an abandoned staged SUMMARY with genuinely different DB intent stil
     describeArtifactDbDriftBlocker(drift, { basePath, state }) ?? "",
     /Artifact\/DB status drift/,
     "genuinely different content must stay fail-closed",
+  );
+});
+
+test("after the Cutover the abandoned staged SUMMARY repair takes the in-progress Task from the lifecycle row", async () => {
+  const { stageTaskCompletion } = await subject();
+  const { basePath, attemptId } = createFixture();
+  const staged = await stageTaskCompletion(stageInput(basePath));
+  interruptedRetryFixture(basePath, attemptId);
+  const state = reconciliationState();
+  const drift = detectArtifactDbDrift(state, { basePath, state }).find((record) =>
+    record.kind === "artifact-db-status-divergence" && record.taskId === "T01"
+  );
+  assert.ok(drift && drift.kind === "artifact-db-status-divergence");
+  // Only the lifecycle row says that the Task is in progress.
+  db().exec("UPDATE tasks SET status = 'pending' WHERE id = 'T01'");
+  seedLifecycles("abandoned-staged-summary", [
+    { itemKind: "milestone", milestoneId: "M001", lifecycleStatus: "ready" },
+    { itemKind: "slice", milestoneId: "M001", sliceId: "S01", lifecycleStatus: "ready" },
+  ]);
+
+  assert.match(
+    describeArtifactDbDriftBlocker(drift, { basePath, state }) ?? "",
+    /Artifact\/DB status drift/,
+    "before the Cutover the legacy row answers that the Task is pending",
+  );
+
+  cutOver();
+
+  assert.equal(describeArtifactDbDriftBlocker(drift, { basePath, state }), null);
+  await repairArtifactDbDrift(drift, { basePath, state });
+  assert.equal(existsSync(staged.summaryPath), false, "the repair moves the abandoned projection to quarantine");
+});
+
+function quarantinedTaskSummaries(root: string): string[] {
+  const quarantineRoot = join(root, ".gsd", "quarantine", "projections");
+  if (!existsSync(quarantineRoot)) return [];
+  return readdirSync(quarantineRoot, { recursive: true })
+    .map(String)
+    .filter((path) => path.endsWith("T01-SUMMARY.md"));
+}
+
+test("#2714: a SUMMARY saved in a milestone worktree by an interrupted Attempt is quarantined at both roots", async () => {
+  const { basePath, planPath, attemptId } = createFixture();
+  // After the Cutover only the lifecycle row, which the Attempt claim wrote,
+  // says that the Task is in progress. No completion was staged.
+  db().exec("UPDATE tasks SET status = 'pending' WHERE id = 'T01'");
+  seedLifecycles("2714-worktree-summary", [
+    { itemKind: "milestone", milestoneId: "M001", lifecycleStatus: "ready" },
+    { itemKind: "slice", milestoneId: "M001", sliceId: "S01", lifecycleStatus: "ready" },
+  ]);
+  cutOver();
+  writeFileSync(join(basePath, ".git", "info", "exclude"), ".gsd-worktrees/\n");
+  const worktreePath = join(basePath, ".gsd-worktrees", "M001");
+  const worktreePhaseDir = join(worktreePath, ".gsd", "phases", "01-test");
+  mkdirSync(worktreePhaseDir, { recursive: true });
+  writeFileSync(join(worktreePhaseDir, "01-01-PLAN.md"), readFileSync(planPath, "utf8"));
+
+  // The execute-task unit runs in the milestone worktree and saves its SUMMARY there.
+  const saved = await executeSummarySave(
+    {
+      milestone_id: "M001",
+      slice_id: "S01",
+      task_id: "T01",
+      artifact_type: "SUMMARY",
+      content: "# T01 Summary\n\nThe executor wrote this before the unit was stopped.\n",
+    },
+    worktreePath,
+    invocation("task-completion/2714-summary-save"),
+  );
+  assert.notEqual(saved.isError, true, JSON.stringify(saved.content));
+  const { resolveTaskFile } = await import("../paths.js");
+  const rootSummary = resolveTaskFile(basePath, "M001", "S01", "T01", "SUMMARY");
+  const worktreeSummary = resolveTaskFile(worktreePath, "M001", "S01", "T01", "SUMMARY");
+  assert.ok(rootSummary && existsSync(rootSummary), "the save writes the project-root SUMMARY");
+  assert.ok(worktreeSummary && existsSync(worktreeSummary), "the save copies the SUMMARY into the worktree");
+  assert.notEqual(worktreeSummary, rootSummary);
+  assert.equal(readFileSync(worktreeSummary, "utf8"), readFileSync(rootSummary, "utf8"));
+
+  // The unit is force-stopped before completion: its first Attempt settles without success.
+  settleTaskAttempt({
+    invocation: invocation("task-completion/2714-interrupted-settle"),
+    attemptId,
+    outcome: "interrupted",
+    failureClass: "stale-worker",
+    summary: "The unit was force-stopped",
+    output: { forceStopped: true },
+  });
+  assert.equal(taskSummaryArtifactRows(), 0, "settlement removes the SUMMARY artifact row");
+  assert.equal(existsSync(rootSummary), true, "settlement leaves the project-root file");
+  assert.equal(existsSync(worktreeSummary), true, "settlement leaves the worktree file");
+
+  // The pre-dispatch drift guard of auto-mode runs at the milestone worktree.
+  clearPathCache();
+  const state = reconciliationState();
+  const ctx = { basePath: worktreePath, state };
+  const drift = detectArtifactDbDrift(state, ctx).find((record) =>
+    record.kind === "artifact-db-status-divergence" && record.taskId === "T01"
+  );
+  assert.ok(drift && drift.kind === "artifact-db-status-divergence");
+  assert.equal(drift.dbStatus, "in_progress", "the interrupted Task stays in progress");
+  assert.equal(
+    describeArtifactDbDriftBlocker(drift, ctx),
+    null,
+    "the abandoned worktree copy is auto-repairable",
+  );
+  await repairArtifactDbDrift(drift, ctx);
+
+  assert.equal(existsSync(worktreeSummary), false, "the worktree SUMMARY is moved away");
+  assert.equal(existsSync(rootSummary), false, "the project-root SUMMARY is moved away");
+  assert.equal(quarantinedTaskSummaries(worktreePath).length, 1, "the worktree copy is kept in quarantine");
+  assert.equal(quarantinedTaskSummaries(basePath).length, 1, "the project-root copy is kept in quarantine");
+  clearPathCache();
+  assert.deepEqual(
+    await taskSummaryDivergence(worktreePath),
+    { doctorDivergence: false, reconciliationDivergence: false },
+    "the Task must be dispatchable from the milestone worktree",
+  );
+  assert.deepEqual(
+    await taskSummaryDivergence(basePath),
+    { doctorDivergence: false, reconciliationDivergence: false },
+    "the Task must be dispatchable from the project root",
+  );
+  assert.equal(taskSummaryArtifactRows(), 0, "the repair imports no SUMMARY row from the file");
+  assert.equal(taskState().full_summary_md, "", "the repair imports no summary text from the file");
+  assert.equal(
+    row(`SELECT lifecycle_status AS s FROM workflow_item_lifecycles WHERE item_kind = 'task' AND task_id = 'T01'`).s,
+    "in_progress",
+    "the repair does not complete the Task",
   );
 });
 
@@ -1857,7 +2096,7 @@ test("auto publication commits the Task completion when the PLAN projection fail
   }, beforeReplay);
 });
 
-test("#1973: attempt-gate rejection names the settled outcome and recovery lever; blocker reports bypass the gate", () => {
+test("#1973: attempt-gate rejection names the settled outcome and recovery lever", () => {
   const { attemptId } = createFixture();
   const settlement = settleTaskAttempt({
     invocation: invocation("task-completion/settle-provider-failure"),
@@ -1894,201 +2133,15 @@ test("#1973: attempt-gate rejection names the settled outcome and recovery lever
     },
   );
 
-  assert.equal(
-    resolveTaskCompletionAuthority(TASK, undefined, { blockerReport: true }),
-    "legacy",
-    "blockerDiscovered reports must route to the legacy durable write instead of dead-ending on the gate",
+  // A blocker report rides the same canonical gate: there is no legacy write
+  // path to bypass it with.
+  assert.throws(
+    () => resolveTaskCompletionAuthority(TASK, undefined),
+    (err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      return /no running Attempt/.test(message);
+    },
   );
-});
-
-test("#2348: a legacy blocker write for a watchdog-settled Task records the blocker but refuses completion projections", async () => {
-  const { basePath, planPath, attemptId } = createFixture();
-  // The watchdog settle: the supervisor fails the Attempt out from under the
-  // session without an executor Result, leaving the canonical lifecycle
-  // in_progress with no running Attempt — the exact state that previously
-  // routed blockerDiscovered reports into the legacy completion writer.
-  settleTaskAttempt({
-    invocation: invocation("task-completion/watchdog-settle"),
-    attemptId,
-    outcome: "failed",
-    failureClass: "missing-executor-result",
-    summary: "The supervisor settled the stalled Attempt without an executor Result.",
-    output: {},
-  });
-  assert.equal(
-    resolveTaskCompletionAuthority(TASK, undefined, { blockerReport: true }),
-    "legacy",
-    "pre-fix baseline: the blocker report still resolves to the legacy durable write",
-  );
-
-  const { handleCompleteTask } = await import("../tools/complete-task.js");
-  const result = await handleCompleteTask({
-    taskId: "T01",
-    sliceId: "S01",
-    milestoneId: "M001",
-    oneLiner: "Discovered a blocker after the supervisor settled the Attempt",
-    narrative: "The executor hit a blocker but its Attempt was already watchdog-settled.",
-    verification: "Blocker report; there is no completion to verify.",
-    blockerDiscovered: true,
-    keyFiles: ["src/task.ts"],
-    keyDecisions: [],
-    verificationEvidence: [{
-      command: "npm test",
-      exitCode: 1,
-      verdict: "fail",
-      durationMs: 10,
-    }],
-  }, basePath);
-
-  assert.ok("error" in result, "the legacy write must refuse instead of reporting completion");
-  assert.match(result.error, /no running Attempt/);
-  assert.ok(result.error.includes(attemptId), "the refusal must name the settled Attempt");
-  assert.match(result.error, /outcome=failed/);
-
-  // The blocker/disposition is still recorded durably — the legacy shadow row
-  // keeps its canonical-owned status (insertTask refuses to flip it while a
-  // lifecycle row exists) but carries the blocker fields and evidence…
-  const recorded = row(`
-    SELECT status, blocker_discovered, completed_at, one_liner
-    FROM tasks WHERE milestone_id = 'M001' AND slice_id = 'S01' AND id = 'T01'
-  `);
-  assert.equal(recorded.status, "in_progress", "the canonical lifecycle owns the legacy shadow status");
-  assert.equal(Number(recorded.blocker_discovered), 1);
-  assert.equal(recorded.completed_at, null);
-  assert.equal(recorded.one_liner, "Discovered a blocker after the supervisor settled the Attempt");
-  assert.equal(Number(row("SELECT COUNT(*) AS count FROM verification_evidence").count), 1);
-  // …but no SUMMARY projection exists and the plan checkbox stays unchecked (#1726).
-  assert.equal(
-    Number(row("SELECT COUNT(*) AS count FROM artifacts WHERE artifact_type = 'SUMMARY'").count),
-    0,
-    "no SUMMARY artifact may be projected for a non-terminal canonical Task",
-  );
-  const phaseDir = join(basePath, ".gsd", "phases", "01-test");
-  const summaryFile = readdirSync(phaseDir).find((entry) => entry.endsWith("T01-SUMMARY.md"));
-  assert.equal(summaryFile, undefined, "no SUMMARY file may be written for a non-terminal canonical Task");
-  assert.match(readFileSync(planPath, "utf8"), /\[ \][^\n]*\*\*T01/);
-});
-
-test("#2348: the legacy refusal still records the escalation question for a recorded blocker", async () => {
-  const { basePath, attemptId } = createFixture();
-  settleTaskAttempt({
-    invocation: invocation("task-completion/watchdog-settle-escalation"),
-    attemptId,
-    outcome: "failed",
-    failureClass: "missing-executor-result",
-    summary: "The supervisor settled the stalled Attempt without an executor Result.",
-    output: {},
-  });
-  // The escalation is not a completion projection, so it must survive the
-  // refusal as an Open Question on the Task lifecycle that pauses the slice.
-  writeFileSync(join(basePath, ".gsd", "PREFERENCES.md"), "---\nphases:\n  mid_execution_escalation: true\n---\n");
-  clearGSDPreferencesCache();
-  const previousCwd = process.cwd();
-  process.chdir(basePath);
-  try {
-    const { handleCompleteTask } = await import("../tools/complete-task.js");
-    const result = await handleCompleteTask({
-      taskId: "T01",
-      sliceId: "S01",
-      milestoneId: "M001",
-      oneLiner: "Discovered a hard blocker after the supervisor settled the Attempt",
-      narrative: "The executor hit a hard blocker but its Attempt was already watchdog-settled.",
-      verification: "Blocker report; there is no completion to verify.",
-      blockerDiscovered: true,
-      keyFiles: ["src/task.ts"],
-      keyDecisions: [],
-      verificationEvidence: [{
-        command: "npm test",
-        exitCode: 1,
-        verdict: "fail",
-        durationMs: 10,
-      }],
-      escalation: {
-        question: "Should execution pause for the hard blocker?",
-        options: [
-          { id: "continue", label: "Continue", tradeoffs: "Keeps execution moving with the default path." },
-          { id: "pause", label: "Pause", tradeoffs: "Stops execution until the blocker is reviewed." },
-        ],
-        recommendation: "pause",
-        recommendationRationale: "The blocker should not be silently advanced.",
-        continueWithDefault: false,
-      },
-    }, basePath);
-
-    assert.ok("error" in result, "the refusal must still carry the recovery-context error");
-    assert.match(result.error, /no running Attempt/);
-    assert.deepEqual(row(`
-      SELECT question.question_text, question.question_status, task.escalation_pending
-      FROM workflow_open_questions question
-      JOIN workflow_item_lifecycles lifecycle ON lifecycle.lifecycle_id = question.lifecycle_id
-      JOIN tasks task
-        ON task.milestone_id = lifecycle.milestone_id
-       AND task.slice_id = lifecycle.slice_id
-       AND task.id = lifecycle.task_id
-    `), {
-      question_text: "Should execution pause for the hard blocker?",
-      question_status: "open",
-      escalation_pending: 1,
-    }, "the escalation question must survive the projection refusal");
-    assert.equal(
-      Number(row("SELECT COUNT(*) AS count FROM artifacts WHERE artifact_type = 'SUMMARY'").count),
-      0,
-      "no SUMMARY artifact may accompany the refusal",
-    );
-  } finally {
-    process.chdir(previousCwd);
-    clearGSDPreferencesCache();
-  }
-});
-
-test("#2348: the missing-summary repair also refuses to project for a non-terminal canonical Task", async () => {
-  const { basePath, attemptId } = createFixture();
-  settleTaskAttempt({
-    invocation: invocation("task-completion/watchdog-settle-repair"),
-    attemptId,
-    outcome: "failed",
-    failureClass: "missing-executor-result",
-    summary: "The supervisor settled the stalled Attempt without an executor Result.",
-    output: {},
-  });
-  // Drifted legacy row: closed with an intact summary intent but the SUMMARY
-  // file is gone — the exact precondition the repair sentinel exists for. The
-  // repair must not resurrect a projection the canonical lifecycle rejects.
-  db().prepare(`
-    UPDATE tasks
-    SET status = 'complete', completed_at = '2026-07-12T00:20:00.000Z',
-        full_summary_md = '# T01 Summary
-
-Previously recorded completion.
-'
-    WHERE milestone_id = 'M001' AND slice_id = 'S01' AND id = 'T01'
-  `).run();
-
-  const { handleCompleteTask } = await import("../tools/complete-task.js");
-  const result = await handleCompleteTask({
-    taskId: "T01",
-    sliceId: "S01",
-    milestoneId: "M001",
-    oneLiner: "Discovered a blocker after the supervisor settled the Attempt",
-    narrative: "The executor hit a blocker but its Attempt was already watchdog-settled.",
-    verification: "Blocker report; there is no completion to verify.",
-    blockerDiscovered: true,
-    keyFiles: ["src/task.ts"],
-    keyDecisions: [],
-    verificationEvidence: [{
-      command: "npm test",
-      exitCode: 1,
-      verdict: "fail",
-      durationMs: 10,
-    }],
-  }, basePath);
-
-  assert.ok("error" in result, "the repair branch must not bypass the canonical projection refusal");
-  assert.match(result.error, /no running Attempt/);
-  const phaseDir = join(basePath, ".gsd", "phases", "01-test");
-  const summaryFile = readdirSync(phaseDir).find((entry) => entry.endsWith("T01-SUMMARY.md"));
-  assert.equal(summaryFile, undefined, "the repair must not write a SUMMARY for a non-terminal canonical Task");
-  assert.match(readFileSync(planPathOf(basePath), "utf8"), /\[ \][^\n]*\*\*T01/);
 });
 
 function planPathOf(basePath: string): string {

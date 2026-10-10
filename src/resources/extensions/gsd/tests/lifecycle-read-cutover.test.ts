@@ -13,14 +13,23 @@ import { afterEach, test } from "node:test";
 import { verifyExpectedArtifact } from "../artifact-verification.ts";
 import { shouldSkipTerminalMilestoneCloseout } from "../auto/closeout.ts";
 import { getAlreadyClosedDispatchReason } from "../auto/dispatch.ts";
+import { isAutoActive } from "../auto.ts";
 import type { AutoSession } from "../auto/session.ts";
+import { clearSliceProgressCache, getRoadmapSlicesSync, updateSliceProgressCache } from "../auto-dashboard.ts";
 import { findOpenSlices, resolveDispatch } from "../auto-dispatch.ts";
 import { _repairCompleteSliceRoadmapProjectionForTest, detectRogueFileWrites } from "../auto-post-unit.ts";
-import { checkNeedsReassessment, loadRoadmapCompletedSliceCandidates } from "../auto-prompts.ts";
+import {
+  buildDiscussMilestoneInlinedContext,
+  checkNeedsReassessment,
+  loadRoadmapCompletedSliceCandidates,
+} from "../auto-prompts.ts";
+import { autoSession } from "../auto-runtime-state.ts";
 import { auditOrphanedMilestoneBranches, findUnmergedCompletedMilestone } from "../auto-start.ts";
 import { checkCloseoutConsistencyGate } from "../closeout-consistency-gate.ts";
 import { detectIdleMilestoneResidueHint } from "../closeout-wizard.ts";
+import { handleAutoCommand } from "../commands/handlers/auto.ts";
 import { handleCleanupBranches } from "../commands-maintenance.ts";
+import { GSDDashboardOverlay } from "../dashboard-overlay.ts";
 import {
   _executeAuthorityCutoverDomainOperation,
   executeDomainOperation,
@@ -29,6 +38,7 @@ import {
 } from "../db/domain-operation.ts";
 import {
   readClosedSliceIds,
+  readListedMilestoneIds,
   readMilestone,
   readMilestoneSlices,
   readMilestones,
@@ -48,6 +58,7 @@ import { _loadDiscussNormSlicesForTest } from "../guided-flow.ts";
 import {
   _getAdapter,
   closeDatabase,
+  insertArtifact,
   insertMilestone,
   insertSlice,
   insertTask,
@@ -58,17 +69,19 @@ import { findStaleScopedPauses } from "../interrupted-session.ts";
 import { discardMilestone, isParked, parkMilestone, unparkMilestone } from "../milestone-actions.ts";
 import { evaluateGuardedCompleteMilestoneDispatch } from "../milestone-closeout.ts";
 import { persistMilestonePlan } from "../milestone-planning-persistence.ts";
+import { showQueue } from "../guided-flow-queue.ts";
 import { analyzeParallelEligibility } from "../parallel-eligibility.ts";
 import { internalPlanningInvocation } from "../planning-invocation.ts";
 import { checkVerificationCommands } from "../pre-execution-checks.ts";
 import { reorderMilestones, setMilestoneDependencies } from "../queue-order.ts";
 import { loadSliceTaskIO } from "../reactive-graph.ts";
+import { handleRethink } from "../rethink.ts";
 import { cancelSlice } from "../slice-lifecycle-domain-operation.ts";
 import { getEligibleSlicesFromRows } from "../slice-parallel-eligibility.ts";
 import { deriveState, invalidateStateCache, isGhostMilestone } from "../state.ts";
 import { readProgressFromDb } from "../state/progress-from-db.ts";
 import { readProjectSnapshotFromDb } from "../state/project-snapshot.ts";
-import { handleCompleteTask } from "../tools/complete-task.ts";
+import { resolveTaskCompletionAuthority } from "../task-completion-compatibility-adapter.ts";
 import { handlePlanSlice } from "../tools/plan-slice.ts";
 import { handlePlanTask } from "../tools/plan-task.ts";
 import { handleReassessRoadmap } from "../tools/reassess-roadmap.ts";
@@ -549,6 +562,79 @@ test("after the Cutover a queued row whose lifecycle is completed is not a ghost
   assert.equal(isGhostMilestone(base, "M001"), false);
 });
 
+/**
+ * Four canonically ready Milestones: M001 has no planning behind it and its
+ * legacy row is pending. M002 has a saved CONTEXT row, M003 has a Slice row,
+ * and M004 is a queued shell in both rows.
+ */
+function seedQueuedShellDisagreement(): string {
+  const base = makeProject();
+  insertMilestone({ id: "M001", title: "Shell, legacy pending", status: "pending" });
+  insertMilestone({ id: "M002", title: "Shell with context", status: "queued" });
+  insertMilestone({ id: "M003", title: "Shell with slices", status: "queued" });
+  insertMilestone({ id: "M004", title: "Shell in both rows", status: "queued" });
+  insertSlice({ id: "S01", milestoneId: "M003", title: "Planned", status: "pending", depends: [], sequence: 1 });
+  insertArtifact({
+    path: "milestones/M002/M002-CONTEXT.md",
+    artifact_type: "CONTEXT",
+    milestone_id: "M002",
+    slice_id: null,
+    task_id: null,
+    full_content: "# M002\n",
+  });
+  seedLifecycles("queued-shell", [
+    milestone("M001", "ready"),
+    milestone("M002", "ready"),
+    milestone("M003", "ready"),
+    milestone("M004", "ready"),
+    slice("M003", "S01", "ready"),
+  ]);
+  invalidateStateCache();
+  return base;
+}
+
+test("a queued shell is a lifecycle row in ready with no CONTEXT artifact row and no Slice rows", () => {
+  seedQueuedShellDisagreement();
+  const shells = () => readMilestones().map((m) => [m.id, m.queuedShell]);
+
+  assert.deepEqual(shells(), [["M001", false], ["M002", false], ["M003", false], ["M004", true]],
+    "before the Cutover the legacy queued label answers");
+
+  cutOver();
+
+  assert.deepEqual(shells(), [["M001", true], ["M002", false], ["M003", false], ["M004", true]],
+    "after the Cutover the lifecycle row answers: ready with no CONTEXT row and no Slices");
+});
+
+test("after the Cutover the readiness class takes the queued shell from the canonical field, not the legacy label", async () => {
+  const base = makeProject();
+  insertMilestone({ id: "M001", title: "Shell, nothing behind it", status: "pending" });
+  insertMilestone({ id: "M002", title: "Shell with a draft", status: "pending" });
+  insertArtifact({
+    path: "milestones/M002/M002-CONTEXT-DRAFT.md",
+    artifact_type: "CONTEXT-DRAFT",
+    milestone_id: "M002",
+    slice_id: null,
+    task_id: null,
+    full_content: "# M002 draft\n",
+  });
+  seedLifecycles("readiness", [milestone("M001", "ready"), milestone("M002", "ready")]);
+  invalidateStateCache();
+
+  const before = await deriveState(base);
+  assert.deepEqual(before.registry.map((e) => [e.id, e.status]), [["M001", "active"], ["M002", "pending"]],
+    "before the Cutover the legacy pending row is planning-pending and is the active milestone");
+
+  cutOver();
+
+  // M001 is a queued shell that no sequence names and that has no draft: it
+  // is not promoted. M002 has a draft, so its shell resumes the discussion.
+  const after = await deriveState(base);
+  assert.deepEqual(after.registry.map((e) => [e.id, e.status]), [["M001", "pending"], ["M002", "active"]]);
+  assert.equal(after.activeMilestone?.id, "M002");
+  assert.equal(after.phase, "needs-discussion");
+});
+
 test("after the Cutover the milestone branch audit takes completion from the lifecycle rows", () => {
   const base = seedDisagreement();
   const git = (...args: string[]) => execFileSync("git", args, { cwd: base, stdio: ["ignore", "pipe", "pipe"] });
@@ -699,13 +785,12 @@ test("after the Cutover the closeout consistency gate follows the lifecycle rows
       allowOpenMilestone,
       assumeValidationWaived: true,
       artifactBasePath: base,
-      readOnly: true,
     });
     return result.ok ? "ok" : result.reason;
   };
   const answers = () => [gate("M001", false), gate("M001", true), gate("M002", true)];
 
-  // The legacy rows: M001 is closed and its Task T01 is open. M002 is open and has no Slice.
+  // The lifecycle rows: M001 is closed and its Task T01 is open. M002 is open and has no Slice.
   assert.deepEqual(answers(), ["task-open", "task-open", "slice-missing"]);
 
   cutOver();
@@ -905,6 +990,148 @@ function seedPlanningDisagreement(): string {
   return base;
 }
 
+/** A command context that records its notifications, and a session that records the prompts it gets. */
+function makeCommandSession() {
+  const notifications: string[] = [];
+  const prompts: string[] = [];
+  const ctx = {
+    ui: {
+      notify: (message: string) => { notifications.push(message); },
+      setStatus: () => {},
+    },
+  } as never;
+  const pi = {
+    sendMessage: (message: { content: string }) => { prompts.push(message.content); },
+  } as never;
+  return { ctx, pi, notifications, prompts };
+}
+
+/**
+ * The seeded disagreement, plus a milestone directory M009 that has no row and
+ * a SUMMARY for each Milestone. No Milestone row has a directory.
+ */
+function seedUniverseDisagreement(t: { after: (fn: () => void) => void }): string {
+  const base = seedDisagreement();
+  mkdirSync(join(base, ".gsd", "milestones", "M009"), { recursive: true });
+  writeFileSync(join(base, ".gsd", "milestones", "M009", "M009-SUMMARY.md"), "# M009\n\nSUMMARY-OF-M009\n");
+  for (const id of ["M001", "M002", "M003"]) {
+    insertArtifact({
+      path: `milestones/${id}/${id}-SUMMARY.md`,
+      artifact_type: "SUMMARY",
+      milestone_id: id,
+      slice_id: null,
+      task_id: null,
+      full_content: `# ${id}\n\nSUMMARY-OF-${id}\n`,
+    });
+  }
+  const previousCwd = process.cwd();
+  t.after(() => process.chdir(previousCwd));
+  process.chdir(base);
+  return base;
+}
+
+test("the Milestone universe is the listed rows of the read interface, never the milestone directories", (t) => {
+  seedUniverseDisagreement(t);
+
+  assert.deepEqual(readListedMilestoneIds(), ["M001", "M002", "M003", "M004", "M005"]);
+
+  cutOver();
+
+  // M003 is legacy active and canonical cancelled: a tombstone is not listed.
+  assert.deepEqual(readListedMilestoneIds(), ["M001", "M002", "M004", "M005"]);
+});
+
+test("after the Cutover /gsd auto and /gsd next refuse a Milestone that the lifecycle rows do not list", async (t) => {
+  seedUniverseDisagreement(t);
+  cutOver();
+
+  for (const command of ["auto M003", "next M009"]) {
+    const { ctx, pi, notifications } = makeCommandSession();
+    assert.equal(await handleAutoCommand(command, ctx, pi), true);
+    const target = command.split(" ")[1];
+    assert.deepEqual(
+      notifications.filter((message) => message.includes("does not exist")),
+      [`Milestone ${target} does not exist. Available: M001, M002, M004, M005`],
+    );
+    assert.equal(isAutoActive(), false);
+  }
+});
+
+test("after the Cutover the prior Milestone summaries of a discuss prompt follow the lifecycle rows", async (t) => {
+  const base = seedUniverseDisagreement(t);
+
+  const before = await buildDiscussMilestoneInlinedContext("M004", base);
+  assert.match(before, /SUMMARY-OF-M001/);
+  assert.match(before, /SUMMARY-OF-M002/);
+  assert.match(before, /SUMMARY-OF-M003/, "before the Cutover M003 is listed (legacy active)");
+
+  cutOver();
+
+  const after = await buildDiscussMilestoneInlinedContext("M004", base);
+  assert.match(after, /SUMMARY-OF-M001/);
+  assert.match(after, /SUMMARY-OF-M002/);
+  assert.doesNotMatch(after, /SUMMARY-OF-M003/, "a cancelled Milestone is not a prior Milestone");
+  assert.doesNotMatch(after, /SUMMARY-OF-M009/, "a directory with no row is not a Milestone");
+});
+
+test("after the Cutover /gsd rethink lists the Milestones of the lifecycle rows", async (t) => {
+  seedUniverseDisagreement(t);
+  cutOver();
+
+  const { ctx, pi, prompts } = makeCommandSession();
+  await handleRethink("", ctx, pi);
+
+  assert.equal(prompts.length, 1);
+  const rows = prompts[0]!.split("\n").filter((line) => /^\| \d+ \| /.test(line)).map((line) => line.split(" | ")[1]);
+  assert.deepEqual(rows, ["M001", "M002", "M004", "M005"]);
+  assert.match(prompts[0]!, /— 4 total/);
+});
+
+test("a milestone directory with no row is no Milestone for /gsd queue and /gsd rethink", async (t) => {
+  const base = makeProject();
+  mkdirSync(join(base, ".gsd", "milestones", "M001"), { recursive: true });
+  writeFileSync(join(base, ".gsd", "milestones", "M001", "M001-ROADMAP.md"), "# M001\n");
+  const previousCwd = process.cwd();
+  t.after(() => process.chdir(previousCwd));
+  process.chdir(base);
+
+  const queue = makeCommandSession();
+  await showQueue(queue.ctx, queue.pi, base);
+  assert.deepEqual(queue.notifications, ["No milestones exist yet. Run /gsd to create the first one."]);
+
+  const rethink = makeCommandSession();
+  await handleRethink("", rethink.ctx, rethink.pi);
+  assert.equal(rethink.notifications.at(-1), "No milestones exist yet. Nothing to rethink.");
+  assert.deepEqual(rethink.prompts, []);
+});
+
+/**
+ * One active Milestone whose Slices and Tasks disagree: S01, S02, T01 and T02
+ * are legacy complete and canonical ready; S03 and T03 are legacy pending and
+ * canonical completed.
+ */
+function seedDashboardDisagreement(): string {
+  const base = makeProject();
+  insertMilestone({ id: "M001", title: "Dashboard", status: "active" });
+  insertSlice({ id: "S01", milestoneId: "M001", title: "Open one", status: "complete", depends: [], sequence: 1 });
+  insertSlice({ id: "S02", milestoneId: "M001", title: "Open two", status: "complete", depends: [], sequence: 2 });
+  insertSlice({ id: "S03", milestoneId: "M001", title: "Completed", status: "pending", depends: [], sequence: 3 });
+  insertTask({ id: "T01", sliceId: "S01", milestoneId: "M001", title: "Open one", status: "complete" });
+  insertTask({ id: "T02", sliceId: "S01", milestoneId: "M001", title: "Open two", status: "complete" });
+  insertTask({ id: "T03", sliceId: "S01", milestoneId: "M001", title: "Completed", status: "pending" });
+  seedLifecycles("dashboard", [
+    milestone("M001", "in_progress"),
+    slice("M001", "S01", "ready"),
+    slice("M001", "S02", "ready"),
+    slice("M001", "S03", "completed"),
+    task("M001", "S01", "T01", "ready"),
+    task("M001", "S01", "T02", "ready"),
+    task("M001", "S01", "T03", "completed"),
+  ]);
+  invalidateStateCache();
+  return base;
+}
+
 function plannedTask(taskId: string) {
   return {
     taskId,
@@ -1026,24 +1253,30 @@ test("after the Cutover reassess-roadmap takes the closed milestone and the comp
   assert.equal(readSlice("M002", "S01")?.title, "Changed after the Cutover");
 });
 
-test("after the Cutover a blocker report takes the closed milestone, slice and task from the lifecycle rows", async () => {
+test("after the Cutover a blocker report is refused by the canonical completion authority", async () => {
   const base = seedPlanningDisagreement();
-  const report = () => handleCompleteTask({
+  const report = () => resolveTaskCompletionAuthority({
     milestoneId: "M002",
     sliceId: "S01",
     taskId: "T01",
-    oneLiner: "Found a blocker",
-    narrative: "The task cannot continue.",
-    verification: "Not run.",
-    blockerDiscovered: true,
-  }, base);
+  });
 
-  assert.match(errorOf(await report()) ?? "", /cannot complete task in a closed milestone: M002 \(status: complete\)/);
+  // The authority refuses before the Cutover: a blocker report is not a
+  // completion, and no running Attempt exists to close.
+  assert.throws(report, /no running Attempt to close/);
 
   cutOver();
 
-  // M002 and S01 are canonical ready. T01 is legacy pending and canonical completed.
-  assert.match(errorOf(await report()) ?? "", /task T01 is already complete/);
+  // M002 and S01 are canonical ready. T01 is legacy pending and canonical
+  // completed: still no running Attempt, still no legacy write path.
+  assert.throws(report, /no running Attempt to close/);
+  // A closed Task without an Attempt is never dispatched, so the refusal names
+  // the closed state and does not send the caller to auto-mode.
+  assert.throws(report, (error: Error) => {
+    assert.match(error.message, /already closed in the canonical lifecycle \(completed\)/);
+    assert.doesNotMatch(error.message, /\/gsd auto|\/gsd next|gsd_execute/);
+    return true;
+  });
 });
 
 test("after the Cutover plan-milestone takes the closed milestone and its dependencies from the lifecycle rows", async () => {
@@ -1076,8 +1309,11 @@ test("after the Cutover plan-milestone takes the closed milestone and its depend
   assert.match(errorOf(await plan("M006", ["M003"])) ?? "", /depends_on milestone M003 was discarded/);
   assert.match(errorOf(await plan("M006", ["M002"])) ?? "", /depends_on milestone M002 is not yet complete/);
   // M004 is legacy complete and canonical pending: the precondition accepts
-  // it, and the status writer then refuses the rows that disagree.
-  assert.match(errorOf(await plan("M004", [])) ?? "", /canonical and legacy status mismatch \(canonical=pending, legacy=complete\)/);
+  // it, and the plan's status projection refuses the rows that disagree.
+  assert.match(
+    errorOf(await plan("M004", [])) ?? "",
+    /Cannot project Milestone M004 legacy status active; canonical lifecycle is pending/,
+  );
   // M001 is legacy active and canonical completed.
   assert.equal(errorOf(await plan("M006", ["M001"])), undefined);
   assert.equal(readSlice("M006", "S01")?.title, "First slice");
@@ -1148,4 +1384,55 @@ test("after the Cutover the discuss flow takes the complete slices from the life
   cutOver();
 
   assert.deepEqual(await complete(), ["S02"]);
+});
+
+test("after the Cutover the progress widget counts done Slices and Tasks from the lifecycle rows", (t) => {
+  const base = seedDashboardDisagreement();
+  t.after(() => clearSliceProgressCache());
+
+  updateSliceProgressCache(base, "M001", "S01");
+  assert.deepEqual(
+    [getRoadmapSlicesSync()?.done, getRoadmapSlicesSync()?.activeSliceTasks?.done],
+    [2, 2],
+    "before the Cutover the legacy rows answer",
+  );
+
+  cutOver();
+  updateSliceProgressCache(base, "M001", "S01");
+
+  assert.deepEqual(getRoadmapSlicesSync(), {
+    done: 1,
+    total: 3,
+    milestoneId: "M001",
+    activeSliceTasks: { done: 1, total: 3 },
+    taskDetails: [
+      { id: "T01", title: "Open one", done: false },
+      { id: "T02", title: "Open two", done: false },
+      { id: "T03", title: "Completed", done: true },
+    ],
+  });
+});
+
+test("after the Cutover the dashboard overlay marks done Slices and Tasks from the lifecycle rows", async (t) => {
+  const base = seedDashboardDisagreement();
+  cutOver();
+  autoSession.reset();
+  autoSession.basePath = base;
+  const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+  const overlay = new GSDDashboardOverlay({ requestRender() {} }, theme as never, () => {});
+  t.after(() => {
+    overlay.dispose();
+    autoSession.reset();
+  });
+
+  await (overlay as unknown as { refreshInFlight: Promise<void> | null }).refreshInFlight;
+
+  const view = (overlay as unknown as {
+    milestoneData: { slices: Array<{ id: string; done: boolean; tasks: Array<{ id: string; done: boolean }> }> } | null;
+  }).milestoneData;
+  assert.deepEqual(view?.slices.map((s) => [s.id, s.done]), [["S01", false], ["S02", false], ["S03", true]]);
+  assert.deepEqual(
+    view?.slices.find((s) => s.id === "S01")?.tasks.map((task) => [task.id, task.done]),
+    [["T01", false], ["T02", false], ["T03", true]],
+  );
 });

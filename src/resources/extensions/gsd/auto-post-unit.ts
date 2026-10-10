@@ -120,7 +120,7 @@ import {
   verificationBudget,
 } from "./auto/verification-retry-state.js";
 import { readUnitBudget, resetUnitBudget, spendUnitBudget } from "./db/unit-dispatch-budgets.js";
-import { readStoredUnitRetry, releaseCommitRepairRetry, releaseUnitRetry } from "./db/unit-dispatch-retries.js";
+import { readStoredUnitRetry, releaseCommitRepairRetry, releaseUnitRetry, storeCloseoutRefusal } from "./db/unit-dispatch-retries.js";
 import { getLedger } from "./metrics.js";
 import { getUnitCostSpikeAction, resolveUnitCostSpikeMultiplier } from "./auto-budget.js";
 import { resolveCanonicalMilestoneRoot } from "./worktree-manager.js";
@@ -171,7 +171,7 @@ const _worktreeProjection = new WorktreeStateProjection();
 
 /** Maximum verification retry attempts before escalating to blocker placeholder (#2653). */
 const MAX_VERIFICATION_RETRIES = 3;
-const MAX_GIT_COMMIT_REMEDIATION_RETRIES = 2;
+export const MAX_GIT_COMMIT_REMEDIATION_RETRIES = 2;
 /** Keep failure toasts short while still showing concrete examples. */
 const MAX_NOTIFICATION_DETAILS = 3;
 const NOTIFICATION_BULLET = "•";
@@ -518,43 +518,29 @@ async function prepareHookRetry(
     if (!retryKey) {
       throw new Error(`Hook retry Task ${mid}/${sid}/${tid} has no canonical completion identity`);
     }
-    const db = _getAdapter();
-    if (!db) {
+    if (!_getAdapter()) {
       throw new Error(`Hook retry Task ${mid}/${sid}/${tid} cannot be prepared: database unavailable`);
     }
-    const task = getTask(mid, sid, tid);
+    // The status label of the read interface: after the Cutover it names the
+    // lifecycle status, so a legacy row that disagrees does not answer.
+    const task = readTask(mid, sid, tid);
     if (!task) throw new Error(`Hook retry Task ${mid}/${sid}/${tid} is missing`);
-    const lifecycle = db.prepare(`
-      SELECT lifecycle_status, last_operation_id
-      FROM workflow_item_lifecycles
-      WHERE item_kind = 'task'
-        AND milestone_id = :milestone_id
-        AND slice_id = :slice_id
-        AND task_id = :task_id
-    `).get({
-      ":milestone_id": mid,
-      ":slice_id": sid,
-      ":task_id": tid,
-    });
-    const preparedOperation = db.prepare(`
-      SELECT operation_id
-      FROM workflow_operations
-      WHERE idempotency_key = :idempotency_key
-    `).get({ ":idempotency_key": retryKey });
+    const lifecycle = getTaskLifecycleHead(mid, sid, tid);
+    const preparedOperationId = getOperationIdByIdempotencyKey(retryKey);
     const alreadyPrepared = task.status === "pending"
-      && lifecycle?.["lifecycle_status"] === "ready"
-      && typeof preparedOperation?.["operation_id"] === "string"
-      && lifecycle["last_operation_id"] === preparedOperation["operation_id"];
+      && lifecycle?.lifecycle_status === "ready"
+      && preparedOperationId !== null
+      && lifecycle.last_operation_id === preparedOperationId;
     let reviewedCompletionIsCurrent = false;
     let currentCompletionIdentityIsKnown = false;
     if (trigger.completionOperationId) {
       currentCompletionIdentityIsKnown = task.status === "complete"
-        && lifecycle?.["lifecycle_status"] === "completed"
-        && typeof lifecycle["last_operation_id"] === "string"
-        && lifecycle["last_operation_id"].length > 0;
+        && lifecycle?.lifecycle_status === "completed"
+        && typeof lifecycle?.last_operation_id === "string"
+        && lifecycle.last_operation_id.length > 0;
       reviewedCompletionIsCurrent = task.status === "complete"
-        && lifecycle?.["lifecycle_status"] === "completed"
-        && lifecycle["last_operation_id"] === trigger.completionOperationId;
+        && lifecycle?.lifecycle_status === "completed"
+        && lifecycle.last_operation_id === trigger.completionOperationId;
     } else if (trigger.legacyCompletedAt) {
       currentCompletionIdentityIsKnown = task.status === "complete"
         && !lifecycle
@@ -619,7 +605,7 @@ export function resolveVerificationFailureMarkerPath(
   }
 }
 
-async function buildTaskCommitContextForUnit(
+export async function buildTaskCommitContextForUnit(
   basePath: string,
   unitId: string,
 ): Promise<TaskCommitContext | undefined> {
@@ -869,9 +855,11 @@ import {
   type AutoOutcomeSurfaceSnapshot,
 } from "./auto-dashboard.js";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { getOperationIdByIdempotencyKey, getTaskLifecycleHead } from "./db/lifecycle-queries.js";
 import { basename, join, relative } from "node:path";
 import { _resetHasChangesCache } from "./native-git-bridge.js";
 import { autoCommitCurrentBranch } from "./worktree.js";
+import { isTaskSourceCommitSettled } from "./auto/task-source-commit.js";
 
 // ─── Rogue File Detection ──────────────────────────────────────────────────
 
@@ -2453,7 +2441,15 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
           const verificationBudgetRef = verificationBudget(s.currentUnit.type, s.currentUnit.id);
           const verificationFailureMarker = resolveVerificationFailureMarkerPath(s.currentUnit.type, s.currentUnit.id, s.basePath);
           if (verificationFailureMarker && existsSync(verificationFailureMarker)) {
+            // The report on disk is the agent's refusal channel; this probe is
+            // the one ingest. The refusal a decision reads is the dispatch
+            // row, stored after the retry state clears so it survives.
             clearVerificationRetry(s, s.currentUnit.type, s.currentUnit.id);
+            storeCloseoutRefusal(
+              s.currentUnit.type,
+              s.currentUnit.id,
+              relative(s.basePath, verificationFailureMarker),
+            );
             debugLog("postUnit", {
               phase: "artifact-verify-failure-marker-detected",
               unitType: s.currentUnit.type,
@@ -2659,7 +2655,13 @@ export async function postUnitPostVerification(pctx: PostUnitContext): Promise<"
   if (s.currentUnit) {
     if (shouldDeferCloseoutGitAction(s.currentUnit.type)) {
       const headBeforeCloseout = readCommittedHeadSha(s.basePath);
-      const gitActionResult = await runCloseoutGitAction(pctx, s.currentUnit, { softFailure: true });
+      // ADR-050: a Task whose source commit settled before publication
+      // (Closeout Effect ordinal 1, receipt recorded) skips the legacy
+      // post-publication commit; the recapture, audit and sync below still
+      // run against the committed tree.
+      const gitActionResult = isTaskSourceCommitSettled(s.basePath, s.currentUnit.id)
+        ? "continue"
+        : await runCloseoutGitAction(pctx, s.currentUnit, { softFailure: true });
       if (gitActionResult === "dispatched") {
         return "stopped";
       }

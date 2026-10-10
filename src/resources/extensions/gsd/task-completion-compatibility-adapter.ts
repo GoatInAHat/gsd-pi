@@ -16,6 +16,7 @@ import {
   getTask,
   getSlice,
 } from "./gsd-db.js";
+import { incrementLegacyTelemetry } from "./legacy-telemetry.js";
 import { renderPlanCheckboxes, renderTaskSummary } from "./markdown-renderer.js";
 import { clearPathCache, resolveGsdPathContract, resolveTaskFile } from "./paths.js";
 import {
@@ -40,6 +41,10 @@ import {
   resolveVerificationRepositoryTargets,
 } from "./verification-source-integrity.js";
 import { renderSummaryContent } from "./workflow-projections.js";
+import {
+  TASK_SOURCE_COMMIT_EFFECT,
+  readTaskCloseoutPlan,
+} from "./task-closeout.js";
 
 export interface TaskCompletionIdentity {
   milestoneId: string;
@@ -109,7 +114,7 @@ interface AttemptRow {
   output_json: string;
 }
 
-export type TaskCompletionAuthority = "canonical" | "legacy";
+export type TaskCompletionAuthority = "canonical";
 
 function requireTask(input: TaskCompletionIdentity): TaskRow {
   const task = getTask(input.milestoneId, input.sliceId, input.taskId);
@@ -149,20 +154,6 @@ function replayAttemptId(
   return row ? String(row["attempt_id"]) : undefined;
 }
 
-export interface TaskCompletionAuthorityOptions {
-  /**
-   * gsd_task_complete(blockerDiscovered: true): a blocker report is an
-   * escalation channel, not a completion — it must always be recordable, even
-   * when the supervisor already settled the Attempt out from under a surviving
-   * session (#1973). When set, the running-attempt gate routes to the legacy
-   * write path (a durable DB write that needs no Attempt) instead of throwing.
-   * The legacy writer still refuses its SUMMARY + plan-checkbox projections
-   * while the canonical lifecycle is non-terminal (#2348, see
-   * legacyCompletionProjectionRefusal) — recordable, not projectable.
-   */
-  blockerReport?: boolean;
-}
-
 /**
  * Name the recorded recovery action and its sanctioned next move so a caller
  * never has to guess the recoveryActionId (#2267). Shared by the
@@ -185,7 +176,25 @@ export function recoveryRouteLever(route: TaskRecoveryRouteSnapshot): string {
  * to close. Shared by the running-attempt gate itself and by the legacy
  * projection refusal (#2348), so both surfaces name the same sanctioned exit.
  */
-function noRunningAttemptGateError(task: TaskCompletionIdentity): string {
+function noRunningAttemptGateError(task: TaskCompletionIdentity, lifecycleStatus: string): string {
+  let neverClaimed = false;
+  try {
+    neverClaimed = readLatestTaskAttempt(task) === null;
+  } catch {
+    // Best-effort: fall through to the general guidance.
+  }
+  // With zero Attempts there is no checkpoint to resume and nothing for
+  // gsd_task_settle to publish; only auto-mode dispatch claims one (#2697).
+  if (neverClaimed) {
+    if (["completed", "cancelled", "blocker-accepted"].includes(lifecycleStatus)) {
+      return "Canonical Task completion has no running Attempt to close: the Task is already closed in the " +
+        `canonical lifecycle (${lifecycleStatus}) and no Attempt was ever claimed for it, so there is nothing to complete.`;
+    }
+    return "Canonical Task completion has no running Attempt to close: no Attempt was ever claimed for this " +
+      "Task, so gsd_task_settle cannot publish it either. Only auto-mode dispatch claims an Attempt. " +
+      "Run `/gsd auto` (`/gsd next` for one unit; `gsd_execute` from an MCP host): the dispatched " +
+      "unit finds the finished work, verifies it, and completes the Task.";
+  }
   return "Canonical Task completion has no running Attempt to close. Re-enter `/gsd auto` to resume " +
     "the Task from its durable checkpoint; if its latest Attempt is settled succeeded at the verify " +
     "stage, dry-run `gsd_task_settle` (reconcileLifecycle) to publish the verified completion." +
@@ -217,7 +226,6 @@ function latestAttemptRecoveryContext(task: TaskCompletionIdentity): string {
 export function resolveTaskCompletionAuthority(
   task: TaskCompletionIdentity,
   idempotencyKey?: string,
-  options?: TaskCompletionAuthorityOptions,
 ): TaskCompletionAuthority {
   if (idempotencyKey && replayAttemptId(idempotencyKey, task)) return "canonical";
   if (idempotencyKey) {
@@ -232,6 +240,7 @@ export function resolveTaskCompletionAuthority(
 
   const lifecycle = getDb().prepare(`
     SELECT lifecycle.lifecycle_id,
+           lifecycle.lifecycle_status,
            EXISTS (
              SELECT 1 FROM workflow_execution_attempts attempt
              WHERE attempt.lifecycle_id = lifecycle.lifecycle_id
@@ -263,13 +272,13 @@ export function resolveTaskCompletionAuthority(
   }) as Record<string, unknown> | undefined;
 
   if (!lifecycle) {
-    if (idempotencyKey) {
-      throw new Error("Canonical Task completion lifecycle is missing for private invocation");
-    }
-    return "legacy";
+    throw new Error(
+      `Canonical Task completion lifecycle is missing for ${task.milestoneId}/${task.sliceId}/${task.taskId}. ` +
+      "A hierarchy row without a canonical lifecycle row cannot be completed: plan the slice with " +
+      "gsd_plan_slice (or adopt the project with /gsd db adopt --apply), then re-enter `/gsd auto`.",
+    );
   }
   if (Number(lifecycle["has_held_running_attempt"]) === 1) return "canonical";
-  if (options?.blockerReport) return "legacy";
   if (Number(lifecycle["has_running_attempt"]) === 1) {
     throw new Error(
       "Canonical Task completion found an orphaned running Attempt whose milestone lease is no " +
@@ -278,40 +287,7 @@ export function resolveTaskCompletionAuthority(
       latestAttemptRecoveryContext(task),
     );
   }
-  throw new Error(noRunningAttemptGateError(task));
-}
-
-/**
- * Canonical Task lifecycle dispositions that already carry their outcome.
- * Matches the closed set doctor-engine-checks reconciles against, including
- * the #2202 operator `blocker-accepted` closeout.
- */
-const TERMINAL_TASK_LIFECYCLE_STATUSES: ReadonlySet<string> = new Set([
-  "completed",
-  "cancelled",
-  "blocker-accepted",
-]);
-
-/**
- * The legacy projection refusal (#2348): when the Task already carries a
- * canonical lifecycle that has not reached a terminal disposition, the legacy
- * completion writer may still record the blocker/disposition durably, but it
- * must not project a SUMMARY or flip plan checkboxes — a legacy completion
- * projection would claim a completion the canonical lifecycle does not carry.
- * This is the legacy-path twin of the #1726 staging invariant ("a failed
- * Attempt has no completion to render"), and the returned message mirrors the
- * running-attempt gate error so a stranded session learns the sanctioned exit
- * (#1973) instead of a false completion. Returns null when the legacy
- * projections may proceed (no canonical row, or a terminal disposition).
- */
-export function legacyCompletionProjectionRefusal(
-  task: TaskCompletionIdentity,
-): string | null {
-  const lifecycleStatus = readTaskLifecycleStatus(task);
-  if (lifecycleStatus === null || TERMINAL_TASK_LIFECYCLE_STATUSES.has(lifecycleStatus)) {
-    return null;
-  }
-  return noRunningAttemptGateError(task);
+  throw new Error(noRunningAttemptGateError(task, String(lifecycle["lifecycle_status"])));
 }
 
 function runningAttemptId(task: TaskCompletionIdentity): string {
@@ -592,6 +568,26 @@ function taskQualityGateContent(attempt: AttemptRow): TaskQualityGateContent {
   };
 }
 
+/**
+ * The receipt gate of a Task publication (ADR-050): when the Task carries a
+ * Closeout Plan whose source commit is its required effect, publication runs
+ * only with the effect's Settlement Receipt. A refused or failed commit
+ * leaves the Task unpublished with its Attempt settled; the git-commit repair
+ * retry (#2618) repairs it. A Task whose commit is not GSD's to make (the
+ * effect is not in the plan, or there is no plan) publishes without it.
+ */
+export function refuseUnsettledTaskSourceCommit(task: TaskCompletionIdentity): void {
+  const commitEffect = readTaskCloseoutPlan(task)?.effects
+    .find((effect) => effect.effectKind === TASK_SOURCE_COMMIT_EFFECT);
+  if (!commitEffect || commitEffect.receipt) return;
+  throw new Error(
+    `Verified Task publication refused: the Closeout Plan of ${task.milestoneId}/${task.sliceId}/` +
+    `${task.taskId} has no Settlement Receipt for its source commit. The Task stays unpublished with ` +
+    "its Attempt settled; commit the Task source and publish again (the auto loop commits before " +
+    "publication; a refused commit is repaired by the stored git-commit retry).",
+  );
+}
+
 function publishCanonicalCompletion(
   input: PublishVerifiedTaskCompletionInput,
 ): "committed" | "replayed" {
@@ -637,6 +633,9 @@ function publishCanonicalCompletion(
     }
 
     completeLegacyTaskForVerifiedAttempt(context, input.task);
+    // The legacy tasks.status mirror write above is part of the canonical
+    // publication path; the G8 gate watches it without zero-gating it.
+    incrementLegacyTelemetry("legacy.legacyTaskStatusWrite");
     closeTaskQualityGates(input.task, taskQualityGateContent(attempt));
 
     const entityId = `${input.task.milestoneId}/${input.task.sliceId}/${input.task.taskId}`;
@@ -747,6 +746,9 @@ function readoptReadyLifecycleShadowForPublication(input: PublishVerifiedTaskCom
 export async function publishVerifiedTaskCompletion(
   input: PublishVerifiedTaskCompletionInput,
 ): Promise<PublishedTaskCompletionReceipt> {
+  // ADR-050: the receipt gate runs before any mutation — a refused commit
+  // must not spend the ready→in_progress re-adoption or the source capture.
+  refuseUnsettledTaskSourceCommit(input.task);
   requireCurrentVerifiedSource(input);
   readoptReadyLifecycleShadowForPublication(input);
   const status = publishCanonicalCompletion(input);

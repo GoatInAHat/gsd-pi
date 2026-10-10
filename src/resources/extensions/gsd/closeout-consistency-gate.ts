@@ -5,26 +5,19 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import {
-  getLatestAssessmentByScope,
   getPendingGates,
-  insertAssessment,
   isDbAvailable,
-  transaction,
 } from "./gsd-db.js";
 import { readMilestone, readMilestoneSlices, readSliceTasks } from "./db/lifecycle-read.js";
 import {
   getWorkflowDatabasePath,
   refreshWorkflowDatabaseFromDisk,
 } from "./db-workspace.js";
-import { isDeferredStatus } from "./status-guards.js";
+import { isDeferredStatus, isNeverWillRunTaskStatus } from "./status-guards.js";
 import {
-  closeQualityGatesFromEvidence,
   inspectQualityGatesFromEvidence,
   type QualityGateClosureOptions,
 } from "./quality-gate-closure.js";
-import { insertMilestoneValidationGates } from "./milestone-validation-gates.js";
-import { relMilestoneFile } from "./paths.js";
-import { invalidateAllCaches } from "./cache.js";
 import {
   isMilestoneLifecycleAdopted,
   readMilestoneCloseoutAuthorization,
@@ -40,7 +33,6 @@ import {
 } from "./verification-source-integrity.js";
 import { resolveRepositoryProjectRoot } from "./repository-registry.js";
 import { resolveCanonicalMilestoneRoot } from "./worktree-manager.js";
-import { renderMilestoneValidation } from "./markdown-renderer.js";
 
 export const CLOSEOUT_CONSISTENCY_BLOCKED_REASON = "closeout-consistency-blocked";
 
@@ -87,7 +79,6 @@ export interface CloseoutConsistencyOptions {
   refreshFromDisk?: boolean;
   allowOpenMilestone?: boolean;
   artifactBasePath?: string;
-  allowPassThroughValidation?: boolean;
   /**
    * Preview dry-run (#2230): the dispatch rule records the validation waiver
    * immediately before this gate in a real turn, and preview suppresses that
@@ -96,12 +87,6 @@ export interface CloseoutConsistencyOptions {
    * blocker still blocks, matching the real post-waiver evaluation.
    */
   assumeValidationWaived?: boolean;
-  /**
-   * Preview dry-run (#2230): evaluate without the gate's own writes — the
-   * pass-through validation recorder and evidence-based gate closure.
-   * Decisions are mirrored read-only so the result equals the real turn's.
-   */
-  readOnly?: boolean;
 }
 
 function blocked(reason: CloseoutConsistencyFailureReason, message: string): CloseoutConsistencyResult {
@@ -155,17 +140,6 @@ function isFileBackedDbPath(path: string | null): boolean {
   return Boolean(path && path !== ":memory:");
 }
 
-/**
- * Task statuses that mean the task will never run, so its task-scoped gate
- * rows can never be evaluated: "skipped" (the canonical status replan-slice
- * projects onto removed "husk" tasks) and the raw legacy alias "cancelled".
- * Deferred is intentionally absent: a deferred task is not a closed status and
- * exits via the task-open check before gates are consulted.
- */
-function isNeverWillRunTaskStatus(status: string | undefined): boolean {
-  return status === "skipped" || status === "cancelled";
-}
-
 function artifactBasePathFromDb(): string | undefined {
   const dbPath = getWorkflowDatabasePath();
   if (!isFileBackedDbPath(dbPath)) return undefined;
@@ -173,75 +147,6 @@ function artifactBasePathFromDb(): string | undefined {
   return existsSync(join(dbBasePath, ".git"))
     ? dbBasePath
     : resolveRepositoryProjectRoot(process.cwd());
-}
-
-/** Every slice and every task of the milestone is closed in the DB. No SUMMARY file is read. */
-function allSlicesAndTasksClosed(milestoneId: string): boolean {
-  const slices = readMilestoneSlices(milestoneId);
-  if (slices.length === 0) return false;
-
-  return slices.every((slice) =>
-    slice.closed &&
-    readSliceTasks(milestoneId, slice.id).every((task) => task.done));
-}
-
-function renderCloseoutPassThroughValidation(milestoneId: string): string {
-  return [
-    "---",
-    "verdict: pass",
-    "skip_validation: true",
-    "skip_validation_reason: closeout-recovery",
-    "remediation_round: 0",
-    "---",
-    "",
-    "# Milestone Validation (skipped)",
-    "",
-    `Milestone validation was recorded during closeout for ${milestoneId} because all slices and tasks were closed in the database and no milestone-validation assessment was present.`,
-    "",
-  ].join("\n");
-}
-
-function recordCloseoutPassThroughValidationIfReady(
-  milestoneId: string,
-  artifactBasePath?: string,
-): boolean {
-  const basePath = artifactBasePath ?? artifactBasePathFromDb();
-  if (!basePath) return false;
-
-  const existing = getLatestAssessmentByScope(milestoneId, "milestone-validation");
-  if (existing?.status === "pass") return true;
-  if (existing) return false;
-  if (!allSlicesAndTasksClosed(milestoneId)) return false;
-
-  const validationPath = join(basePath, relMilestoneFile(basePath, milestoneId, "VALIDATION"));
-  const content = renderCloseoutPassThroughValidation(milestoneId);
-
-  transaction(() => {
-    insertAssessment({
-      path: validationPath,
-      milestoneId,
-      sliceId: null,
-      taskId: null,
-      status: "pass",
-      scope: "milestone-validation",
-      fullContent: content,
-    });
-    const gateSliceId = readMilestoneSlices(milestoneId)[0]?.id;
-    if (gateSliceId) {
-      insertMilestoneValidationGates(
-        milestoneId,
-        gateSliceId,
-        "pass",
-        new Date().toISOString(),
-      );
-    }
-  });
-  // The file is rendered from the committed row, by the renderer that the
-  // validate tool and the full rebuild use.
-  renderMilestoneValidation(basePath, milestoneId);
-
-  invalidateAllCaches();
-  return true;
 }
 
 export function checkCloseoutConsistencyGate(
@@ -284,29 +189,6 @@ export function checkCloseoutConsistencyGate(
 
   const adoptedMilestone = isMilestoneLifecycleAdopted(milestoneId);
   const validationRequired = adoptedMilestone || !milestone.discarded;
-  let validation = validationRequired && !adoptedMilestone
-    ? getLatestAssessmentByScope(milestoneId, "milestone-validation")
-    : null;
-  if (
-    validationRequired &&
-    !adoptedMilestone &&
-    validation?.status !== "pass" &&
-    options.allowPassThroughValidation
-  ) {
-    const artifactBasePath = options.artifactBasePath ?? artifactBasePathFromDb();
-    if (options.readOnly) {
-      // Preview: the pass-through recorder writes a VALIDATION projection and
-      // assessment/gate rows. It only records when no assessment exists and
-      // every slice and task is closed in the DB — mirror those read-only
-      // preconditions and evaluate the rest of the gate as if recorded,
-      // without writing (#2230).
-      if (!validation && artifactBasePath && allSlicesAndTasksClosed(milestoneId)) {
-        validation = { status: "pass" } as NonNullable<typeof validation>;
-      }
-    } else if (recordCloseoutPassThroughValidationIfReady(milestoneId, artifactBasePath)) {
-      validation = getLatestAssessmentByScope(milestoneId, "milestone-validation");
-    }
-  }
   let canonicalAuthorization = null;
   let authorizationDrift: VerificationSourceDriftDiagnosis = {
     paths: [],
@@ -392,15 +274,13 @@ export function checkCloseoutConsistencyGate(
           `Closeout consistency blocked for ${milestoneId}: ${formatCloseoutAuthorizationBlockers(canonicalAuthorization.blockers, authorizationDrift)}`,
         );
       }
-    } else if (validation?.status !== "pass") {
-      const validationStatus = validation?.status ?? "absent";
-      const recovery =
-        validationStatus === "absent"
-          ? ` Run \`/gsd dispatch validate ${milestoneId}\` to create the validation, or set \`phases.skip_milestone_validation: true\` in .gsd/PREFERENCES.md to skip it.`
-          : "";
+    } else {
+      // No lifecycle adoption: there is no canonical closeout authorization to
+      // consult, so the gate stops. Cutover runs on the first open; a milestone
+      // reaching here unadopted is stale state, never a pass-through.
       return blocked(
         "validation-not-pass",
-        `Closeout consistency blocked for ${milestoneId}: latest milestone validation is "${validationStatus}".${recovery}`,
+        `Closeout consistency blocked for ${milestoneId}: latest milestone validation is "absent". Run \`/gsd dispatch validate ${milestoneId}\` to create the validation, or set \`phases.skip_milestone_validation: true\` in .gsd/PREFERENCES.md to skip it.`,
       );
     }
   }
@@ -413,24 +293,18 @@ export function checkCloseoutConsistencyGate(
     );
   }
 
-  let gateClosureOptions: QualityGateClosureOptions | null = null;
-  if (validationRequired) {
-    gateClosureOptions = canonicalAuthorization?.authorized
-      ? { milestoneValidationAuthorization: canonicalAuthorization }
-      : { milestoneValidationPassed: validation?.status === "pass" };
-  }
+  // A validation-required milestone always carries an authorized canonical
+  // closeout authorization here — the gate stopped above otherwise. Adopted
+  // milestones defer validation-owned gate closure to complete-milestone so
+  // waivers stay pending until the terminal completion write (#2248 area).
+  const authorizedCloseout = canonicalAuthorization?.authorized ? canonicalAuthorization : null;
+  const gateClosureOptions: QualityGateClosureOptions | null =
+    validationRequired && authorizedCloseout
+      ? { milestoneValidationAuthorization: authorizedCloseout }
+      : null;
   const plannedGateClosure = gateClosureOptions
     ? inspectQualityGatesFromEvidence(milestoneId, gateClosureOptions)
     : { repaired: [], unresolved: [] };
-
-  // Closing gates persists what the read-only inspection above already found;
-  // the pending-gate decision below uses plannedGateClosure either way, so
-  // suppressing the write under preview is decision-neutral (#2230).
-  // Adopted milestones defer validation-owned gate closure to complete-milestone
-  // so waivers stay pending until the terminal completion write (#2248 area).
-  if (!adoptedMilestone && gateClosureOptions && !options.readOnly) {
-    closeQualityGatesFromEvidence(milestoneId, gateClosureOptions);
-  }
 
   for (const slice of slices) {
     if (isDeferredStatus(slice.status)) continue;
@@ -455,9 +329,11 @@ export function checkCloseoutConsistencyGate(
     // #2239: replan-slice deliberately retains removed ("husk") task rows, but
     // their task-scoped gate rows stay pending forever. A gate whose owning
     // task was skipped/cancelled away is unreachable — no session will ever
-    // evaluate it — so it must not block closeout. Scope is what makes a gate
-    // task-owned (a slice-scoped row may still carry a task_id), and gates of
-    // live tasks keep blocking.
+    // evaluate it — so it must not block closeout. #2687: the same holds for
+    // the operator closeout disposition "blocker-accepted" (#2202): the Task
+    // is terminal and never re-executes, so its armed gates stay unevaluated.
+    // Scope is what makes a gate task-owned (a slice-scoped row may still
+    // carry a task_id), and gates of live tasks keep blocking.
     const pendingGate = getPendingGates(milestoneId, slice.id).find((gate) =>
       !(gate.scope === "task" && isNeverWillRunTaskStatus(taskStatusById.get(gate.task_id)))
       && !plannedGateClosure.repaired.some((repair) =>

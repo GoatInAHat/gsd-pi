@@ -19,6 +19,7 @@ import { createWorkspace, scopeMilestone } from "../workspace.ts";
 import { closeDatabase, insertArtifact, insertMilestone, insertSlice, insertTask, openDatabase } from "../gsd-db.ts";
 import { storeUnitRetry } from "../db/unit-dispatch-retries.ts";
 import { claimTestDispatch } from "./helpers/unit-dispatch.ts";
+import { saveMilestoneFilesAsArtifacts } from "./narrative-artifact-fixture.ts";
 
 // ─── State helpers ────────────────────────────────────────────────────────
 
@@ -260,6 +261,10 @@ test("dispatch-rule-coverage: plan-milestone refreshes stale session scope", asy
   writeMilestoneFile(tmp, "M001", "CONTEXT", "# Prior Milestone Context\n");
   writeMilestoneFile(tmp, "M002", "CONTEXT", "# Current Milestone Context\n");
   writeMilestoneFile(tmp, "M002", "RESEARCH", "# Current Milestone Research\n");
+  // The prompt takes the narrative from artifact rows.
+  openDatabase(":memory:");
+  t.after(() => closeDatabase());
+  saveMilestoneFilesAsArtifacts(tmp);
 
   const rule = DISPATCH_RULES.find(
     (candidate) => candidate.name === "pre-planning (has research) → plan-milestone",
@@ -590,7 +595,7 @@ test("dispatch-rule-coverage: rule registry has the expected size", () => {
   // intentionally.
   assert.equal(
     DISPATCH_RULES.length,
-    29,
+    30,
     `DISPATCH_RULES length changed (got ${DISPATCH_RULES.length}). ` +
       "If you added a rule, add a state stub to dispatch-rule-coverage.test.ts " +
       "and update this expected count.",
