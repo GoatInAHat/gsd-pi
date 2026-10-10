@@ -20,7 +20,7 @@ const openclaw = process.env.OPENCLAW_BIN;
 test('packed plugin automatically synchronizes projects, TaskFlow and Workboard from events', {
   timeout: 180_000,
 }, async (t) => {
-  assert.ok(openclaw, 'Set OPENCLAW_BIN to OpenClaw 2026.9.2 or newer');
+  assert.ok(openclaw, 'Set OPENCLAW_BIN to OpenClaw 2026.9.7 or newer');
   const root = await realpath(await mkdtemp(join(tmpdir(), 'gsd-openclaw-host-')));
   const stateDir = join(root, 'host');
   const repo = join(root, 'project');

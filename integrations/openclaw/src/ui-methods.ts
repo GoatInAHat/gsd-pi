@@ -12,6 +12,7 @@
  * before every emission and late replies dropped.
  */
 
+import { nativeProjectRegistry, type NativeProject } from "./native-projects.js"
 import { lstatSync, realpathSync } from "node:fs"
 import { isAbsolute, join, resolve, sep } from "node:path"
 import type { GatewayRequestHandlerOptions, OpenClawPluginApi } from "openclaw/plugin-sdk/core"
@@ -78,16 +79,11 @@ export function containsCanonically(root: string, target: string): boolean {
   }
 }
 
-function findApproved(config: EmbeddedProjectsConfig | undefined, key: { projectId?: string; root?: string }): ApprovedProject | undefined {
-  return approvedProjects(config).find((p) =>
-    key.projectId ? p.projectId === key.projectId : key.root ? p.canonicalRoot === key.root : false,
-  )
-}
-
 export function registerGsdUiMethods(
   api: UiMethodApi,
   getWebHostPort: () => number | undefined,
   config?: EmbeddedProjectsConfig,
+  readNativeProjects: () => Promise<NativeProject[]> = () => nativeProjectRegistry.list(),
 ): { subscriptions: Map<string, { connId: string }>; disposeAll(): void } {
   const daemonBase = (): string | null => {
     const port = getWebHostPort()
@@ -144,24 +140,37 @@ export function registerGsdUiMethods(
     return null
   }
 
-  const requireApprovedProject = (
-    params: Record<string, unknown>,
-    client: UiClient | null,
-  ): { project: ApprovedProject; denied: { code: string; message: string } | null } => {
+  const requireAdmission = (client: UiClient | null): void => {
     const denied = admissionDenied(client)
     if (denied) {
       const separator = denied.indexOf("|")
-      return { project: undefined as never, denied: frame(denied.slice(0, separator), denied.slice(separator + 1)) }
+      throw frame(denied.slice(0, separator), denied.slice(separator + 1))
     }
+  }
+
+  const admittedProjects = async (client: UiClient | null): Promise<NativeProject[]> => {
+    requireAdmission(client)
+    // Non-admin opt-out never turns the native catalog into a filesystem grant.
+    // Explicit lists narrow native access, including an empty deny list.
+    if (client?.internal?.controlUiAdmin !== true && config?.projects === undefined) return []
+    const native = await readNativeProjects()
+    if (client?.invalidated || client?.connectionSignal?.aborted) throw frame("GSD_UI_CLIENT_INVALIDATED", "client invalidated")
+    if (config?.projects === undefined) return native
+    const allowed = approvedProjects(config)
+    return native.filter((project) => allowed.some((entry) =>
+      entry.projectId === project.projectId && entry.canonicalRoot === project.canonicalRoot))
+  }
+
+  const requireApprovedProject = async (
+    params: Record<string, unknown>,
+    client: UiClient | null,
+  ): Promise<{ project: NativeProject; denied: { code: string; message: string } | null }> => {
+    const all = await admittedProjects(client)
     const projectId = paramString(params, "projectId")
     const root = paramString(params, "root") ?? paramString(params, "project")
-    let project = findApproved(config, { projectId, root })
-    if (!project && !projectId && !root) {
-      // No explicit context: pin to the single approved project when exactly
-      // one exists - never to an arbitrary first entry of many.
-      const all = approvedProjects(config)
-      if (all.length === 1) project = all[0]
-    }
+    // Both supplied selectors must agree; ambiguous input never selects a root.
+    const matching = all.filter((p) => (!projectId || p.projectId === projectId) && (!root || p.canonicalRoot === root))
+    const project = matching.length === 1 ? matching[0] : undefined
     if (!project) return { project: undefined as never, denied: frame("GSD_UI_NO_APPROVED_PROJECT", "no approved project matches") }
     if (!canonicalRootIsCurrent(project.canonicalRoot)) {
       return { project: undefined as never, denied: frame("GSD_UI_ROOT_IDENTITY_CHANGED", "approved root canonical identity changed") }
@@ -188,13 +197,9 @@ export function registerGsdUiMethods(
     "gsd.ui.preferences.read",
     (opts) =>
       guard(opts, async () => {
-        // Admin-only surface: admission is enforced consistently here too.
-        const denied = admissionDenied(opts.client)
-        if (denied) {
-          const separator = denied.indexOf("|")
-          throw frame(denied.slice(0, separator), denied.slice(separator + 1))
-        }
-        return daemonFetch("/api/preferences")
+        requireAdmission(opts.client)
+        // Native project choice must not read or rewrite standalone preferences.
+        return { projectSource: "openclaw", launchCwd: null }
       }),
     { scope: "operator.read", profileAccess: "required" },
   )
@@ -203,10 +208,25 @@ export function registerGsdUiMethods(
     "gsd.ui.projects.list",
     (opts) =>
       guard(opts, async () => {
-        const { project, denied } = requireApprovedProject(opts.params, opts.client)
-        if (denied) throw denied
+        const projects = await admittedProjects(opts.client)
         const detail = opts.params.detail === true
-        return daemonFetch(`/api/projects?root=${encodeURIComponent(project.canonicalRoot)}&detail=${detail ? "true" : "false"}`)
+        const metadata: unknown[] = []
+        // Bound concurrent metadata reads while retaining the native catalog.
+        let next = 0
+        await Promise.all(Array.from({ length: Math.min(projects.length, 4) }, async () => {
+          for (;;) {
+            const index = next++
+            if (index >= projects.length) return
+            const project = projects[index]
+            if (!canonicalRootIsCurrent(project.canonicalRoot)) continue
+            const result = await daemonFetch(`/api/projects?root=${encodeURIComponent(project.canonicalRoot)}&exact=true&detail=${detail ? "true" : "false"}`)
+            if (!Array.isArray(result) || result.length !== 1 || result[0]?.path !== project.canonicalRoot) {
+              throw frame("GSD_UI_INVALID_PROJECT", "invalid native project metadata")
+            }
+            metadata[index] = { ...result[0], name: project.name, projectId: project.projectId }
+          }
+        }))
+        return metadata.filter(Boolean)
       }),
     { scope: "operator.read", profileAccess: "required" },
   )
@@ -215,7 +235,7 @@ export function registerGsdUiMethods(
     "gsd.ui.directories.list",
     (opts) =>
       guard(opts, async () => {
-        const { project, denied } = requireApprovedProject(opts.params, opts.client)
+        const { project, denied } = await requireApprovedProject(opts.params, opts.client)
         if (denied) throw denied
         const rawPath = paramString(opts.params, "path")
         // Daemon paths are absolute; normalize either form before containment.
@@ -232,11 +252,8 @@ export function registerGsdUiMethods(
     "gsd.ui.preferences.selectRoot",
     (opts) =>
       guard(opts, async () => {
-        const devRoot = paramString(opts.params, "devRoot")
-        if (!devRoot) throw frame("GSD_UI_MISSING_PARAM", "missing devRoot")
-        const { project, denied } = requireApprovedProject({ root: devRoot }, opts.client)
-        if (denied) throw denied
-        return daemonFetch("/api/switch-root", { method: "POST", body: JSON.stringify({ devRoot: project.canonicalRoot }) })
+        requireAdmission(opts.client)
+        throw frame("GSD_UI_MANAGED_PROJECTS", "Manage projects in OpenClaw Settings → Projects")
       }),
     { scope: "operator.write", profileAccess: "required" },
   )
@@ -245,11 +262,8 @@ export function registerGsdUiMethods(
     "gsd.ui.preferences.setDevRoot",
     (opts) =>
       guard(opts, async () => {
-        const devRoot = paramString(opts.params, "devRoot")
-        if (!devRoot) throw frame("GSD_UI_MISSING_PARAM", "missing devRoot")
-        const { project, denied } = requireApprovedProject({ root: devRoot }, opts.client)
-        if (denied) throw denied
-        return daemonFetch("/api/preferences", { method: "PUT", body: JSON.stringify({ devRoot: project.canonicalRoot }) })
+        requireAdmission(opts.client)
+        throw frame("GSD_UI_MANAGED_PROJECTS", "Manage projects in OpenClaw Settings → Projects")
       }),
     { scope: "operator.write", profileAccess: "required" },
   )
@@ -257,7 +271,7 @@ export function registerGsdUiMethods(
   api.registerGatewayMethod(
     "gsd.ui.workspace.bootstrap",
     (opts) => guard(opts, async () => {
-      const { project, denied } = requireApprovedProject(opts.params, opts.client)
+      const { project, denied } = await requireApprovedProject(opts.params, opts.client)
       if (denied) throw denied
       // The legacy boot route may start the bridge: this is a write operation,
       // separate from passive subscriptions, even though the daemon uses GET.
@@ -281,7 +295,7 @@ export function registerGsdUiMethods(
       const projectId = paramString(opts.params, "projectId")
       const projectIdentity = paramString(opts.params, "project")
       if (!projectId && !projectIdentity) throw frame("GSD_UI_MISSING_PARAM", "missing project identity")
-      const { project, denied } = requireApprovedProject({ projectId, project: projectIdentity }, opts.client)
+      const { project, denied } = await requireApprovedProject({ projectId, project: projectIdentity }, opts.client)
       if (denied) throw denied
       const root = paramString(opts.params, "root")
       if (root !== "project" && root !== "gsd") throw frame("GSD_UI_INVALID_ROOT", "root must be project or gsd")
@@ -336,7 +350,7 @@ export function registerGsdUiMethods(
         const projectId = paramString(opts.params, "projectId")
         const projectIdentity = paramString(opts.params, "project")
         if (!projectId && !projectIdentity) throw frame("GSD_UI_MISSING_PARAM", "missing project identity")
-        const { project, denied } = requireApprovedProject({ projectId, project: projectIdentity }, opts.client)
+        const { project, denied } = await requireApprovedProject({ projectId, project: projectIdentity }, opts.client)
         if (denied) throw denied
         const root = paramString(opts.params, "root")
         if (root !== "project" && root !== "gsd") throw frame("GSD_UI_INVALID_ROOT", "root must be project or gsd")
@@ -370,6 +384,7 @@ export function registerGsdUiMethods(
     reader?: ReadableStreamDefaultReader<Uint8Array>
   }
   const subscriptions = new Map<string, SubscriptionRecord>()
+  let subscriptionGeneration = 0
 
   const release = (subscriptionId: string, reason: string) => {
     const record = subscriptions.get(subscriptionId)
@@ -382,7 +397,8 @@ export function registerGsdUiMethods(
     record.finish(reason)
   }
 
-  const startSubscription = (opts: UiHandlerOptions, streamRoute: (project: ApprovedProject) => string): void => {
+  const startSubscription = async (opts: UiHandlerOptions, streamRoute: (project: ApprovedProject) => string): Promise<void> => {
+    const generation = subscriptionGeneration
     let initialResponded = false
     let admitted = false
     const respondOnce: UiRespond = (ok, payload, error) => {
@@ -402,9 +418,22 @@ export function registerGsdUiMethods(
       fail("GSD_UI_CONNECTION_RETIRED", "client connection already retired")
       return
     }
-    const { project, denied } = requireApprovedProject(opts.params, opts.client)
-    if (denied) {
-      fail(denied.code, denied.message)
+    let project: NativeProject
+    try {
+      const result = await requireApprovedProject(opts.params, opts.client)
+      if (result.denied) { fail(result.denied.code, result.denied.message); return }
+      project = result.project
+    } catch (error) {
+      const message = typeof (error as { message?: unknown })?.message === "string" ? (error as { message: string }).message : String(error)
+      fail("GSD_UI_PROJECT_UNAVAILABLE", message)
+      return
+    }
+    if (generation !== subscriptionGeneration) {
+      fail("GSD_UI_ADMISSION_CANCELLED", "plugin disposal during project lookup")
+      return
+    }
+    if (connectionSignal.aborted || opts.client?.invalidated) {
+      fail("GSD_UI_CONNECTION_RETIRED", "client connection retired during project lookup")
       return
     }
     let perConnection = 0
@@ -568,6 +597,7 @@ export function registerGsdUiMethods(
   return {
     subscriptions,
     disposeAll() {
+      subscriptionGeneration += 1
       for (const id of [...subscriptions.keys()]) release(id, "plugin disposal")
     },
   }

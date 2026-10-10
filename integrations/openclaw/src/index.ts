@@ -76,10 +76,10 @@ const gsdPluginEntry = definePluginEntry({
   configSchema: buildJsonPluginConfigSchema(configSchema),
   register(api: PluginApi) {
     // gsd.ui.* embedded-frame methods: individually registered, profile
-    // required, approved-project policy default deny until configured.
+    // required, native project catalog, with optional narrowing project policy.
     // Cached modules can register into multiple registries. Each registration
     // owns the policy its handlers capture and the subscriptions its service stops.
-    const embeddedProjectsConfig: import("./ui-methods.js").EmbeddedProjectsConfig = {}
+    const embeddedProjectsConfig: import("./ui-methods.js").EmbeddedProjectsConfig = { projects: [] }
     const gsdUiHandles = registerGsdUiMethods(api as unknown as import("./ui-methods.js").UiMethodApi, () => portal?.webPort ?? webTabPort, embeddedProjectsConfig)
     let portal: GsdPortalService | undefined;
     let webTabPort: number | undefined;
@@ -102,10 +102,10 @@ const gsdPluginEntry = definePluginEntry({
             ? source.projects.filter((p): p is { projectId: string; canonicalRoot: string } =>
                 typeof (p as { projectId?: unknown })?.projectId === "string" &&
                 typeof (p as { canonicalRoot?: unknown })?.canonicalRoot === "string")
-            : []
+            : undefined
         } else {
           embeddedProjectsConfig.adminOnly = true
-          embeddedProjectsConfig.projects = []
+          embeddedProjectsConfig.projects = undefined
         }
         portal = new GsdPortalService({
           config: context.config.plugins?.entries?.["open-gsd-openclaw"]?.config?.webUi,
