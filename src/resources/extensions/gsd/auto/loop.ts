@@ -101,6 +101,7 @@ import { createWorkflowTurnReporter } from "./workflow-turn-reporter.js";
 import { validateWorkflowSessionLock } from "./workflow-session-lock.js";
 import { kernelAdvance } from "./lifecycle-kernel.js";
 import { releaseUnitRetry } from "../db/unit-dispatch-retries.js";
+import { readLatestUserPauseForUnit } from "../db/writers/auto-pauses.js";
 import { settleSidecarItem } from "../db/writers/unit-dispatch-sidecars.js";
 import { maintainWorkerHeartbeat, runWithWorkerHeartbeat } from "./workflow-worker-heartbeat.js";
 import { gsdRoot } from "../paths.js";
@@ -226,6 +227,9 @@ const TASK_EXECUTION_CUTOVER_DEPS = {
       ? lease.fencing_token
       : null;
   },
+  // #2787: a running Attempt behind a user-requested pause settles as the
+  // budgeted user-pause retry instead of a stale-worker crash.
+  readLatestUserPauseForUnit,
   routeTaskFailure: recordFailureAndSelectRecovery,
   settleTaskAttempt,
 };
