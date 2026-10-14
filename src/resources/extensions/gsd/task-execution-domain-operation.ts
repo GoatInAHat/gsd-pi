@@ -353,7 +353,11 @@ export function readTaskAttempt(attemptId: string): TaskExecutionAttemptSnapshot
 
 export function readLatestTaskAttempt(
   task: ClaimTaskAttemptInput["task"],
+  options?: { projectId?: string },
 ): TaskExecutionAttemptSnapshot | null {
+  // #2778: identity columns alone can match a foreign project's imported row;
+  // callers that hold the project scope (e.g. the shadow-snapshot reader) pass it here.
+  const projectId = options?.projectId ?? null;
   const row = getDb().prepare(`
     SELECT attempt.attempt_id, attempt.attempt_number, attempt.retry_of_attempt_id,
            attempt.attempt_state,
@@ -375,12 +379,14 @@ export function readLatestTaskAttempt(
       AND lifecycle.milestone_id = :milestone_id
       AND lifecycle.slice_id = :slice_id
       AND lifecycle.task_id = :task_id
+      AND (:project_id IS NULL OR lifecycle.project_id = :project_id)
     ORDER BY attempt.attempt_number DESC, checkpoint.sequence DESC
     LIMIT 1
   `).get({
     ":milestone_id": task.milestoneId,
     ":slice_id": task.sliceId,
     ":task_id": task.taskId,
+    ":project_id": projectId,
   }) as unknown as AttemptSnapshotRow | undefined;
   return snapshot(row);
 }
