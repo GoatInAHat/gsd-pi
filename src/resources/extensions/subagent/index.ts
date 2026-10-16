@@ -147,6 +147,44 @@ function formatUsageStats(
 	return parts.join(" ");
 }
 
+/**
+ * Parent-session sink for child usage (#2821): `SessionManager.addExternalUsage`.
+ * Structural so tests can stub it; absent sink (stale harness, mock ctx) means
+ * reconciliation is skipped — usage visibility is observability and must never
+ * affect execution.
+ */
+type ExternalUsageSink = {
+	addExternalUsage?: (
+		key: string,
+		usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number },
+	) => void;
+};
+
+/**
+ * Reconcile a child's cumulative provider-reported usage into the parent
+ * session's external-usage accumulator (#2821). The sink banks only positive
+ * deltas per stable child key, so repeated or late partial updates never
+ * double count and the footer total stays `parent + reconciled children`.
+ */
+function reconcileChildUsage(
+	sink: ExternalUsageSink | undefined,
+	key: string,
+	usage: UsageStats,
+): void {
+	if (!sink || typeof sink.addExternalUsage !== "function") return;
+	try {
+		sink.addExternalUsage(key, {
+			input: usage.input,
+			output: usage.output,
+			cacheRead: usage.cacheRead,
+			cacheWrite: usage.cacheWrite,
+			cost: usage.cost,
+		});
+	} catch {
+		/* ignore — usage visibility is observability; execution remains authoritative */
+	}
+}
+
 function formatToolCall(
 	toolName: string,
 	args: Record<string, unknown>,
@@ -691,7 +729,15 @@ async function runSingleAgent(
 		step,
 	};
 
+	// Stable identity for this child attempt (#2821): every cumulative usage
+	// snapshot reported through emitUpdate reconciles against this key. A retry
+	// of the same slot is a fresh attempt with a fresh key, so its spend is
+	// added on top of the failed attempt's banked usage instead of colliding.
+	const externalUsageKey = `subagent:${trackingName ?? agentName}:${crypto.randomUUID()}`;
+	const externalUsageSink = options.parentSessionManager as ExternalUsageSink | undefined;
+
 	const emitUpdate = () => {
+		reconcileChildUsage(externalUsageSink, externalUsageKey, currentResult.usage);
 		if (onUpdate) {
 			onUpdate({
 				content: [{ type: "text", text: getFinalOutput(currentResult.messages) || "(running...)" }],
@@ -701,6 +747,10 @@ async function runSingleAgent(
 	};
 
 	try {
+		// Bind the key to the current session generation before any await: if
+		// the user switches sessions while this child is still launching, its
+		// first real report must not bill the new session for old work.
+		reconcileChildUsage(externalUsageSink, externalUsageKey, currentResult.usage);
 		if (agent.systemPrompt.trim()) {
 			const tmp = writePromptToTempFile(agent.name, agent.systemPrompt);
 			tmpPromptDir = tmp.dir;
@@ -890,7 +940,12 @@ export async function runSingleAgentInCmuxSplit(
 		step,
 	};
 
+	// Same per-attempt usage reconciliation as the direct-spawn path (#2821).
+	const externalUsageKey = `subagent:${trackingName ?? agentName}:${crypto.randomUUID()}`;
+	const externalUsageSink = options.parentSessionManager as ExternalUsageSink | undefined;
+
 	const emitUpdate = () => {
+		reconcileChildUsage(externalUsageSink, externalUsageKey, currentResult.usage);
 		if (onUpdate) {
 			onUpdate({
 				content: [{ type: "text", text: getFinalOutput(currentResult.messages) || "(running...)" }],
@@ -900,6 +955,8 @@ export async function runSingleAgentInCmuxSplit(
 	};
 
 	try {
+		// Bind before any await — see the direct-spawn path.
+		reconcileChildUsage(externalUsageSink, externalUsageKey, currentResult.usage);
 		if (agent.systemPrompt.trim()) {
 			const tmp = writePromptToTempFile(agent.name, agent.systemPrompt);
 			tmpPromptDir = tmp.dir;
@@ -1845,9 +1902,28 @@ export default function (pi: ExtensionAPI) {
 					const taskModel = t.model || params.model;
 					const taskThinking = t.thinking ?? params.thinking;
 					const workerId = registerWorker(t.agent, t.task, index, batchSize, batchId, workerIdentities[index]);
+					// A retry supersedes the failed attempt's result object, which
+					// would silently drop its billable usage from the card and the
+					// run record (#2821). Bank the replaced attempt and fold it into
+					// every later view of this slot; the parent-session accumulator
+					// already banks each attempt separately under its own key.
+					let bankedUsage: UsageStats | undefined;
+					const withBankedUsage = (usage: UsageStats): UsageStats => {
+						if (!bankedUsage) return usage;
+						return {
+							input: bankedUsage.input + usage.input,
+							output: bankedUsage.output + usage.output,
+							cacheRead: bankedUsage.cacheRead + usage.cacheRead,
+							cacheWrite: bankedUsage.cacheWrite + usage.cacheWrite,
+							cost: bankedUsage.cost + usage.cost,
+							contextTokens: usage.contextTokens,
+							turns: bankedUsage.turns + usage.turns,
+						};
+					};
 					const updateParallelResult = (partial: AgentToolResult<SubagentDetails>) => {
 						if (partial.details?.results[0]) {
-							allResults[index] = partial.details.results[0];
+							const raw = partial.details.results[0];
+							allResults[index] = bankedUsage ? { ...raw, usage: withBankedUsage(raw.usage) } : raw;
 							persistRunResults([...allResults]);
 							emitParallelUpdate();
 						}
@@ -1935,7 +2011,9 @@ export default function (pi: ExtensionAPI) {
 					// Auto-retry failed tasks (likely API rate limit or transient error)
 					const isFailed = result.exitCode !== 0 || (result.messages.length === 0 && !signal?.aborted);
 					if (isFailed && MAX_RETRIES > 0 && !signal?.aborted) {
+						bankedUsage = result.usage;
 						result = await runTask();
+						result.usage = withBankedUsage(result.usage);
 					}
 
 					updateWorker(workerId, result.exitCode === 0 ? "completed" : "failed");
@@ -2392,9 +2470,20 @@ export default function (pi: ExtensionAPI) {
 						text += `\n${theme.fg("muted", r.exitCode === -1 ? "(running...)" : "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
 				}
-				if (!isRunning) {
-					const usageStr = formatUsageStats(aggregateUsage(details.results));
-					if (usageStr) text += `\n\n${theme.fg("dim", `Total: ${usageStr}`)}`;
+				// Latest known aggregate subtotal, shown while the batch runs too
+				// (#2821). Children without a first provider report count as
+				// pending usage instead of silently reading as zero.
+				const totalUsage = aggregateUsage(details.results);
+				const usageStr = formatUsageStats(totalUsage);
+				const pendingUsage = details.results.filter((r) => !r.usage || r.usage.turns === 0).length;
+				if (isRunning) {
+					const subtotalParts = [
+						usageStr,
+						pendingUsage > 0 ? `${pendingUsage} pending usage` : undefined,
+					].filter(Boolean);
+					if (subtotalParts.length > 0) text += `\n\n${theme.fg("dim", `Total: ${subtotalParts.join(" · ")}`)}`;
+				} else if (usageStr) {
+					text += `\n\n${theme.fg("dim", `Total: ${usageStr}`)}`;
 				}
 				if (!expanded) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
 				return new Text(text, 0, 0);
