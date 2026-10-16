@@ -2409,6 +2409,42 @@ test("#1973: attempt-gate rejection names the settled outcome and recovery lever
   );
 });
 
+test("#2793: a terminal replan route names its /gsd auto exit in the attempt-gate rejection", () => {
+  const { attemptId } = createFixture();
+  const settlement = settleTaskAttempt({
+    invocation: invocation("task-completion/settle-missing-result"),
+    attemptId,
+    outcome: "failed",
+    failureClass: "missing-executor-result",
+    summary: "execute-task ended without a succeeded executor Result",
+    output: {},
+  });
+  const routed = recordFailureAndSelectRecovery({
+    invocation: invocation("task-completion/route-missing-result"),
+    attemptId,
+    resultId: settlement.resultId,
+    owner: "agent",
+    classification: { failureKind: "lifecycle-progression" },
+    summary: "execute-task ended without a succeeded executor Result",
+    evidence: { source: "reconcile" },
+    rationale: "Supersede the plan before another execution attempt.",
+  });
+  assert.equal(routed.action, "replan");
+
+  assert.throws(
+    () => resolveTaskCompletionAuthority(TASK),
+    (err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      assert.match(message, /no running Attempt/);
+      assert.ok(message.includes(routed.recoveryActionId));
+      assert.match(message, /\(replan\)/);
+      assert.match(message, /rerun `\/gsd auto`/i);
+      assert.match(message, /replan-task/);
+      return true;
+    },
+  );
+});
+
 function planPathOf(basePath: string): string {
   return join(basePath, ".gsd", "phases", "01-test", "01-01-PLAN.md");
 }
