@@ -114,7 +114,30 @@ export type ReadonlySessionManager = Pick<
 	| "getEntries"
 	| "getTree"
 	| "getSessionName"
+	| "getUsageTotals"
+	| "addExternalUsage"
 >;
+
+/** Provider-reported usage for work executed outside this session's message entries. */
+export interface ExternalUsageSnapshot {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	cost: number;
+}
+
+const EXTERNAL_USAGE_FIELDS: readonly (keyof ExternalUsageSnapshot)[] = [
+	"input",
+	"output",
+	"cacheRead",
+	"cacheWrite",
+	"cost",
+];
+
+function finiteOrZero(value: number | undefined): number {
+	return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
 
 function createSessionId(): string {
 	return uuidv7();
@@ -143,6 +166,32 @@ export class SessionManager {
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
+	private externalUsageByKey: Map<string, { snapshot: ExternalUsageSnapshot; generation: number }> = new Map();
+	private externalUsageTotals: ExternalUsageSnapshot = {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		cost: 0,
+	};
+	/**
+	 * Bumped on every session switch. A reporting child binds to the generation
+	 * that owned its first snapshot; once the session switches, that child's
+	 * later updates are dropped instead of billing the new session for the old
+	 * one's work (a background child can keep reporting across a switch).
+	 */
+	private externalUsageGeneration = 0;
+
+	/**
+	 * External usage is session-scoped: switching or starting a session drops
+	 * the totals but keeps the per-key bindings as generation-stamped
+	 * tombstones, so a still-running reporter from the old session is dropped
+	 * instead of billing the new session for old work (#2821).
+	 */
+	private _resetExternalUsage(): void {
+		this.externalUsageGeneration++;
+		this.externalUsageTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+	}
 
 	private constructor(cwd: string, sessionDir: string, sessionFile: string | undefined, persist: boolean) {
 		this.cwd = resolvePath(cwd);
@@ -161,6 +210,7 @@ export class SessionManager {
 
 	/** Switch to a different session file (used for resume and branching) */
 	setSessionFile(sessionFile: string): void {
+		this._resetExternalUsage();
 		this.sessionFile = resolvePath(sessionFile);
 		if (existsSync(this.sessionFile)) {
 			this.fileEntries = loadEntriesFromFile(this.sessionFile);
@@ -193,6 +243,7 @@ export class SessionManager {
 	}
 
 	newSession(options?: NewSessionOptions): string | undefined {
+		this._resetExternalUsage();
 		this.sessionId = options?.id ?? createSessionId();
 		if (options?.cwd) {
 			this.cwd = resolvePath(options.cwd);
@@ -645,6 +696,11 @@ export class SessionManager {
 		// Filter out LabelEntry from path - we'll recreate them from the resolved map
 		const pathWithoutLabels = path.filter((e) => e.type !== "label");
 
+		// Branching re-uses this manager for a different session (#2821): the
+		// branched conversation must not inherit the discarded session's
+		// external (child-process) usage.
+		this._resetExternalUsage();
+
 		const newSessionId = createSessionId();
 		const timestamp = new Date().toISOString();
 		const fileTimestamp = timestamp.replace(/[:.]/g, "-");
@@ -890,7 +946,15 @@ export class SessionManager {
 		}
 	}
 
-	getUsageTotals(): {
+	/**
+	 * Usage totals accumulated from this session's own assistant message
+	 * entries. With `includeExternalUsage` the reconciled session-scoped
+	 * external usage (child-process subagents, #2821) is added on top —
+	 * opt-in because consumers derive per-conversation properties (the
+	 * footer's cache percentage) from the token fields, and child tokens
+	 * must not distort those.
+	 */
+	getUsageTotals(options?: { includeExternalUsage?: boolean }): {
 		input: number;
 		output: number;
 		cacheRead: number;
@@ -916,7 +980,51 @@ export class SessionManager {
 			cost += usage.cost?.total ?? 0;
 		}
 
+		if (options?.includeExternalUsage) {
+			input += this.externalUsageTotals.input;
+			output += this.externalUsageTotals.output;
+			cacheRead += this.externalUsageTotals.cacheRead;
+			cacheWrite += this.externalUsageTotals.cacheWrite;
+			cost += this.externalUsageTotals.cost;
+		}
+
 		return { input, output, cacheRead, cacheWrite, cost };
+	}
+
+	/**
+	 * Record cumulative provider-reported usage for work executed outside this
+	 * session's message entries (child-process subagent sessions, #2821).
+	 *
+	 * `key` must be stable for the reporting child's execution lifetime. Each
+	 * call reconciles the snapshot against the key's high-water mark and banks
+	 * only positive per-field deltas, so repeated, late, or replayed partial
+	 * updates never double count. A key binds to the session generation that
+	 * first reported it: after a session switch, that child's later snapshots
+	 * are dropped rather than billing the new session for old work. Totals are
+	 * kept for the session's lifetime: child completion and worker-row expiry
+	 * never reduce them, and failed or interrupted children keep whatever
+	 * usage they already reported.
+	 */
+	addExternalUsage(key: string, usage: ExternalUsageSnapshot): void {
+		if (!key) return;
+		const bound = this.externalUsageByKey.get(key);
+		if (bound && bound.generation !== this.externalUsageGeneration) return;
+		const previous = bound?.snapshot;
+		for (const field of EXTERNAL_USAGE_FIELDS) {
+			const value = finiteOrZero(usage[field]);
+			const delta = value - finiteOrZero(previous?.[field]);
+			if (delta > 0) this.externalUsageTotals[field] += delta;
+		}
+		this.externalUsageByKey.set(key, {
+			generation: this.externalUsageGeneration,
+			snapshot: {
+				input: Math.max(finiteOrZero(usage.input), finiteOrZero(previous?.input)),
+				output: Math.max(finiteOrZero(usage.output), finiteOrZero(previous?.output)),
+				cacheRead: Math.max(finiteOrZero(usage.cacheRead), finiteOrZero(previous?.cacheRead)),
+				cacheWrite: Math.max(finiteOrZero(usage.cacheWrite), finiteOrZero(previous?.cacheWrite)),
+				cost: Math.max(finiteOrZero(usage.cost), finiteOrZero(previous?.cost)),
+			},
+		});
 	}
 
 	wasInterrupted(): boolean {
