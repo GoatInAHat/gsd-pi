@@ -508,7 +508,10 @@ async function runValidateMilestonePostCheck(
   pauseAuto: PauseAutoFn,
 ): Promise<VerificationResult> {
   const { s, ctx, pi } = vctx;
-  const prefs = loadEffectiveGSDPreferences()?.preferences;
+  // Resolve project preferences from the session base path (not process.cwd())
+  // so worktree/subdirectory sessions read the same project config that
+  // repository-target resolution below already uses (#2833).
+  const prefs = loadEffectiveGSDPreferences(s.basePath || undefined)?.preferences;
   const uokFlags = resolveUokFlags(prefs);
   const persistMilestoneValidationGate = async (
     outcome: "pass" | "fail" | "retry" | "manual-attention",
@@ -830,7 +833,7 @@ export async function runPostUnitVerification(
     if (!replayedRecovery && !isTaskAttemptAwaitingVerification(latestAttempt)) {
       throw new Error("Host verification requires the latest succeeded canonical Attempt at the verify stage");
     }
-    const effectivePrefs = loadEffectiveGSDPreferences();
+    const effectivePrefs = loadEffectiveGSDPreferences(s.basePath || undefined);
     const prefs = effectivePrefs?.preferences;
     const uokFlags = resolveUokFlags(prefs);
     const autoFixEnabled = prefs?.verification_auto_fix !== false;
