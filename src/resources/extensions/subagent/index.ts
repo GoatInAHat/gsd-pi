@@ -47,6 +47,12 @@ import {
 	type SubagentSessionArgs,
 } from "./launch.js";
 import { resolveSubagentWorktreeCwd } from "./worktree-cwd.js";
+import { QUESTION_CHANNEL_DIR_ENV } from "../shared/question-channel.js";
+import {
+	startQuestionChannelWatcher,
+	type ForwarderQuestionCtx,
+	type QuestionChannelWatcher,
+} from "./question-forwarding.js";
 import {
 	SubagentRunStore,
 	createInitialRunRecord,
@@ -752,6 +758,12 @@ interface SubagentRunOptions {
 	 * pid file (#2652). Persisted so action: "status" can revalidate.
 	 */
 	onChildSpawned?: (pid: number | undefined) => void;
+	/**
+	 * The dispatching session's context slice, when available. When present,
+	 * the child gets a question channel and its ask_user_questions calls are
+	 * routed to this session's UI / remote channels (#2713).
+	 */
+	questionCtx?: ForwarderQuestionCtx;
 }
 
 async function runSingleAgent(
@@ -816,6 +828,9 @@ async function runSingleAgent(
 
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
+	// #2713: question channel state (function scope for the finally cleanup).
+	let questionWatcher: QuestionChannelWatcher | null = null;
+	let questionChannelDir: string | null = null;
 
 	const currentResult: SingleResult = {
 		agent: agentName,
@@ -875,6 +890,24 @@ async function runSingleAgent(
 			projectRootSourceCwd,
 		});
 		if (launch.session.mode === "fork") currentResult.sessionFile = launch.session.sessionFile;
+		// #2713: export a question channel so the headless child forwards its
+		// ask_user_questions calls to this session's UI / remote channels.
+		if (options.questionCtx) {
+			try {
+				questionChannelDir = fs.mkdtempSync(path.join(os.tmpdir(), "gsd-questions-"));
+				launch.env[QUESTION_CHANNEL_DIR_ENV] = questionChannelDir;
+				questionWatcher = startQuestionChannelWatcher({
+					channelDir: questionChannelDir,
+					agentName,
+					questionCtx: options.questionCtx,
+					signal,
+				});
+			} catch {
+				// Non-fatal: without a channel the child keeps its headless behavior.
+				questionWatcher = null;
+				questionChannelDir = null;
+			}
+		}
 		let wasAborted = false;
 
 		const exitCode = await new Promise<number>((resolve) => {
@@ -978,6 +1011,18 @@ async function runSingleAgent(
 		markMissingFinalResponse(currentResult);
 		return currentResult;
 	} finally {
+		// #2713: close any forwarded-question dialog the child left open, drain
+		// in-flight routing, then remove the channel.
+		if (questionWatcher) {
+			try {
+				await questionWatcher.stop();
+			} catch { /* ignore — best-effort teardown */ }
+		}
+		if (questionChannelDir) {
+			try {
+				fs.rmSync(questionChannelDir, { recursive: true, force: true });
+			} catch { /* ignore */ }
+		}
 		if (tmpPromptPath)
 			try {
 				fs.unlinkSync(tmpPromptPath);
@@ -1027,6 +1072,9 @@ export async function runSingleAgentInCmuxSplit(
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
 	let tmpOutputDir: string | null = null;
+	// #2713: question channel state (function scope for the finally cleanup).
+	let questionWatcher: QuestionChannelWatcher | null = null;
+	let questionChannelDir: string | null = null;
 	// Function scope, not try-block scope: the finally clause must be able to
 	// clear the tail interval on every path (try-block declarations are
 	// invisible to the finally clause).
@@ -1105,12 +1153,30 @@ export async function runSingleAgentInCmuxSplit(
 			projectRootSourceCwd,
 		});
 		if (launch.session.mode === "fork") currentResult.sessionFile = launch.session.sessionFile;
+		// #2713: export a question channel so the headless child inside the
+		// split forwards its ask_user_questions calls to this session. The
+		// wrapper shell only forwards allowlisted env assignments
+		// (buildShellEnvAssignments), so the channel var is appended explicitly
+		// to the command prefix below.
+		if (options.questionCtx) {
+			try {
+				questionChannelDir = fs.mkdtempSync(path.join(os.tmpdir(), "gsd-questions-"));
+				launch.env[QUESTION_CHANNEL_DIR_ENV] = questionChannelDir;
+			} catch {
+				// Non-fatal: without a channel the child keeps its headless behavior.
+				questionChannelDir = null;
+			}
+		}
 		const processArgs = [process.env.GSD_BIN_PATH!, ...extensionArgs, ...launch.args];
 		// Normalize all paths to forward slashes before embedding in bash strings.
 		// On Windows, backslashes are interpreted as escape characters by bash,
 		// mangling paths like C:\Users\user into C:Useruser (#1436).
 		const bashPath = (p: string) => shellEscape(p.replaceAll("\\", "/"));
-		const envPrefix = buildShellEnvAssignments(launch.env).join(" ");
+		const envAssignments = buildShellEnvAssignments(launch.env);
+		if (questionChannelDir) {
+			envAssignments.push(`${QUESTION_CHANNEL_DIR_ENV}=${shellEscape(questionChannelDir)}`);
+		}
+		const envPrefix = envAssignments.join(" ");
 		const commandPrefix = envPrefix ? `${envPrefix} ` : "";
 		const innerScript = [
 			// Publish the wrapper shell's pid first (#2652): it is the process
@@ -1127,6 +1193,20 @@ export async function runSingleAgentInCmuxSplit(
 		const sent = await cmuxClient.sendSurface(cmuxSurfaceId, `bash -lc ${shellEscape(innerScript)}`);
 		if (!sent) {
 			return runSingleAgent(defaultCwd, agents, agentName, task, cwd, step, signal, onUpdate, makeDetails, options);
+		}
+		// #2713: the child is live in the split — start routing its forwarded
+		// questions (kept after the fallback returns so they never double-start).
+		if (options.questionCtx && questionChannelDir) {
+			try {
+				questionWatcher = startQuestionChannelWatcher({
+					channelDir: questionChannelDir,
+					agentName,
+					questionCtx: options.questionCtx,
+					signal,
+				});
+			} catch {
+				questionWatcher = null;
+			}
 		}
 		tailTimer = setInterval(() => stdoutTailer.poll(), CMUX_STDOUT_TAIL_INTERVAL_MS);
 
@@ -1187,6 +1267,17 @@ export async function runSingleAgentInCmuxSplit(
 		return currentResult;
 	} finally {
 		if (tailTimer) clearInterval(tailTimer);
+		// #2713: close any forwarded-question dialog, drain routing, remove channel.
+		if (questionWatcher) {
+			try {
+				await questionWatcher.stop();
+			} catch { /* ignore — best-effort teardown */ }
+		}
+		if (questionChannelDir) {
+			try {
+				fs.rmSync(questionChannelDir, { recursive: true, force: true });
+			} catch { /* ignore */ }
+		}
 		if (tmpPromptPath)
 			try {
 				fs.unlinkSync(tmpPromptPath);
@@ -1429,6 +1520,7 @@ export default function (pi: ExtensionAPI) {
 						sessionOverride: { mode: "fork", sessionFile: selected.sessionFile, sessionDir: path.dirname(selected.sessionFile) },
 						trackingName: selected.trackingName,
 						thinkingOverride: params.thinking,
+						questionCtx: ctx,
 					},
 				);
 				return {
@@ -1809,6 +1901,7 @@ export default function (pi: ExtensionAPI) {
 							trackingName: dispatchTrackingNames[i],
 							thinkingOverride: step.thinking ?? params.thinking,
 							onChildSpawned: noteChildPid(i),
+							questionCtx: ctx,
 						},
 					);
 					results.push(result);
@@ -1924,6 +2017,7 @@ export default function (pi: ExtensionAPI) {
 							projectRoot,
 							projectRootSourceCwd,
 							onChildSpawned: noteChildPid(index),
+							questionCtx: ctx,
 						};
 						return cmuxSplitsEnabled
 							? runSingleAgentInCmuxSplit(
@@ -2100,6 +2194,7 @@ export default function (pi: ExtensionAPI) {
 								projectRoot,
 								projectRootSourceCwd: isolation ? effectiveCwd : undefined,
 								onChildSpawned: noteChildPid(0),
+								questionCtx: ctx,
 							},
 						);
 						if (isolation && result.exitCode === 0) {
@@ -2220,6 +2315,7 @@ export default function (pi: ExtensionAPI) {
 						projectRoot,
 						projectRootSourceCwd: isolation ? effectiveCwd : undefined,
 						onChildSpawned: noteChildPid(0),
+						questionCtx: ctx,
 					};
 					const result = cmuxSplitsEnabled
 						? await runSingleAgentInCmuxSplit(
