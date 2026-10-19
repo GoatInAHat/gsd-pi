@@ -153,6 +153,18 @@ function formatUsageStats(
 }
 
 /**
+ * Compact per-child cost token for the collapsed batch overview (#2822):
+ * `$0.0123` once the provider reported billable usage, "" while usage is
+ * still pending (the batch subtotal's `N pending usage` covers those) or
+ * the value is not a usable positive number. Mirrors formatUsageStats's
+ * cost formatting so both views read identically.
+ */
+function formatChildCost(usage: { cost: number } | undefined): string {
+	const cost = Number(usage?.cost);
+	return Number.isFinite(cost) && cost > 0 ? `$${cost.toFixed(4)}` : "";
+}
+
+/**
  * Parent-session sink for child usage (#2821): `SessionManager.addExternalUsage`.
  * Structural so tests can stub it; absent sink (stale harness, mock ctx) means
  * reconciliation is skipped — usage visibility is observability and must never
@@ -2652,12 +2664,17 @@ export default function (pi: ExtensionAPI) {
 								: theme.fg("error", "✗");
 					const displayItems = getDisplayItems(r.messages);
 					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", formatAgentLabel(r.agent, r.trackingName))} ${rIcon}`;
-					// Per-child identity: model · thinking · elapsed (#2396)
+					// Per-child identity + live cost: model · thinking · elapsed · $X
+					// (#2396, #2822). The cost token rides the same per-child usage
+					// the #2826 accumulator reconciles; children without a first
+					// provider report stay blank here (the batch subtotal counts
+					// them as pending usage).
 					const identity = formatWorkerIdentity(
 						r,
 						r.exitCode === -1 ? "running" : r.exitCode === 0 ? "completed" : "failed",
 					);
-					if (identity) text += `\n${theme.fg("dim", identity)}`;
+					const meta = [identity, formatChildCost(r.usage)].filter(Boolean).join(" · ");
+					if (meta) text += `\n${theme.fg("dim", meta)}`;
 					if (displayItems.length === 0)
 						text += `\n${theme.fg("muted", r.exitCode === -1 ? "(running...)" : "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
