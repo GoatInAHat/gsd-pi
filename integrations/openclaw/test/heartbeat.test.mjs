@@ -137,3 +137,61 @@ test('session discovery is read-only and uses public spawnedCwd with sessionRoot
   await service.stop();
   assert.equal(unsubscribed, 1);
 });
+
+test('notification routing isolates project events and context and refreshes on service restart', async (t) => {
+  const require = createRequire(await realpath(process.env.OPENCLAW_BIN));
+  const sdk = new Map(['plugin-entry', 'gateway-runtime', 'agent-scope-runtime', 'routing', 'tool-plugin']
+    .map((name) => [`openclaw/plugin-sdk/${name}`, require.resolve(`openclaw/plugin-sdk/${name}`)]));
+  const loader = registerHooks({ resolve(specifier, context, next) { return next(sdk.get(specifier) ?? specifier, context); } });
+  t.after(() => loader.deregister());
+  const { default: plugin } = await import('../dist/index.js');
+  const { ProjectSync } = await import('../dist/sync.js');
+  const { ProjectEvents } = await import('../dist/discovery.js');
+  const hooks = new Map();
+  const notifications = [];
+  const wakes = [];
+  let service;
+  const records = [{ projectDir: '/fixture', status: 'running' }, { projectDir: '/other', status: 'running' }];
+  const heartbeat = 'agent:main:dashboard:heartbeat';
+  const oversight = 'agent:reviewer:dashboard:oversight';
+  const cfg = { agents: { defaults: { systemAgent: { agentId: 'main' } }, entries: { main: { heartbeat: { session: heartbeat } }, reviewer: {} } },
+    plugins: { entries: { 'open-gsd-openclaw': { config: { projectSessions: [{ projectDir: '/fixture', sessionKey: oversight }] } } } } };
+  t.mock.method(ProjectEvents.prototype, 'start', () => {});
+  t.mock.method(ProjectEvents.prototype, 'add', async () => {});
+  t.mock.method(ProjectEvents.prototype, 'stop', async () => {});
+  t.mock.method(ProjectSync.prototype, 'snapshots', () => records);
+  t.mock.method(ProjectSync.prototype, 'restore', async function () {
+    this.host.notify('fixture-key', 'fixture fact', '/fixture');
+    return [];
+  });
+  plugin.register({
+    config: cfg, logger: { warn: assert.fail },
+    registerService: (value) => { if (value.id === 'gsd-project-sync') service = value; },
+    on: (name, handler) => hooks.set(name, handler),
+    registerHttpRoute() {}, registerControlUiDescriptor() {}, registerGatewayMethod() {},
+    runtime: {
+      agent: { resolveAgentWorkspaceDir: () => '/workspace', session: { listSessionEntries: () => [] } },
+      system: {
+        enqueueSystemEvent: (text, options) => { notifications.push({ text, ...options }); return true; },
+        requestHeartbeat: (options) => wakes.push(options),
+      },
+    },
+  });
+  t.after(() => service.stop());
+  assert.ok(service.reload.configPrefixes.includes('plugins.entries.open-gsd-openclaw'));
+  service.start({ config: cfg });
+  assert.equal(notifications[0].sessionKey, oversight);
+  assert.deepEqual(wakes[0], { source: 'other', intent: 'event', reason: 'gsd-project-changed', sessionKey: oversight, agentId: 'reviewer' });
+  const contribute = hooks.get('heartbeat_prompt_contribution');
+  assert.deepEqual(JSON.parse(contribute({ sessionKey: oversight }).appendContext).projects.map(p => p.projectDir), ['/fixture']);
+  assert.deepEqual(JSON.parse(contribute({ sessionKey: heartbeat }).appendContext).projects.map(p => p.projectDir), ['/other']);
+  assert.equal(contribute({ sessionKey: 'agent:main:main' }), undefined);
+  await service.stop();
+  assert.equal(contribute({ sessionKey: oversight }), undefined);
+  const nextCfg = structuredClone(cfg);
+  nextCfg.plugins.entries['open-gsd-openclaw'].config.projectSessions = [];
+  service.start({ config: nextCfg });
+  assert.equal(notifications[1].sessionKey, heartbeat);
+  assert.equal(contribute({ sessionKey: oversight }), undefined);
+  assert.deepEqual(JSON.parse(contribute({ sessionKey: heartbeat }).appendContext).projects.map(p => p.projectDir), ['/fixture', '/other']);
+});

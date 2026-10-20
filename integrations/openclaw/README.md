@@ -96,12 +96,59 @@ binding is fabricated. Archived cards remain untouched. User notes outside the
 managed block are preserved.
 
 Heartbeat receives current project facts through a native context-contribution
-hook in the configured default agent's main session. Significant changes enqueue
+hook in the system owner's configured heartbeat session (or main session when
+none is configured). The owner follows `agents.defaults.systemAgent.agentId`;
+an ambiguous multi-agent configuration without an owner fails closed.
+Significant changes enqueue
 factual system events and request a native heartbeat wake, after a successful
 Workboard write. With Workboard disabled, the adapter keeps observations only in
 memory and backfills cards when enabled again; it creates no replacement ledger.
 Memory-only observations do not survive Gateway restarts. Heartbeat enablement,
 delivery policy, and model availability remain OpenClaw settings.
+
+Optional exact-project routes belong in plugin config:
+
+```json
+{
+  "projectSessions": [
+    { "projectDir": "/absolute/selected/checkout", "sessionKey": "agent:main:dashboard:oversight" }
+  ]
+}
+```
+
+These routes select the destination for that project's events and context only.
+Use the canonical selected checkout path; unrelated paths retain the native
+heartbeat destination. The agent is derived from the session key, not assumed to
+be main. Invalid or duplicate routes are rejected; removal takes effect on
+service restart. Routing does not change the destination's model or the native
+heartbeat model, delivery, enablement, or cadence.
+
+## Execution binding and connection lifetime
+
+Always pass the selected absolute `projectDir` to GSD tools. OpenClaw's selected
+model is not automatically GSD's provider configuration. Configure the GSD
+provider catalog and per-phase project preferences separately, then use a
+qualified `provider/model` for `gsd_execute`. Qualified overrides are selected
+and read back through GSD's RPC API before the execution prompt; an unavailable
+model or mismatched readback fails instead of starting on a default model.
+This check establishes the initial model, not every later phase or subagent.
+The headless host applies the same qualified-model check after optional session
+restoration and before its first prompt, so a restored session cannot silently
+override an explicitly requested provider.
+
+`gsd_execute` is owned by its MCP connection. Closing that connection stops its
+RPC child; reconnecting creates a new session manager, not a reattachment to the
+old session ID. Client-managed mode prevents sibling eviction but does not
+provide durable execution. Workflow rows and checkpoints can survive separately
+from a process. Status from a new connection cannot prove an old worker is alive.
+
+For work that must outlive an agent turn, use a supported long-lived host for
+GSD, such as native background execution of `gsd headless --json auto`, and track
+that host's actual process/result alongside GSD's database state. GSD headless
+has its own bounded crash recovery; it is not an unlimited restart policy.
+Resume only after inspecting current locks, attempts, blockers, and checkpoints.
+Do not auto-resume intentional stops or claim that projection data proves a
+running worker. The adapter itself remains an observer, not another scheduler.
 
 The adapter creates no recurring jobs and never launches, cancels, or resumes
 coding work in response to a board move. GSD owns execution and recovery. Use
