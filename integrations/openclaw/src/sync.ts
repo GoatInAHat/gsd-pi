@@ -42,7 +42,7 @@ export async function readProgress(projectDir: string, env: NodeJS.ProcessEnv, s
 
 export interface SyncHost {
   request(method: string, params: Record<string, unknown>): Promise<Record<string, any>>;
-  notify(key: string, text: string): void;
+  notify(key: string, text: string, projectDir: string): void;
 }
 
 const STATE_START = "<!-- gsd-state:start -->";
@@ -225,7 +225,7 @@ export class ProjectSync {
     this.observations.set(key, snapshot);
     if (!previous || previous.status !== snapshot.status || previous.unavailable !== snapshot.unavailable ||
         JSON.stringify(previous.blockers) !== JSON.stringify(snapshot.blockers)) {
-      this.host.notify(key, JSON.stringify({ source: "GSD workflow status", ...(persisted ? { cardId: persisted.id } : {}), ...snapshot }));
+      this.host.notify(key, JSON.stringify({ source: "GSD workflow status", ...(persisted ? { cardId: persisted.id } : {}), ...snapshot }), String(snapshot.projectDir));
     }
   }
 

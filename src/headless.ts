@@ -18,6 +18,7 @@ import { resolve } from 'node:path'
 import { ChildProcess } from 'node:child_process'
 
 import { RpcClient } from '@gsd/agent-modes/modes/rpc/rpc-client.js'
+import { verifyQualifiedModelBinding } from '@opengsd/rpc-client'
 import { SessionManager } from '@gsd/pi-coding-agent'
 import type { SessionInfo } from '@gsd/pi-coding-agent'
 import { getProjectSessionsDir } from './project-sessions.js'
@@ -1075,6 +1076,18 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
       process.exit(1)
     }
     process.stderr.write(`[headless] Resuming session ${matched.id}\n`)
+  }
+
+  // A resumed session can restore a different model. Verify the explicit
+  // provider binding after switching sessions and before sending any prompt.
+  try {
+    await verifyQualifiedModelBinding(client, options.model)
+  } catch (err) {
+    process.stderr.write(`[headless] Error: ${err instanceof Error ? err.message : String(err)}\n`)
+    await client.stop()
+    if (timeoutTimer) clearTimeout(timeoutTimer)
+    if (idleTimer) clearTimeout(idleTimer)
+    process.exit(EXIT_ERROR)
   }
 
   // Build injector adapter — wraps client.sendUIResponse for AnswerInjector's writeToStdin interface

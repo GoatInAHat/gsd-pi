@@ -2,12 +2,12 @@ import { toolPluginMetadataSymbol } from "openclaw/plugin-sdk/tool-plugin"
 import { registerGsdUiMethods } from "./ui-methods.js"
 import { buildJsonPluginConfigSchema, definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
-import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
-import { buildAgentMainSessionKey } from "openclaw/plugin-sdk/routing";
+import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ProjectEvents } from "./discovery.js";
 import { ProjectSync } from "./sync.js";
+import { NotificationRoutes } from "./notification-routes.js";
 import { GsdPortalService } from "./portals.js";
 import { registerWebTab } from "./webtab.js";
 import type { PluginApi } from "./types.js";
@@ -40,6 +40,15 @@ const configSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
+    projectSessions: {
+      type: "array",
+      description: "Optional per-project destinations for factual status events and heartbeat context. Otherwise follows the default agent's configured heartbeat session.",
+      items: {
+        type: "object", additionalProperties: false,
+        properties: { projectDir: { type: "string", minLength: 1 }, sessionKey: { type: "string", minLength: 1 } },
+        required: ["projectDir", "sessionKey"],
+      },
+    },
     webUi: {
       type: "object",
       additionalProperties: false,
@@ -131,16 +140,15 @@ const gsdPluginEntry = definePluginEntry({
     });
     let events: ProjectEvents | undefined;
     let sync: ProjectSync | undefined;
-    let ownerKey: string | undefined;
+    let notificationRoutes: NotificationRoutes | undefined;
     let unsubscribe: (() => void) | undefined;
     api.registerService({
       id: "gsd-project-sync",
-      reload: { configPrefixes: ["agents", "session", "mcp.servers.gsd", "plugins.entries.workboard", "plugins.allow", "plugins.deny", "plugins.enabled"] },
+      reload: { configPrefixes: ["agents", "session", "mcp.servers.gsd", "plugins.entries.open-gsd-openclaw", "plugins.entries.workboard", "plugins.allow", "plugins.deny", "plugins.enabled"] },
       start(context) {
         const cfg = context.config;
-        const agentId = resolveDefaultAgentId(cfg);
-        ownerKey = buildAgentMainSessionKey({ agentId, mainKey: cfg.session?.mainKey });
-        const sessionKey = ownerKey;
+        const routes = new NotificationRoutes(cfg);
+        notificationRoutes = routes;
         const env = { ...process.env, ...cfg.mcp?.servers?.gsd?.env };
         const fail = (_error: unknown) => {
           context.serviceHealth?.reportFailure(new Error("GSD project synchronization failed"));
@@ -153,7 +161,8 @@ const gsdPluginEntry = definePluginEntry({
           // facade is reserved for bundled/official plugins, not external ones.
           request: (method, params) => callGatewayFromCli(method, { timeout: "10000", json: true }, params,
             { progress: false, scopes: gatewayScopes(method) }),
-          notify: (key, text) => {
+          notify: (key, text, projectDir) => {
+            const { sessionKey, agentId } = routes.forProject(projectDir);
             if (api.runtime.system.enqueueSystemEvent(text, { sessionKey, contextKey: key, replace: true })) {
               api.runtime.system.requestHeartbeat({ source: "other", intent: "event", reason: "gsd-project-changed", sessionKey, agentId });
             }
@@ -189,6 +198,7 @@ const gsdPluginEntry = definePluginEntry({
         await sync?.stop();
         events = undefined;
         sync = undefined;
+        notificationRoutes = undefined;
       },
     });
     api.on("after_tool_call", (event) => {
@@ -199,8 +209,9 @@ const gsdPluginEntry = definePluginEntry({
       if (typeof path === "string") void events?.add(path).catch(() => {});
     });
     api.on("heartbeat_prompt_contribution", (event) => {
-      if (!sync || event.sessionKey !== ownerKey) return;
-      const current = sync.snapshots().filter((snapshot) => snapshot.status !== "done");
+      if (!sync || !notificationRoutes) return;
+      const current = sync.snapshots().filter((snapshot) => snapshot.status !== "done" &&
+        notificationRoutes!.forProject(snapshot.projectDir).sessionKey === event.sessionKey);
       if (!current.length) return;
       return { appendContext: JSON.stringify({ source: "GSD workflow records (project data)", projects: current.slice(0, 12).map((snapshot) => {
         return { projectDir: snapshot.projectDir, phase: snapshot.phase,

@@ -24,6 +24,28 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "projectSessions": {
+        "type": "array",
+        "description": "Optional per-project destinations for factual status events and heartbeat context. Otherwise follows the default agent's configured heartbeat session.",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "projectDir": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sessionKey": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "projectDir",
+            "sessionKey"
+          ]
+        }
+      },
       "webUi": {
         "type": "object",
         "additionalProperties": false,
