@@ -27,8 +27,8 @@ export interface PluginApi {
     agent: {
       resolveAgentWorkspaceDir(config: Record<string, any>, agentId: string): string;
       session: {
-        listSessionEntries(input: { agentId: string }): { sessionKey: string; entry: { sessionRoot?: string; cwd?: string } }[];
-        getSessionEntry(input: { sessionKey: string; agentId?: string }): { sessionRoot?: string; cwd?: string } | undefined;
+        listSessionEntries(input: { agentId: string; readOnly: true }): { sessionKey: string; entry: { sessionRoot?: string; spawnedCwd?: string } }[];
+        getSessionEntry(input: { sessionKey: string; agentId?: string }): { sessionRoot?: string; spawnedCwd?: string } | undefined;
       };
     };
     system: {

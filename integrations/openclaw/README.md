@@ -20,7 +20,15 @@ The manifest launches `gsd-mcp-server`; it must resolve on the Gateway process P
 ```bash
 openclaw config set mcp.servers.gsd.command /absolute/path/to/gsd-mcp-server
 openclaw config set mcp.servers.gsd.env.GSD_CLI_PATH /absolute/path/to/gsd
+openclaw config set mcp.servers.gsd.env.GSD_MCP_CLIENT_MANAGED '"1"'
 ```
+
+The manifest sets `GSD_MCP_CLIENT_MANAGED=1` because OpenClaw owns its MCP
+children and can open multiple connections in the same working directory.
+Without this setting, GSD's per-project singleton registry can terminate another
+connection's server, causing `Transport closed` errors. Keep the setting in
+explicit `mcp.servers.gsd` overrides too; operator definitions replace manifest
+defaults. It does not make execution durable across connection closure.
 
 From a source checkout:
 
