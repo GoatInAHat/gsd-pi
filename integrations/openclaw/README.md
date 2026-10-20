@@ -150,6 +150,42 @@ Resume only after inspecting current locks, attempts, blockers, and checkpoints.
 Do not auto-resume intentional stops or claim that projection data proves a
 running worker. The adapter itself remains an observer, not another scheduler.
 
+### Protected credentials for a native background host
+
+On OpenClaw hosts with protected secret egress, launch headless work through
+native Gateway background exec/process tools. That process receives a
+destination-bound sentinel, proxy environment and trusted CA bundle. Configure
+GSD's `models.json` API key as the environment variable **name**, not the secret
+value. Before launch, verify that the variable exists, the HTTPS origin is
+bound to that secret, and the proxy/CA environment reaches the child. A missing
+variable name alone is not a valid credential. Never print its value.
+
+GSD's HTTP dispatcher honors the proxy environment. Protected egress does not
+substitute secrets onto remote plain HTTP. Do not disable TLS checks, bypass the
+proxy, reclassify a protected secret as an environment entry, or copy it into
+MCP configuration or an auth file. Generic MCP `env` accepts scalar values,
+not SecretRef objects. This observer plugin does not own the independent native
+background process; resolving a SecretRef in a plugin service would not inject
+it into that process. A trusted plugin-owned child can use the public
+`openclaw/plugin-sdk/secret-input-runtime` API, but that is a different lifecycle
+and is not a replacement for the native host's process grant.
+
+For slow local-model prefills, set GSD's `httpIdleTimeoutMs` and
+`retry.provider.timeoutMs` deliberately. The former defaults to five minutes
+and supports `0` to disable header/body idle deadlines. The latter reaches the
+provider SDK's request timeout (OpenAI defaults to ten minutes before response
+headers); **zero does not disable that SDK timeout**. Use a positive,
+operator-selected prefill deadline, retain cancellation, and verify the actual
+HTTPS proxy/server's long-prefill and SSE behavior. Idle disabling alone cannot
+extend the SDK or reverse proxy deadline.
+
+Keep the model catalog's native output upper bound separate from a request's
+output budget. For OpenAI-compatible completions, GSD omits `max_tokens` unless
+`StreamOptions.maxTokens` is supplied, preserving the server's default. Explicit
+overrides remain supported. OpenClaw's `params.maxTokens` is not a GSD settings
+field. Advertised context is the combined prompt/output budget; catalog limits
+do not prove usable concurrency or server overflow behavior.
+
 The adapter creates no recurring jobs and never launches, cancels, or resumes
 coding work in response to a board move. GSD owns execution and recovery. Use
 `gsd_cancel` to stop execution and GSD's status/results to confirm it. Archiving
