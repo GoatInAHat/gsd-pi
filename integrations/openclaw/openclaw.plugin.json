@@ -11,6 +11,9 @@
       "transport": "stdio",
       "command": "gsd-mcp-server",
       "args": [],
+      "env": {
+        "GSD_MCP_CLIENT_MANAGED": "1"
+      },
       "requestTimeoutMs": 120000
     }
   },

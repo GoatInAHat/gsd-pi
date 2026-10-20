@@ -71,3 +71,69 @@ test('heartbeat receives factual project context without a skill or scheduled pr
   await service.stop();
   assert.equal(contribute({ sessionKey: 'agent:main:main' }), undefined, 'a stopped service contributes no stale context');
 });
+
+test('session discovery is read-only and uses public spawnedCwd with sessionRoot precedence', async (t) => {
+  assert.ok(process.env.OPENCLAW_BIN, 'Set OPENCLAW_BIN to the isolated OpenClaw host');
+  const require = createRequire(await realpath(process.env.OPENCLAW_BIN));
+  const sdk = new Map(['plugin-entry', 'gateway-runtime', 'agent-scope-runtime', 'routing', 'tool-plugin']
+    .map((name) => [`openclaw/plugin-sdk/${name}`, require.resolve(`openclaw/plugin-sdk/${name}`)]));
+  const loader = registerHooks({ resolve(specifier, context, next) {
+    return next(sdk.get(specifier) ?? specifier, context);
+  } });
+  t.after(() => loader.deregister());
+  const { default: plugin } = await import('../dist/index.js');
+  const { ProjectSync } = await import('../dist/sync.js');
+  const { ProjectEvents } = await import('../dist/discovery.js');
+  const paths = [];
+  const listCalls = [];
+  const getCalls = [];
+  let service;
+  let listener;
+  let unsubscribed = 0;
+  let changedEntry;
+  t.mock.method(ProjectEvents.prototype, 'start', () => {});
+  t.mock.method(ProjectEvents.prototype, 'add', async (path) => { paths.push(path); });
+  t.mock.method(ProjectEvents.prototype, 'stop', async () => {});
+  t.mock.method(ProjectSync.prototype, 'restore', async () => []);
+  const cfg = {};
+  plugin.register({
+    config: cfg, logger: { warn: assert.fail },
+    registerService: (value) => { if (value.id === 'gsd-project-sync') service = value; },
+    on() {}, registerHttpRoute() {}, registerControlUiDescriptor() {}, registerGatewayMethod() {},
+    runtime: {
+      agent: {
+        resolveAgentWorkspaceDir: () => '/workspace',
+        session: {
+          listSessionEntries: (input) => {
+            listCalls.push(input);
+            return [
+              { entry: { spawnedCwd: '/startup-spawned' } },
+              { entry: { sessionRoot: '/startup-root', spawnedCwd: '/ignored-spawned' } },
+              { entry: { cwd: '/obsolete-cwd' } },
+            ];
+          },
+          getSessionEntry: (input) => { getCalls.push(input); return changedEntry; },
+        },
+      },
+      system: { enqueueSystemEvent: assert.fail, requestHeartbeat: assert.fail },
+    },
+  });
+  t.after(() => service.stop());
+  service.start({ config: cfg, gatewayEvents: { onSessionsChanged: (callback) => {
+    listener = callback;
+    return () => { unsubscribed++; };
+  } } });
+  assert.deepEqual(listCalls, [{ agentId: 'main', readOnly: true }]);
+  assert.deepEqual(paths, ['/workspace', '/startup-spawned', '/startup-root']);
+  changedEntry = { spawnedCwd: '/event-spawned' };
+  const event = { sessionKey: 'agent:main:fixture', agentId: 'main' };
+  listener(event);
+  changedEntry = { sessionRoot: '/event-root', spawnedCwd: '/ignored-event-spawned' };
+  listener(event);
+  changedEntry = { cwd: '/obsolete-event-cwd' };
+  listener(event);
+  assert.deepEqual(getCalls, [event, event, event]);
+  assert.deepEqual(paths, ['/workspace', '/startup-spawned', '/startup-root', '/event-spawned', '/event-root']);
+  await service.stop();
+  assert.equal(unsubscribed, 1);
+});

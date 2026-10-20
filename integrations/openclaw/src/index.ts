@@ -166,8 +166,8 @@ const gsdPluginEntry = definePluginEntry({
         discovery.start();
         for (const id of listAgentIds(cfg)) {
           void discovery.add(api.runtime.agent.resolveAgentWorkspaceDir(cfg, id)).catch(fail);
-          for (const { entry } of api.runtime.agent.session.listSessionEntries({ agentId: id })) {
-            const path = entry.sessionRoot ?? entry.cwd;
+          for (const { entry } of api.runtime.agent.session.listSessionEntries({ agentId: id, readOnly: true })) {
+            const path = entry.sessionRoot ?? entry.spawnedCwd;
             if (path) void discovery.add(path).catch(fail);
           }
         }
@@ -178,7 +178,7 @@ const gsdPluginEntry = definePluginEntry({
         }).catch(fail);
         unsubscribe = context.gatewayEvents?.onSessionsChanged((event) => {
           const entry = api.runtime.agent.session.getSessionEntry(event);
-          const path = entry?.sessionRoot ?? entry?.cwd;
+          const path = entry?.sessionRoot ?? entry?.spawnedCwd;
           if (path) void discovery.add(path).catch(fail);
         });
       },
