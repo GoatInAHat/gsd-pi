@@ -137,8 +137,8 @@ const TOGETHER_REASONING_EFFORT_MODELS = new Set([
 	"openai/gpt-oss-120b",
 ]);
 const TOGETHER_TOGGLE_REASONING_EFFORT_MODELS = new Set([
-	"deepseek-ai/DeepSeek-V4-Pro", // retired upstream; kept in case Together restores the id
-	"deepseek-ai/DeepSeek-V4-Pro-0813", // renamed successor, same toggle+effort(low/high/max) surface
+	"deepseek-ai/DeepSeek-V4-Pro",
+	"deepseek-ai/DeepSeek-V4-Pro-0813",
 ]);
 const TOGETHER_FIXED_REASONING_LEVEL_MAP = {
 	off: null,
