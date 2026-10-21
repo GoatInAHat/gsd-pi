@@ -41,6 +41,24 @@ export function createWebTabHandler(getTarget: () => WebTabTarget | undefined) {
         res.end("GSD web host is starting; retry shortly.");
         return resolve();
       }
+      let upstreamResponse: IncomingMessage | undefined;
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        req.off("aborted", cancel);
+        res.off("close", cancel);
+        res.off("finish", finish);
+        resolve();
+      };
+      // A browser abort does not end an upstream stream. Release both the
+      // socket and the handler promise, which the Gateway counts as active work.
+      const cancel = () => {
+        upstreamResponse?.destroy();
+        upstream.destroy();
+        if (!res.writableFinished) res.destroy();
+        finish();
+      };
       const upstream = httpRequest(
         {
           host: "127.0.0.1",
@@ -50,22 +68,30 @@ export function createWebTabHandler(getTarget: () => WebTabTarget | undefined) {
           headers: withoutHopByHop(req.headers) as Record<string, string>,
         },
         (up) => {
+          upstreamResponse = up;
+          if (settled || res.destroyed) { up.destroy(); return; }
+          up.once("error", cancel);
+          up.once("close", () => { if (!up.complete) cancel(); });
           res.writeHead(up.statusCode ?? 502, withoutHopByHop(up.headers) as Record<string, string>);
           up.pipe(res);
-          up.on("end", () => resolve());
         },
       );
       upstream.on("error", () => {
+        if (settled) return;
         if (res.headersSent) {
-          res.destroy();
-          return resolve();
+          cancel();
+          return;
         }
         res.statusCode = 502;
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
         res.end("GSD web host is unavailable.");
-        resolve();
+        finish();
       });
-      req.on("error", () => upstream.destroy());
+      req.once("error", cancel);
+      req.once("aborted", cancel);
+      res.once("error", cancel);
+      res.once("close", cancel);
+      res.once("finish", finish);
       req.pipe(upstream);
     });
 }

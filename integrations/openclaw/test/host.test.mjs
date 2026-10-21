@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import test from 'node:test';
 import { state } from '../dist/sync.js';
+import { stopIsolatedGateway } from './host-lifecycle.mjs';
 
 const exec = promisify(execFile);
 const pluginDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -40,11 +41,7 @@ test('packed plugin automatically synchronizes projects and Workboard from event
   let gateway;
   let logs = '';
   async function stop() {
-    if (!gateway || gateway.exitCode !== null || gateway.signalCode !== null) return;
-    const exited = once(gateway, 'exit');
-    gateway.kill('SIGTERM');
-    const timer = setTimeout(() => gateway.kill('SIGKILL'), 5000);
-    try { await exited; } finally { clearTimeout(timer); }
+    await stopIsolatedGateway(gateway, logs);
   }
   t.after(async () => {
     await stop();
@@ -105,6 +102,7 @@ test('packed plugin automatically synchronizes projects and Workboard from event
     while (Date.now() < deadline && !t.signal.aborted) {
       try {
         const response = await fetch(`http://127.0.0.1:${port}/readyz`, { signal: AbortSignal.timeout(2000) });
+        await response.body?.cancel();
         if (response.ok) { await rpc('health'); return; }
       } catch { /* The listener is not ready yet. */ }
       if (gateway.exitCode !== null || gateway.signalCode !== null) break;
