@@ -20,6 +20,7 @@ import { ChildProcess } from 'node:child_process'
 import { RpcClient } from '@gsd/agent-modes/modes/rpc/rpc-client.js'
 import { verifyQualifiedModelBinding } from '@opengsd/rpc-client'
 import { SessionManager } from '@gsd/pi-coding-agent'
+import { assertModelSelectionAllowed, inheritModelRequestPolicy } from '@gsd/pi-ai/model-request-policy.js'
 import type { SessionInfo } from '@gsd/pi-coding-agent'
 import { getProjectSessionsDir } from './project-sessions.js'
 import { loadAndValidateAnswerFile, AnswerInjector } from './headless-answers.js'
@@ -290,6 +291,7 @@ export function parseHeadlessArgs(argv: string[]): HeadlessOptions {
 // ---------------------------------------------------------------------------
 
 export async function runHeadless(options: HeadlessOptions): Promise<void> {
+  assertModelSelectionAllowed(options.model)
   if (options.command === 'quick' && options.commandArgs.join(' ').trim().length === 0) {
     process.stderr.write('[headless] Error: quick requires a task description.\n')
     process.stderr.write('[headless] Usage: gsd headless quick "<task description>"\n')
@@ -532,6 +534,7 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
     clientOptions.args = [...((clientOptions.args as string[]) || []), '--bare']
   }
 
+  clientOptions.env = inheritModelRequestPolicy(clientOptions.env as Record<string, string | undefined>)
   const client = new RpcClient(clientOptions)
 
   // Event tracking

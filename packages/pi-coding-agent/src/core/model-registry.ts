@@ -8,6 +8,9 @@ import {
 	type AssistantMessageEventStream,
 	type Context,
 	getModels,
+	isModelRequestAllowed,
+	isModelProviderAllowed,
+	assertModelRequestAllowed,
 	getProviders,
 	isModelsCatalogOverlay,
 	type KnownProvider,
@@ -768,7 +771,7 @@ export class ModelRegistry {
 	 * This is a fast check that doesn't refresh OAuth tokens.
 	 */
 	getAvailable(): Model<Api>[] {
-		return this.models.filter((m) => this.isProviderRequestReady(m.provider));
+		return this.models.filter((m) => isModelRequestAllowed(m) && this.isProviderRequestReady(m.provider));
 	}
 
 	/**
@@ -782,6 +785,7 @@ export class ModelRegistry {
 	 * Get API key for a model.
 	 */
 	hasConfiguredAuth(model: Model<Api>): boolean {
+		if (!isModelRequestAllowed(model) || this.disabledModelProviders.has(model.provider.trim().toLowerCase())) return false;
 		const authMode = this.getProviderAuthMode(model.provider);
 		if (authMode === "none" || authMode === "externalCli") {
 			return true;
@@ -829,6 +833,10 @@ export class ModelRegistry {
 	 */
 	async getApiKeyAndHeaders(model: Model<Api>): Promise<ResolvedRequestAuth> {
 		try {
+			assertModelRequestAllowed(model);
+			if (this.disabledModelProviders.has(model.provider.trim().toLowerCase())) {
+				throw new Error(`Model provider is disabled: ${model.provider}`);
+			}
 			const providerConfig = this.providerRequestConfigs.get(model.provider);
 			const storedAuth = await this.authStorage.getApiKeyWithOAuthState(model.provider, { includeFallback: false });
 			const apiKey =
@@ -1259,7 +1267,7 @@ export class ModelRegistry {
 	}
 
 	isProviderRequestReady(provider: string): boolean {
-		return checkProviderRequestReady(this._readinessDeps(), provider);
+		return isModelProviderAllowed(provider) && checkProviderRequestReady(this._readinessDeps(), provider);
 	}
 
 	private _readinessDeps() {
