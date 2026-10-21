@@ -22,6 +22,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { chromium } from 'playwright';
+import { stopIsolatedGateway } from './host-lifecycle.mjs';
 
 const exec = promisify(execFile);
 const pluginDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -55,6 +56,7 @@ let context;
 let page;
 let gatewayLogs = '';
 const browserErrors = [];
+const cancelledRequests = [];
 const network = [];
 const methods = [];
 let gatewayPort;
@@ -99,6 +101,25 @@ async function browserRpc(method, params = {}) {
     return client.request(method, params);
   }, { method, params });
 }
+async function browserContext(storageState) {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, colorScheme: 'light', storageState });
+  context.on('page', (page) => {
+    page.setDefaultTimeout(30_000);
+    page.on('pageerror', (error) => browserErrors.push(redact(error.message)));
+    page.on('response', (response) => {
+      const path = new URL(response.url()).pathname;
+      if (path.startsWith(basePath)) network.push({ path, status: response.status() });
+    });
+    page.on('requestfailed', (request) => {
+      const path = new URL(request.url()).pathname;
+      if (path.startsWith(basePath)) cancelledRequests.push({ path, error: request.failure()?.errorText });
+    });
+    page.on('websocket', (socket) => socket.on('framesent', ({ payload }) => {
+      try { const frame = JSON.parse(String(payload)); if (frame.type === 'req') methods.push(frame.method); } catch { /* binary frame */ }
+    }));
+  });
+  return context;
+}
 async function start() {
   gateway = spawn(openclaw, ['gateway', 'run', '--port', String(gatewayPort), '--bind', 'loopback', '--tailscale', 'off'], {
     env, cwd: root, stdio: ['ignore', 'pipe', 'pipe'],
@@ -107,6 +128,7 @@ async function start() {
   gateway.stderr.on('data', (chunk) => { gatewayLogs += chunk; });
   await eventually(async () => {
     const response = await fetch(`http://127.0.0.1:${gatewayPort}/readyz`, { signal: AbortSignal.timeout(2000) });
+    await response.body?.cancel();
     return response.ok;
   }, 'isolated Gateway readiness', 180_000);
   await eventually(async () => {
@@ -117,16 +139,16 @@ async function start() {
   }, 'owned GSD host readiness', 180_000);
 }
 async function stop() {
-  if (!gateway || gateway.exitCode !== null || gateway.signalCode !== null) return;
-  const exited = once(gateway, 'exit');
-  gateway.kill('SIGTERM');
-  const timer = setTimeout(() => gateway.kill('SIGKILL'), 20_000);
-  try { await exited; } finally { clearTimeout(timer); }
+  const result = await stopIsolatedGateway(gateway, gatewayLogs);
+  if (result) proof('graceful-gateway-exit', result);
 }
 async function assertClosed(listenPort) {
   let reachable = true;
   for (let attempt = 0; attempt < 20; attempt++) {
-    try { await fetch(`http://127.0.0.1:${listenPort}/`, { signal: AbortSignal.timeout(500) }); }
+    try {
+      const response = await fetch(`http://127.0.0.1:${listenPort}/`, { signal: AbortSignal.timeout(500) });
+      await response.body?.cancel();
+    }
     catch { reachable = false; break; }
     await delay(250);
   }
@@ -230,18 +252,7 @@ try {
   // Chromium's Unix-domain singleton socket needs a short temporary path.
   // Keep large package fixtures in TMPDIR, but its browser-only socket in /tmp.
   browser = await chromium.launch({ env: { ...env, TMPDIR: process.platform === 'win32' ? env.TMPDIR : '/tmp' }, headless: true, ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}), args: ['--no-sandbox', '--disable-dev-shm-usage'] });
-  context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, colorScheme: 'light' });
-  context.on('page', (page) => {
-    page.setDefaultTimeout(30_000);
-    page.on('pageerror', (error) => browserErrors.push(redact(error.message)));
-    page.on('response', (response) => {
-      const path = new URL(response.url()).pathname;
-      if (path.startsWith(basePath)) network.push({ path, status: response.status() });
-    });
-    page.on('websocket', (socket) => socket.on('framesent', ({ payload }) => {
-      try { const frame = JSON.parse(String(payload)); if (frame.type === 'req') methods.push(frame.method); } catch { /* binary frame */ }
-    }));
-  });
+  context = await browserContext();
   page = await context.newPage();
   let frame = await openEmbedded();
   const activated = await eventually(async () => {
@@ -296,11 +307,16 @@ try {
   assert.equal(await standalone.evaluate(() => localStorage.getItem('theme')), 'light');
   await standalone.close();
   await page.close();
-  assert.equal((await fetch(`http://127.0.0.1:${webPort}${basePath}/api/boot`)).status, 200, 'closing browser does not terminate plugin-owned host');
+  const bootAfterClose = await fetch(`http://127.0.0.1:${webPort}${basePath}/api/boot`);
+  assert.equal(bootAfterClose.status, 200, 'closing browser does not terminate plugin-owned host');
+  await bootAfterClose.body?.cancel();
   proof('remount-theme-and-tab-lifecycle');
   assert.ok(network.some((item) => item.path.includes('/_next/') && item.status === 200), 'prefixed web assets were served');
   assert.deepEqual(network.filter((item) => item.status >= 400), [], 'embedded assets/APIs must not fail');
   assert.deepEqual(browserErrors, [], 'browser runtime must not throw');
+  const retainedBrowserState = await context.storageState();
+  await context.close();
+  proof('browser-context-closed-before-shutdown');
   await stop();
   await assertClosed(webPort);
   await assertClosed(gatewayPort);
@@ -308,6 +324,7 @@ try {
   await start();
   assert.equal((await rpc('projects.list')).projects.length, nativeCount, 'native registry survives Gateway restart');
   assert.equal((await rpc('portal.list')).portals.filter((entry) => entry.port === webPort).length, 1, 'restart does not leak portal registrations');
+  context = await browserContext(retainedBrowserState);
   page = await context.newPage();
   frame = await openEmbedded();
   await assertTheme(frame, 'light');
@@ -320,12 +337,16 @@ try {
   console.error(evidence.failure);
 } finally {
   await browser?.close();
-  await stop();
+  try { await stop(); } catch (error) {
+    evidence.cleanupFailure = redact(error.message);
+    evidence.ok = false;
+    process.exitCode = 1;
+  }
   if (webPort) {
     try { await assertClosed(webPort); } catch (error) { evidence.cleanupFailure = error.message; evidence.ok = false; process.exitCode = 1; }
   }
   await mkdir(evidenceDir, { recursive: true });
-  await writeFile(join(evidenceDir, 'proof.json'), JSON.stringify({ ...evidence, browserErrors, network, methods }, null, 2) + '\n');
+  await writeFile(join(evidenceDir, 'proof.json'), JSON.stringify({ ...evidence, browserErrors, cancelledRequests, network, methods }, null, 2) + '\n');
   await writeFile(join(evidenceDir, 'gateway.log'), redact(gatewayLogs));
   await rm(root, { recursive: true, force: true });
 }
