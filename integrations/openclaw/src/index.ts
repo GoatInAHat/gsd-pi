@@ -92,11 +92,10 @@ const gsdPluginEntry = definePluginEntry({
     // Cached modules can register into multiple registries. Each registration
     // owns the policy its handlers capture and the subscriptions its service stops.
     const embeddedProjectsConfig: import("./ui-methods.js").EmbeddedProjectsConfig = { projects: [] }
-    const gsdUiHandles = registerGsdUiMethods(api as unknown as import("./ui-methods.js").UiMethodApi, () => portal?.webPort ?? webTabPort, embeddedProjectsConfig)
+    const gsdUiHandles = registerGsdUiMethods(api as unknown as import("./ui-methods.js").UiMethodApi, () => portal?.webPort, embeddedProjectsConfig)
     let portal: GsdPortalService | undefined;
-    let webTabPort: number | undefined;
     let portalRequests: AbortController | undefined;
-    registerWebTab(api, () => portal?.webPort ?? webTabPort);
+    registerWebTab(api, () => portal?.webPort);
     api.registerService({
       id: "gsd-web-portal",
       reload: { configPrefixes: ["mcp.servers.gsd", "plugins.entries.open-gsd-openclaw"] },
@@ -130,7 +129,6 @@ const gsdPluginEntry = definePluginEntry({
           onError: reportFailure,
         });
         void portal.start().then(() => {
-          webTabPort = portal?.webPort;
           context.serviceHealth?.clearFailure();
         }, reportFailure);
       },
@@ -142,7 +140,6 @@ const gsdPluginEntry = definePluginEntry({
         portalRequests?.abort();
         portalRequests = undefined;
         portal = undefined;
-        webTabPort = undefined;
       },
     });
     let events: ProjectEvents | undefined;
