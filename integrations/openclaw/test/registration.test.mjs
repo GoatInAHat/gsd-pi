@@ -147,10 +147,10 @@ test('compiled UI methods do not retain a cached port after the owned web host f
   const h = fixture(t);
   const a = h.register('a');
   await a.start();
-  assert.equal((await a.call('gsd.ui.preferences.read')).ok, true);
+  assert.equal((await a.call('gsd.ui.directories.list', { root: h.directory })).ok, true);
   const before = h.requests.length;
   Object.defineProperty(a.host, 'webPort', { value: undefined });
-  const unavailable = await a.call('gsd.ui.preferences.read');
+  const unavailable = await a.call('gsd.ui.directories.list', { root: h.directory });
   assert.equal(unavailable.ok, false);
   assert.match(unavailable.error.message, /web host unavailable/);
   assert.equal(h.requests.length, before, 'a dead cached port must never receive proxy traffic');
