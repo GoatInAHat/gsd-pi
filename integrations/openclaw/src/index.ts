@@ -11,6 +11,7 @@ import { NotificationRoutes } from "./notification-routes.js";
 import { GsdPortalService } from "./portals.js";
 import { registerWebTab } from "./webtab.js";
 import type { PluginApi } from "./types.js";
+import { GsdGatewayRequestError, requestGateway } from "./gateway-request.js";
 
 const GATEWAY_SCOPES: Record<string, OperatorScope[]> = {
   "projects.list": ["operator.read"],
@@ -94,14 +95,16 @@ const gsdPluginEntry = definePluginEntry({
     const gsdUiHandles = registerGsdUiMethods(api as unknown as import("./ui-methods.js").UiMethodApi, () => portal?.webPort ?? webTabPort, embeddedProjectsConfig)
     let portal: GsdPortalService | undefined;
     let webTabPort: number | undefined;
+    let portalRequests: AbortController | undefined;
     registerWebTab(api, () => portal?.webPort ?? webTabPort);
     api.registerService({
       id: "gsd-web-portal",
       reload: { configPrefixes: ["mcp.servers.gsd", "plugins.entries.open-gsd-openclaw"] },
       start(context) {
-        const reportFailure = () => {
-          context.serviceHealth?.reportFailure(new Error("GSD web portal unavailable"));
-          api.logger.warn("GSD web portal unavailable; check the GSD web host installation and Gateway portal access.");
+        const reportFailure = (error: unknown) => {
+          const detail = error instanceof GsdGatewayRequestError ? `: ${error.message}` : "";
+          context.serviceHealth?.reportFailure(new Error(`GSD web portal unavailable${detail}`));
+          api.logger.warn(`GSD web portal unavailable${detail}; check the GSD web host installation and Gateway portal access.`);
         };
         // Policy is REPLACED on every start/reload - including explicit
         // empty removal, so withdrawn projects lose their grants.
@@ -118,11 +121,12 @@ const gsdPluginEntry = definePluginEntry({
           embeddedProjectsConfig.adminOnly = true
           embeddedProjectsConfig.projects = undefined
         }
+        const requests = new AbortController();
+        portalRequests = requests;
         portal = new GsdPortalService({
           config: context.config.plugins?.entries?.["open-gsd-openclaw"]?.config?.webUi,
           env: { ...process.env, ...context.config.mcp?.servers?.gsd?.env },
-          request: (method, params) => callGatewayFromCli(method, { timeout: "10000", json: true }, params,
-            { progress: false, scopes: gatewayScopes(method) }),
+          request: (method, params) => requestGateway(method, params, gatewayScopes(method), requests.signal),
           onError: reportFailure,
         });
         void portal.start().then(() => {
@@ -134,6 +138,9 @@ const gsdPluginEntry = definePluginEntry({
         // Release every live gsd.ui subscription before the host goes down.
         gsdUiHandles.disposeAll()
         await portal?.stop();
+        // Portal cleanup reconciles its owned mutation before request admission ends.
+        portalRequests?.abort();
+        portalRequests = undefined;
         portal = undefined;
         webTabPort = undefined;
       },
@@ -142,6 +149,7 @@ const gsdPluginEntry = definePluginEntry({
     let sync: ProjectSync | undefined;
     let notificationRoutes: NotificationRoutes | undefined;
     let unsubscribe: (() => void) | undefined;
+    let syncRequests: AbortController | undefined;
     api.registerService({
       id: "gsd-project-sync",
       reload: { configPrefixes: ["agents", "session", "mcp.servers.gsd", "plugins.entries.open-gsd-openclaw", "plugins.entries.workboard", "plugins.allow", "plugins.deny", "plugins.enabled"] },
@@ -150,17 +158,19 @@ const gsdPluginEntry = definePluginEntry({
         const routes = new NotificationRoutes(cfg);
         notificationRoutes = routes;
         const env = { ...process.env, ...cfg.mcp?.servers?.gsd?.env };
-        const fail = (_error: unknown) => {
-          context.serviceHealth?.reportFailure(new Error("GSD project synchronization failed"));
+        const fail = (error: unknown) => {
+          const detail = error instanceof GsdGatewayRequestError ? `: ${error.message}` : "";
+          context.serviceHealth?.reportFailure(new Error(`GSD project synchronization failed${detail}`));
           // CLI errors can contain provider output. Detailed project state is
           // available through GSD; don't copy subprocess stderr into host logs.
-          api.logger.warn("GSD project synchronization failed; check GSD state and Gateway access.");
+          api.logger.warn(`GSD project synchronization failed${detail}; check GSD state and Gateway access.`);
         };
+        const requests = new AbortController();
+        syncRequests = requests;
         sync = new ProjectSync({
           // Public authenticated Gateway client. The in-process runtime gateway
           // facade is reserved for bundled/official plugins, not external ones.
-          request: (method, params) => callGatewayFromCli(method, { timeout: "10000", json: true }, params,
-            { progress: false, scopes: gatewayScopes(method) }),
+          request: (method, params) => requestGateway(method, params, gatewayScopes(method), requests.signal),
           notify: (key, text, projectDir) => {
             const { sessionKey, agentId } = routes.forProject(projectDir);
             if (api.runtime.system.enqueueSystemEvent(text, { sessionKey, contextKey: key, replace: true })) {
@@ -194,6 +204,8 @@ const gsdPluginEntry = definePluginEntry({
       async stop() {
         unsubscribe?.();
         unsubscribe = undefined;
+        syncRequests?.abort();
+        syncRequests = undefined;
         await events?.stop();
         await sync?.stop();
         events = undefined;

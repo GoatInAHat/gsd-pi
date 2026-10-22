@@ -68,6 +68,8 @@ The plugin owns only its child process and portal. It does not call `gsd --web`,
 
 The web host relies on native portal access control instead of a second application token, and binds only to `127.0.0.1`. Portal bearer URLs remain Gateway-owned and are not persisted or logged by the plugin. The public authenticated Gateway SDK client requests `operator.read` for `portal.list` and `operator.write` for open/close; it does not use the restricted in-process Gateway facade. These are operator-local services, not remote MCP/worker path translation.
 
+During startup and synchronization, transport timeouts or transient connection closures on the four read-only catalog methods are retried at most twice, with a one-second delay between attempts. Each RPC retains its ten-second timeout; event-loop stalls can delay those timers. Authentication and policy failures are not retried. Mutations, including portal registration and closure, are never retried by this client; uncertain registration still follows the ownership reconciliation above. Gateway failures report the method and a fixed error category without copying RPC messages, credentials, URLs, or project paths into service health or host logs.
+
 The dashboard tab uses an authenticated route on the main Gateway origin, including through its HTTPS reverse proxy or tunnel. Its sandboxed frame uses the native Control UI RPC bridge for application operations. The separately registered native portal has its own listener and access control; exposing only the Gateway port does not expose that optional portal listener. See [OpenClaw Portals](https://docs.openclaw.ai/gateway/portals).
 
 ## Automatic discovery and synchronization
