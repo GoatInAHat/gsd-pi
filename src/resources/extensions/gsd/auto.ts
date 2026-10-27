@@ -358,6 +358,7 @@ import { createWorkspace, scopeMilestone } from "./workspace.js";
 import {
   registerAutoWorker,
   markWorkerStopping,
+  markWorkerStopped,
   getAutoWorker,
   markWorkerStoppingByPid,
   getAllAutoWorkers,
@@ -1609,6 +1610,7 @@ export async function maybeRerootStepSessionForHighContext(
 }
 
 export async function cleanupAfterLoopExit(ctx: ExtensionContext): Promise<void> {
+  let stoppingWorkerId: string | null = null;
   const preserveStepSurface = s.preserveStepSurfaceAfterLoopExit;
   const preserveCompletionSurface = s.completionStopInProgress;
   const preservePausedSurface = s.paused;
@@ -1655,6 +1657,7 @@ export async function cleanupAfterLoopExit(ctx: ExtensionContext): Promise<void>
     // row retirement or the local identity reset.
     try {
       if (s.workerId) {
+        stoppingWorkerId = s.workerId;
         markWorkerStopping(s.workerId);
       }
     } catch (err) {
@@ -1725,6 +1728,16 @@ export async function cleanupAfterLoopExit(ctx: ExtensionContext): Promise<void>
     const workspaceRoot = s.basePath || s.originalBasePath;
     if (workspaceRoot) {
       await maybeRerootStepSessionForHighContext(ctx, workspaceRoot, s.cmdCtx, s.originalBasePath);
+    }
+  }
+
+  if (stoppingWorkerId) {
+    try {
+      if (!markWorkerStopped(stoppingWorkerId)) {
+        debugLog("loop-exit-cleanup-worker-still-active", { workerId: stoppingWorkerId });
+      }
+    } catch (err) {
+      debugLog("loop-exit-cleanup-worker-stopped", { error: err instanceof Error ? err.message : String(err) });
     }
   }
 }

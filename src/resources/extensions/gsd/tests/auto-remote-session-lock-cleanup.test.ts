@@ -4,10 +4,11 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { checkRemoteAutoSession, forceStopAutoRemote } from "../auto.ts";
+import { checkRemoteAutoSession, cleanupAfterLoopExit, forceStopAutoRemote, _registerAutoWorkerForSessionForTest } from "../auto.ts";
+import { autoSession } from "../auto-runtime-state.ts";
 import { openDatabase, closeDatabase, isDbAvailable, _getAdapter } from "../gsd-db.ts";
-import { getAutoWorker, registerAutoWorker } from "../db/auto-workers.ts";
-import { claimMilestoneLease, getMilestoneLease } from "../db/milestone-leases.ts";
+import { getAutoWorker, markWorkerStopped, markWorkerStopping, registerAutoWorker } from "../db/auto-workers.ts";
+import { claimMilestoneLease, forceReleaseLeasesForWorker, getMilestoneLease } from "../db/milestone-leases.ts";
 import { normalizeRealPath } from "../paths.ts";
 import { readCrashLock } from "../crash-recovery.ts";
 
@@ -125,6 +126,49 @@ test("forceStopAutoRemote escalates a live remote PID and releases worker state"
   assert.equal(readCrashLock(base), null, "force stop should remove the visible remote lock");
 });
 
+test("cleanupAfterLoopExit marks an idle worker stopped after coordination cleanup", async (t) => {
+  const base = makeBase();
+  t.after(() => cleanup(base));
+  autoSession.reset();
+  t.after(() => autoSession.reset());
+
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  _registerAutoWorkerForSessionForTest(autoSession, normalizeRealPath(base));
+  const workerId = autoSession.workerId;
+  assert.ok(workerId, "precondition: worker registration succeeded");
+  autoSession.active = true;
+
+  await cleanupAfterLoopExit({
+    hasUI: false,
+    ui: { setStatus: () => {}, setWidget: () => {} },
+  } as any);
+
+  assert.equal(getAutoWorker(workerId)?.status, "stopped");
+});
+
+test("markWorkerStopped waits until a stopping worker releases its held lease", (t) => {
+  const base = makeBase();
+  t.after(() => cleanup(base));
+
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  const activeWorkerId = registerAutoWorker({ projectRootRealpath: normalizeRealPath(base) });
+  assert.equal(markWorkerStopped(activeWorkerId), false);
+  assert.equal(getAutoWorker(activeWorkerId)?.status, "active");
+
+  const workerId = registerAutoWorker({ projectRootRealpath: normalizeRealPath(base) });
+  insertMilestone("M001");
+  assert.equal(claimMilestoneLease(workerId, "M001").ok, true);
+  markWorkerStopping(workerId);
+
+  assert.equal(markWorkerStopped(workerId), false);
+  assert.equal(getAutoWorker(workerId)?.status, "stopping");
+
+  assert.equal(forceReleaseLeasesForWorker(workerId), 1);
+  assert.equal(markWorkerStopped(workerId), true);
+  assert.equal(getAutoWorker(workerId)?.status, "stopped");
+  assert.equal(markWorkerStopped(workerId), false, "terminal transition is idempotent");
+});
+
 test("forceStopAutoRemote with no open DB still reports the killed PID and removes the lock", (t) => {
   const base = makeBase();
   t.after(() => cleanup(base));
@@ -221,7 +265,8 @@ test("#2532: force stop releases leases for every worker row sharing the pid, no
   const result = forceStopAutoRemote(base);
 
   assert.deepEqual(result, { found: true, pid: 434_343 });
-  assert.equal(getAutoWorker(holderId)?.status, "stopping", "current holder retired");
+  assert.equal(getAutoWorker(olderId)?.status, "stopping", "older worker remains stopping");
+  assert.equal(getAutoWorker(holderId)?.status, "stopping", "current holder remains stopping");
   assert.equal(
     getMilestoneLease("M002")?.status,
     "released",

@@ -33,7 +33,7 @@ const HEARTBEAT_TTL_SECONDS = 60;
 // don't pull it from package.json to avoid module-load filesystem I/O.
 const WORKER_REGISTRY_VERSION = "1";
 
-export type WorkerStatus = "active" | "stopping" | "crashed";
+export type WorkerStatus = "active" | "stopping" | "stopped" | "crashed";
 
 export interface AutoWorkerRow {
   worker_id: string;
@@ -161,6 +161,48 @@ export function markWorkerStopping(workerId: string): void {
       `UPDATE workers SET status = 'stopping' WHERE worker_id = :worker_id`,
     ).run({ ":worker_id": workerId });
   });
+}
+
+/**
+ * Mark a stopping worker as stopped after its loop has exited and it owns no work.
+ * The row remains durable; process liveness is checked separately by callers.
+ */
+export function markWorkerStopped(workerId: string): boolean {
+  const db = getDb();
+  let changes = 0;
+  transaction(() => {
+    const result = db.prepare(
+      `UPDATE workers SET status = 'stopped'
+       WHERE worker_id = :worker_id
+         AND status = 'stopping'
+         AND NOT EXISTS (
+           SELECT 1 FROM milestone_leases
+           WHERE worker_id = :worker_id AND status = 'held'
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM unit_dispatches
+           WHERE worker_id = :worker_id AND status IN ('pending', 'claimed', 'running')
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM workflow_execution_attempts
+           WHERE worker_id = :worker_id AND attempt_state IN ('claimed', 'running')
+         )`,
+    ).run({ ":worker_id": workerId });
+    changes =
+      typeof (result as { changes?: unknown }).changes === "number"
+        ? (result as { changes: number }).changes
+        : 0;
+  });
+  if (changes < 1) return false;
+  insertAuditEvent({
+    eventId: randomUUID(),
+    traceId: workerId,
+    category: "orchestration",
+    type: "worker-stopped",
+    ts: new Date().toISOString(),
+    payload: { workerId },
+  });
+  return true;
 }
 
 /**
