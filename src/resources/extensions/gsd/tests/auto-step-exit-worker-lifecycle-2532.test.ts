@@ -1,6 +1,6 @@
 // Project/App: gsd-pi
 // File Purpose: #2532 — a step-mode loop exit must retire the session worker
-// (lease released, row 'stopping', s.workerId cleared) so the next auto run
+// (lease released, row 'stopped', s.workerId cleared) so the next auto run
 // registers a fresh active worker instead of reusing a dead row.
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -48,7 +48,7 @@ function loopExitCtx(): unknown {
   };
 }
 
-test("#2532: cleanupAfterLoopExit marks the worker stopping and clears the cached workerId", async (t) => {
+test("#2532: cleanupAfterLoopExit marks the worker stopped and clears the cached workerId", async (t) => {
   const base = makeTmpBase();
   teardownAfter(t, base);
 
@@ -64,8 +64,8 @@ test("#2532: cleanupAfterLoopExit marks the worker stopping and clears the cache
   assert.equal(autoSession.milestoneLeaseToken, null, "milestoneLeaseToken cleared after loop exit");
   assert.equal(
     getAutoWorker(workerId)?.status,
-    "stopping",
-    "worker row retired to 'stopping' (mirrors stopAuto)",
+    "stopped",
+    "worker row retired to 'stopped' after cleanup",
   );
 });
 
