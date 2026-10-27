@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { checkRemoteAutoSession, cleanupAfterLoopExit, forceStopAutoRemote, _registerAutoWorkerForSessionForTest } from "../auto.ts";
+import { checkRemoteAutoSession, cleanupAfterLoopExit, forceStopAutoRemote, stopAuto, _registerAutoWorkerForSessionForTest } from "../auto.ts";
 import { autoSession } from "../auto-runtime-state.ts";
 import { openDatabase, closeDatabase, isDbAvailable, _getAdapter } from "../gsd-db.ts";
 import { getAutoWorker, markWorkerStopped, markWorkerStopping, registerAutoWorker } from "../db/auto-workers.ts";
@@ -47,6 +47,24 @@ function insertMilestone(id: string): void {
     ":title": id,
     ":created_at": new Date().toISOString(),
   });
+}
+
+function insertDispatch(workerId: string, status: string, unitId: string): number {
+  const result = _getAdapter()!.prepare(
+    `INSERT INTO unit_dispatches (
+       trace_id, worker_id, milestone_lease_token, milestone_id,
+       unit_type, unit_id, status, attempt_n, started_at
+     ) VALUES (
+       :trace_id, :worker_id, 1, 'M001', 'run-task', :unit_id, :status, 1, :started_at
+     )`,
+  ).run({
+    ":trace_id": `worker-stop/${unitId}`,
+    ":worker_id": workerId,
+    ":unit_id": unitId,
+    ":status": status,
+    ":started_at": new Date().toISOString(),
+  });
+  return Number((result as { lastInsertRowid?: unknown }).lastInsertRowid);
 }
 
 function writeLegacyLock(base: string, pid: number): void {
@@ -272,4 +290,141 @@ test("#2532: force stop releases leases for every worker row sharing the pid, no
     "released",
     "current holder's lease must be released, not the oldest row's",
   );
+});
+
+for (const status of ["pending", "claimed", "running"] as const) {
+  test(`markWorkerStopped waits for its own ${status} dispatch to become terminal`, (t) => {
+    const base = makeBase();
+    t.after(() => cleanup(base));
+
+    openDatabase(join(base, ".gsd", "gsd.db"));
+    const workerId = registerAutoWorker({ projectRootRealpath: normalizeRealPath(base) });
+    const dispatchId = insertDispatch(workerId, status, `M001/S01/T-${status}`);
+    markWorkerStopping(workerId);
+
+    assert.equal(markWorkerStopped(workerId), false);
+    assert.equal(getAutoWorker(workerId)?.status, "stopping");
+
+    _getAdapter()!.prepare(
+      `UPDATE unit_dispatches SET status = 'completed' WHERE id = :id`,
+    ).run({ ":id": dispatchId });
+    assert.equal(markWorkerStopped(workerId), true);
+    assert.equal(getAutoWorker(workerId)?.status, "stopped");
+  });
+}
+
+test("markWorkerStopped ignores another worker's active dispatch", (t) => {
+  const base = makeBase();
+  t.after(() => cleanup(base));
+
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  const retiringWorkerId = registerAutoWorker({ projectRootRealpath: normalizeRealPath(base) });
+  const otherWorkerId = registerAutoWorker({ projectRootRealpath: normalizeRealPath(base) });
+  insertDispatch(otherWorkerId, "running", "M001/S01/T-other-worker");
+  markWorkerStopping(retiringWorkerId);
+
+  assert.equal(markWorkerStopped(retiringWorkerId), true);
+  assert.equal(getAutoWorker(retiringWorkerId)?.status, "stopped");
+  assert.equal(getAutoWorker(otherWorkerId)?.status, "active");
+});
+
+test("stopAuto preserves worker retirement context through loop-exit cleanup", async (t) => {
+  const base = makeBase();
+  t.after(() => cleanup(base));
+  t.after(() => autoSession.reset());
+
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  const workerId = registerAutoWorker({ projectRootRealpath: normalizeRealPath(base) });
+  const dispatchId = insertDispatch(workerId, "pending", "M001/S01/T-stop-auto");
+  autoSession.active = true;
+  autoSession.basePath = base;
+  autoSession.originalBasePath = base;
+  autoSession.workerId = workerId;
+
+  await stopAuto({
+    hasUI: false,
+    ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {}, setHeader: () => {} },
+  } as any, undefined, "test stop");
+
+  assert.equal(autoSession.workerId, null, "stopAuto resets the session's cached worker id");
+  assert.equal(isDbAvailable(), false, "stopAuto closes the workflow database");
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  assert.equal(getAutoWorker(workerId)?.status, "stopping");
+  _getAdapter()!.prepare(
+    `UPDATE unit_dispatches SET status = 'completed' WHERE id = :id`,
+  ).run({ ":id": dispatchId });
+  closeDatabase();
+
+  await cleanupAfterLoopExit({
+    hasUI: false,
+    ui: { setStatus: () => {}, setWidget: () => {} },
+  } as any);
+
+  assert.equal(isDbAvailable(), false, "cleanup restores the previously closed DB state");
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  assert.equal(getAutoWorker(workerId)?.status, "stopped");
+});
+
+test("stopAuto finalizes an idle worker after orchestration shutdown without loop cleanup", async (t) => {
+  const base = makeBase();
+  t.after(() => cleanup(base));
+  t.after(() => autoSession.reset());
+
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  const workerId = registerAutoWorker({ projectRootRealpath: normalizeRealPath(base) });
+  autoSession.active = true;
+  autoSession.basePath = base;
+  autoSession.originalBasePath = base;
+  autoSession.workerId = workerId;
+
+  await stopAuto({
+    hasUI: false,
+    ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {}, setHeader: () => {} },
+  } as any, undefined, "test stop");
+
+  assert.equal(isDbAvailable(), false, "stopAuto restores its closed DB state");
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  assert.equal(getAutoWorker(workerId)?.status, "stopped");
+});
+
+test("worker finalization preserves an unrelated open in-memory database", async (t) => {
+  const base = makeBase();
+  t.after(() => cleanup(base));
+  t.after(() => autoSession.reset());
+
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  const workerId = registerAutoWorker({ projectRootRealpath: normalizeRealPath(base) });
+  const dispatchId = insertDispatch(workerId, "pending", "M001/S01/T-memory-db");
+  autoSession.active = true;
+  autoSession.basePath = base;
+  autoSession.originalBasePath = base;
+  autoSession.workerId = workerId;
+  await stopAuto({
+    hasUI: false,
+    ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {}, setHeader: () => {} },
+  } as any, undefined, "test stop");
+
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  _getAdapter()!.prepare(
+    `UPDATE unit_dispatches SET status = 'completed' WHERE id = :id`,
+  ).run({ ":id": dispatchId });
+  closeDatabase();
+
+  openDatabase(":memory:");
+  const memoryWorkerId = registerAutoWorker({ projectRootRealpath: "/tmp/memory-project" });
+  await cleanupAfterLoopExit({
+    hasUI: false,
+    ui: { setStatus: () => {}, setWidget: () => {} },
+  } as any);
+
+  assert.equal(getAutoWorker(memoryWorkerId)?.status, "active", "the existing memory DB must remain intact");
+  assert.equal(getAutoWorker(workerId), null, "the retiring file DB must not replace the memory DB");
+
+  closeDatabase();
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  await cleanupAfterLoopExit({
+    hasUI: false,
+    ui: { setStatus: () => {}, setWidget: () => {} },
+  } as any);
+  assert.equal(getAutoWorker(workerId)?.status, "stopped", "the retained finalizer can retry with the right DB open");
 });

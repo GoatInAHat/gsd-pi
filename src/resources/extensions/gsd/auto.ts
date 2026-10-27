@@ -237,7 +237,10 @@ import {
   checkpointWorkflowDatabase,
   closeWorkflowDatabase,
   getWorkflowDatabaseStatus,
+  openWorkflowDatabasePath,
+  openWorkflowDatabasePathOrNull,
   resolveProjectRootDbPath,
+  restoreWorkflowDatabase,
 } from "./db-workspace.js";
 import {
   getActiveForWorker,
@@ -1609,8 +1612,68 @@ export async function maybeRerootStepSessionForHighContext(
   return { rerooted: false };
 }
 
+const pendingWorkerStopDbPaths = new Map<string, string>();
+
+function rememberPendingWorkerStop(workerId: string): void {
+  const dbPath = openWorkflowDatabasePathOrNull();
+  if (dbPath && !pendingWorkerStopDbPaths.has(workerId)) {
+    pendingWorkerStopDbPaths.set(workerId, dbPath);
+  }
+}
+
+function finalizePendingWorkerStop(workerId: string, retainOnRefusal: boolean): boolean {
+  const dbPath = pendingWorkerStopDbPaths.get(workerId);
+  if (!dbPath) {
+    if (!retainOnRefusal) pendingWorkerStopDbPaths.delete(workerId);
+    return false;
+  }
+
+  const previousDbPath = openWorkflowDatabasePathOrNull();
+  const restorePreviousDatabase = previousDbPath !== dbPath;
+  let finalized = false;
+  let retainPendingOnRefusal = retainOnRefusal;
+  try {
+    if (restorePreviousDatabase) {
+      if (previousDbPath === ":memory:") {
+        retainPendingOnRefusal = true;
+        throw new Error("cannot switch away from an active in-memory workflow database");
+      }
+      if (dbPath === ":memory:" || !existsSync(dbPath)) {
+        throw new Error("retiring worker database is no longer available");
+      }
+      if (!openWorkflowDatabasePath(dbPath)) {
+        throw new Error("retiring worker database could not be reopened");
+      }
+    }
+
+    if (getAutoWorker(workerId)?.status === "stopped") {
+      finalized = true;
+      return true;
+    }
+    finalized = markWorkerStopped(workerId);
+    return finalized;
+  } catch (err) {
+    debugLog("worker-stop-finalization", {
+      workerId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  } finally {
+    if (restorePreviousDatabase) {
+      try {
+        restoreWorkflowDatabase(previousDbPath);
+      } catch (err) {
+        debugLog("worker-stop-database-restore", {
+          workerId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    if (finalized || !retainPendingOnRefusal) pendingWorkerStopDbPaths.delete(workerId);
+  }
+}
+
 export async function cleanupAfterLoopExit(ctx: ExtensionContext): Promise<void> {
-  let stoppingWorkerId: string | null = null;
   const preserveStepSurface = s.preserveStepSurfaceAfterLoopExit;
   const preserveCompletionSurface = s.completionStopInProgress;
   const preservePausedSurface = s.paused;
@@ -1657,7 +1720,7 @@ export async function cleanupAfterLoopExit(ctx: ExtensionContext): Promise<void>
     // row retirement or the local identity reset.
     try {
       if (s.workerId) {
-        stoppingWorkerId = s.workerId;
+        rememberPendingWorkerStop(s.workerId);
         markWorkerStopping(s.workerId);
       }
     } catch (err) {
@@ -1731,13 +1794,9 @@ export async function cleanupAfterLoopExit(ctx: ExtensionContext): Promise<void>
     }
   }
 
-  if (stoppingWorkerId) {
-    try {
-      if (!markWorkerStopped(stoppingWorkerId)) {
-        debugLog("loop-exit-cleanup-worker-still-active", { workerId: stoppingWorkerId });
-      }
-    } catch (err) {
-      debugLog("loop-exit-cleanup-worker-stopped", { error: err instanceof Error ? err.message : String(err) });
+  for (const workerId of Array.from(pendingWorkerStopDbPaths.keys())) {
+    if (!finalizePendingWorkerStop(workerId, false)) {
+      debugLog("loop-exit-cleanup-worker-still-active", { workerId });
     }
   }
 }
@@ -1833,6 +1892,8 @@ export async function stopAuto(
   options: StopAutoOptions = {},
 ): Promise<void> {
   if (!s.active && !s.paused) return;
+  const retiringWorkerId = s.workerId;
+  if (retiringWorkerId) rememberPendingWorkerStop(retiringWorkerId);
   const loadedPreferences = loadEffectiveGSDPreferences(s.basePath || undefined)?.preferences;
   const stopNotificationPrefix = formatStopNoticePrefix(reason);
   const displayReason = stopNoticeDisplayReason(reason);
@@ -2343,6 +2404,12 @@ export async function stopAuto(
     }
 
     clearSessionModelOverrideForCommandSession(ctx);
+
+    // stopAuto() owns the terminal shutdown path too (for example /exit), but
+    // it clears AutoSession and closes the DB before returning. Use the saved
+    // worker id + exact DB path after kernelStop; if work is still active the
+    // guarded transition refuses and loop-exit cleanup gets one final attempt.
+    if (retiringWorkerId) finalizePendingWorkerStop(retiringWorkerId, true);
 
     // Reset all session state in one call
     s.resetAfterStop({ preserveCompletionSurface });
