@@ -33,7 +33,7 @@ const HEARTBEAT_TTL_SECONDS = 60;
 // don't pull it from package.json to avoid module-load filesystem I/O.
 const WORKER_REGISTRY_VERSION = "1";
 
-export type WorkerStatus = "active" | "stopping" | "stopped" | "crashed";
+export type WorkerStatus = "active" | "stopping" | "crashed" | "stopped";
 
 export interface AutoWorkerRow {
   worker_id: string;
@@ -152,13 +152,15 @@ export function markWorkerCrashed(workerId: string): void {
 
 /**
  * Mark the worker as stopping. Called from the stopAuto path when the user
- * cleanly shuts down auto-mode.
+ * cleanly shuts down auto-mode. `stopped` is terminal (#3029): a retired row
+ * never re-enters the stopping/active lifecycle.
  */
 export function markWorkerStopping(workerId: string): void {
   const db = getDb();
   transaction(() => {
     db.prepare(
-      `UPDATE workers SET status = 'stopping' WHERE worker_id = :worker_id`,
+      `UPDATE workers SET status = 'stopping'
+       WHERE worker_id = :worker_id AND status != 'stopped'`,
     ).run({ ":worker_id": workerId });
   });
 }
@@ -227,6 +229,22 @@ export function markWorkerStoppingByPid(
       ":project_root": projectRootRealpath,
     });
   });
+}
+
+/**
+ * Whether the worker still owns unfinished unit work (pending/claimed/running
+ * dispatches). Terminal retirement (#3029) is skipped while this is true, so
+ * #1773 stale recovery keeps applying to rows with unfinished work. Fails
+ * closed (reports unfinished) when the database cannot be read.
+ */
+export function hasOpenUnitDispatches(workerId: string): boolean {
+  if (!isDbAvailable()) return true;
+  const row = _getAdapter()!.prepare(
+    `SELECT 1 FROM unit_dispatches
+     WHERE worker_id = :worker_id AND status IN ('pending','claimed','running')
+     LIMIT 1`,
+  ).get({ ':worker_id': workerId });
+  return row !== undefined;
 }
 
 /**

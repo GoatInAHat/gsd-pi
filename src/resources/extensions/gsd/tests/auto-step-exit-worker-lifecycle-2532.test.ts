@@ -48,7 +48,7 @@ function loopExitCtx(): unknown {
   };
 }
 
-test("#2532: cleanupAfterLoopExit marks the worker stopped and clears the cached workerId", async (t) => {
+test("#2532/#3029: cleanupAfterLoopExit retires the worker to stopped and clears the cached workerId", async (t) => {
   const base = makeTmpBase();
   teardownAfter(t, base);
 
@@ -65,7 +65,7 @@ test("#2532: cleanupAfterLoopExit marks the worker stopped and clears the cached
   assert.equal(
     getAutoWorker(workerId)?.status,
     "stopped",
-    "worker row retired to 'stopped' after cleanup",
+    "worker row retired terminally once loop-exit work completes (#3029)",
   );
 });
 
