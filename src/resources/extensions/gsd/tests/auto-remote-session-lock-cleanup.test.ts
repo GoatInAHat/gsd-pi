@@ -329,8 +329,13 @@ test("markWorkerStopped ignores another worker's active dispatch", (t) => {
 });
 
 test("stopAuto preserves worker retirement context through loop-exit cleanup", async (t) => {
+  const originalCwd = process.cwd();
   const base = makeBase();
-  t.after(() => cleanup(base));
+  t.after(() => {
+    process.chdir(originalCwd);
+    cleanup(base);
+    assert.equal(process.cwd(), originalCwd);
+  });
   t.after(() => autoSession.reset());
 
   openDatabase(join(base, ".gsd", "gsd.db"));
@@ -366,8 +371,13 @@ test("stopAuto preserves worker retirement context through loop-exit cleanup", a
 });
 
 test("stopAuto finalizes an idle worker after orchestration shutdown without loop cleanup", async (t) => {
+  const originalCwd = process.cwd();
   const base = makeBase();
-  t.after(() => cleanup(base));
+  t.after(() => {
+    process.chdir(originalCwd);
+    cleanup(base);
+    assert.equal(process.cwd(), originalCwd);
+  });
   t.after(() => autoSession.reset());
 
   openDatabase(join(base, ".gsd", "gsd.db"));
@@ -388,8 +398,13 @@ test("stopAuto finalizes an idle worker after orchestration shutdown without loo
 });
 
 test("worker finalization preserves an unrelated open in-memory database", async (t) => {
+  const originalCwd = process.cwd();
   const base = makeBase();
-  t.after(() => cleanup(base));
+  t.after(() => {
+    process.chdir(originalCwd);
+    cleanup(base);
+    assert.equal(process.cwd(), originalCwd);
+  });
   t.after(() => autoSession.reset());
 
   openDatabase(join(base, ".gsd", "gsd.db"));
