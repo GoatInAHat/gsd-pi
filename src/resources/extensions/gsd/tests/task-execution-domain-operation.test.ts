@@ -1119,6 +1119,30 @@ for (const attemptState of ["claimed", "running"] as const) {
   });
 }
 
+for (const dispatchStatus of ["pending", "claimed", "running"] as const) {
+  test(`markWorkerStopped remains stopping while its ${dispatchStatus} dispatch is active without a held lease`, () => {
+    const { dispatchId } = seedFixture();
+    markWorkerStopping("worker-1");
+    assert.equal(releaseMilestoneLease("worker-1", "M001", 7), true);
+    db().prepare(`
+      UPDATE unit_dispatches
+      SET status = :status, ended_at = NULL
+      WHERE id = :id
+    `).run({ ":status": dispatchStatus, ":id": dispatchId });
+
+    assert.equal(markWorkerStopped("worker-1"), false);
+    assert.equal(row("SELECT status FROM workers WHERE worker_id = 'worker-1'").status, "stopping");
+
+    db().prepare(`
+      UPDATE unit_dispatches
+      SET status = 'completed', ended_at = :ended_at
+      WHERE id = :id
+    `).run({ ":ended_at": new Date().toISOString(), ":id": dispatchId });
+    assert.equal(markWorkerStopped("worker-1"), true);
+    assert.equal(row("SELECT status FROM workers WHERE worker_id = 'worker-1'").status, "stopped");
+  });
+}
+
 test("a settled Attempt no longer blocks worker retirement", async () => {
   const { claimTaskAttempt, settleTaskAttempt } = await subject();
   const { dispatchId } = seedFixture();
@@ -1156,5 +1180,43 @@ test("another worker's active Attempt does not block retirement", () => {
   markWorkerStopping("worker-1");
 
   assert.equal(markWorkerStopped("worker-1"), true);
+  assert.equal(row("SELECT status FROM workers WHERE worker_id = 'worker-2'").status, "active");
+});
+
+test("another worker's active dispatch does not block retirement", () => {
+  const { dispatchId } = seedFixture();
+  db().prepare(`
+    UPDATE unit_dispatches
+    SET status = 'completed', ended_at = :ended_at
+    WHERE id = :id
+  `).run({ ":ended_at": new Date().toISOString(), ":id": dispatchId });
+  assert.equal(releaseMilestoneLease("worker-1", "M001", 7), true);
+  db().prepare(`
+    INSERT INTO workers (
+      worker_id, host, pid, started_at, version, last_heartbeat_at, status,
+      project_root_realpath
+    ) VALUES (
+      'worker-2', 'test-host', 2, :started_at, 'test', :heartbeat_at,
+      'active', '/tmp/project'
+    )
+  `).run({ ":started_at": new Date().toISOString(), ":heartbeat_at": new Date().toISOString() });
+  const lease = claimMilestoneLease("worker-2", "M001");
+  assert.equal(lease.ok, true);
+  if (!lease.ok) return;
+  db().prepare(`
+    INSERT INTO unit_dispatches (
+      trace_id, turn_id, worker_id, milestone_lease_token,
+      milestone_id, slice_id, task_id, unit_type, unit_id,
+      status, attempt_n, started_at
+    ) VALUES (
+      'trace-dispatch-worker-2', 'turn-dispatch-worker-2', 'worker-2', :token,
+      'M001', 'S01', 'T01', 'execute-task', 'M001/S01/T01',
+      'running', 1, :started_at
+    )
+  `).run({ ":token": lease.token, ":started_at": new Date().toISOString() });
+  markWorkerStopping("worker-1");
+
+  assert.equal(markWorkerStopped("worker-1"), true);
+  assert.equal(row("SELECT status FROM unit_dispatches WHERE worker_id = 'worker-2'").status, "running");
   assert.equal(row("SELECT status FROM workers WHERE worker_id = 'worker-2'").status, "active");
 });
