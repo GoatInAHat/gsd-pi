@@ -166,24 +166,45 @@ export function markWorkerStopping(workerId: string): void {
 }
 
 /**
- * Mark the worker as stopped — the TERMINAL retirement transition (#3029).
- * Called once the graceful shutdown path has completed all its cleanup work
- * (leases released, queues flushed, DB wind-down done), so a guarded
- * maintenance consumer sees a definitive "this worker finished retiring"
- * state instead of an indeterminate `stopping` row. Safety semantics are
- * unchanged for consumers: process/host liveness must still be verified
- * independently, and any missing terminal transition (e.g. a crash before
- * this point) still fails closed. A `crashed` row is deliberately NOT
- * upgraded — crash provenance must stay visible.
+ * Mark a stopping worker as stopped after its loop has exited and it owns no work.
+ * The row remains durable; process liveness is checked separately by callers.
  */
-export function markWorkerStopped(workerId: string): void {
+export function markWorkerStopped(workerId: string): boolean {
   const db = getDb();
+  let changes = 0;
   transaction(() => {
-    db.prepare(
+    const result = db.prepare(
       `UPDATE workers SET status = 'stopped'
-       WHERE worker_id = :worker_id AND status IN ('active', 'stopping')`,
+       WHERE worker_id = :worker_id
+         AND status = 'stopping'
+         AND NOT EXISTS (
+           SELECT 1 FROM milestone_leases
+           WHERE worker_id = :worker_id AND status = 'held'
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM unit_dispatches
+           WHERE worker_id = :worker_id AND status IN ('pending', 'claimed', 'running')
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM workflow_execution_attempts
+           WHERE worker_id = :worker_id AND attempt_state IN ('claimed', 'running')
+         )`,
     ).run({ ":worker_id": workerId });
+    changes =
+      typeof (result as { changes?: unknown }).changes === "number"
+        ? (result as { changes: number }).changes
+        : 0;
   });
+  if (changes < 1) return false;
+  insertAuditEvent({
+    eventId: randomUUID(),
+    traceId: workerId,
+    category: "orchestration",
+    type: "worker-stopped",
+    ts: new Date().toISOString(),
+    payload: { workerId },
+  });
+  return true;
 }
 
 /**

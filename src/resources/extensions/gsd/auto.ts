@@ -237,7 +237,10 @@ import {
   checkpointWorkflowDatabase,
   closeWorkflowDatabase,
   getWorkflowDatabaseStatus,
+  openWorkflowDatabasePath,
+  openWorkflowDatabasePathOrNull,
   resolveProjectRootDbPath,
+  restoreWorkflowDatabase,
 } from "./db-workspace.js";
 import {
   getActiveForWorker,
@@ -358,7 +361,6 @@ import { gsdHome } from "./gsd-home.js";
 import { createWorkspace, scopeMilestone } from "./workspace.js";
 import {
   registerAutoWorker,
-  hasOpenUnitDispatches,
   markWorkerStopping,
   markWorkerStopped,
   getAutoWorker,
@@ -1615,6 +1617,67 @@ export async function maybeRerootStepSessionForHighContext(
   return { rerooted: false };
 }
 
+const pendingWorkerStopDbPaths = new Map<string, string>();
+
+function rememberPendingWorkerStop(workerId: string): void {
+  const dbPath = openWorkflowDatabasePathOrNull();
+  if (dbPath && !pendingWorkerStopDbPaths.has(workerId)) {
+    pendingWorkerStopDbPaths.set(workerId, dbPath);
+  }
+}
+
+function finalizePendingWorkerStop(workerId: string, retainOnRefusal: boolean): boolean {
+  const dbPath = pendingWorkerStopDbPaths.get(workerId);
+  if (!dbPath) {
+    if (!retainOnRefusal) pendingWorkerStopDbPaths.delete(workerId);
+    return false;
+  }
+
+  const previousDbPath = openWorkflowDatabasePathOrNull();
+  const restorePreviousDatabase = previousDbPath !== dbPath;
+  let finalized = false;
+  let retainPendingOnRefusal = retainOnRefusal;
+  try {
+    if (restorePreviousDatabase) {
+      if (previousDbPath === ":memory:") {
+        retainPendingOnRefusal = true;
+        throw new Error("cannot switch away from an active in-memory workflow database");
+      }
+      if (dbPath === ":memory:" || !existsSync(dbPath)) {
+        throw new Error("retiring worker database is no longer available");
+      }
+      if (!openWorkflowDatabasePath(dbPath)) {
+        throw new Error("retiring worker database could not be reopened");
+      }
+    }
+
+    if (getAutoWorker(workerId)?.status === "stopped") {
+      finalized = true;
+      return true;
+    }
+    finalized = markWorkerStopped(workerId);
+    return finalized;
+  } catch (err) {
+    debugLog("worker-stop-finalization", {
+      workerId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  } finally {
+    if (restorePreviousDatabase) {
+      try {
+        restoreWorkflowDatabase(previousDbPath);
+      } catch (err) {
+        debugLog("worker-stop-database-restore", {
+          workerId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    if (finalized || !retainPendingOnRefusal) pendingWorkerStopDbPaths.delete(workerId);
+  }
+}
+
 export async function cleanupAfterLoopExit(ctx: ExtensionContext): Promise<void> {
   const preserveStepSurface = s.preserveStepSurfaceAfterLoopExit;
   const preserveCompletionSurface = s.completionStopInProgress;
@@ -1650,10 +1713,6 @@ export async function cleanupAfterLoopExit(ctx: ExtensionContext): Promise<void>
   // needs the fencing token, #2429), and retiring it here would fence that
   // resume out. When pause did not preserve coordination it already cleared
   // s.workerId, so this block is a no-op in that case.
-  // Retained so the terminal `stopped` transition can be written after all
-  // loop-exit work completes (#3029); null when coordination was preserved
-  // for a paused surface (the session may resume in-process).
-  const retiredWorkerId = s.workerId;
   if (!preservePausedSurface) {
     try {
       if (s.workerId && s.currentMilestoneId && s.milestoneLeaseToken) {
@@ -1666,6 +1725,7 @@ export async function cleanupAfterLoopExit(ctx: ExtensionContext): Promise<void>
     // row retirement or the local identity reset.
     try {
       if (s.workerId) {
+        rememberPendingWorkerStop(s.workerId);
         markWorkerStopping(s.workerId);
       }
     } catch (err) {
@@ -1739,17 +1799,9 @@ export async function cleanupAfterLoopExit(ctx: ExtensionContext): Promise<void>
     }
   }
 
-  // All loop-exit work is done and the database is still open: retire the
-  // worker row terminally (#3029). A paused session may resume in-process,
-  // so its row stays `stopping` until a real exit; a row that still owns
-  // unfinished dispatches keeps #1773 stale recovery instead.
-  if (!s.paused && retiredWorkerId) {
-    try {
-      if (!hasOpenUnitDispatches(retiredWorkerId)) {
-        markWorkerStopped(retiredWorkerId);
-      }
-    } catch (err) {
-      logWarning("session", `worker retirement failed: ${err instanceof Error ? err.message : String(err)}`, { file: "auto.ts" });
+  for (const workerId of Array.from(pendingWorkerStopDbPaths.keys())) {
+    if (!finalizePendingWorkerStop(workerId, false)) {
+      debugLog("loop-exit-cleanup-worker-still-active", { workerId });
     }
   }
 }
@@ -1885,6 +1937,8 @@ async function stopAutoSession(
   reason: string | undefined,
   options: StopAutoOptions,
 ): Promise<void> {
+  const retiringWorkerId = s.workerId;
+  if (retiringWorkerId) rememberPendingWorkerStop(retiringWorkerId);
   const loadedPreferences = loadEffectiveGSDPreferences(s.basePath || undefined)?.preferences;
   const stopNotificationPrefix = formatStopNoticePrefix(reason);
   const displayReason = stopNoticeDisplayReason(reason);
@@ -1957,10 +2011,6 @@ async function stopAutoSession(
     } catch (e) {
       debugLog("stop-cleanup-coordination", { error: e instanceof Error ? e.message : String(e) });
     }
-    // Retained so the terminal `stopped` transition can be written once the
-    // remaining shutdown steps (worktree exit, projections, DB wind-down)
-    // have completed (#3029).
-    const retiredWorkerId = s.workerId;
     s.workerId = null;
     s.milestoneLeaseToken = null;
 
@@ -2121,19 +2171,6 @@ async function stopAutoSession(
 
     // ── Step 6: DB cleanup ──
     if (isDbAvailable()) {
-      // Shutdown work is complete: retire the worker row terminally before
-      // the database closes (#3029). Best-effort, like every stop step. A
-      // worker that still owns unfinished dispatches stays `stopping` so
-      // #1773 stale recovery keeps applying to it.
-      try {
-        if (retiredWorkerId && !hasOpenUnitDispatches(retiredWorkerId)) {
-          markWorkerStopped(retiredWorkerId);
-        } else if (retiredWorkerId) {
-          debugLog("stop-cleanup-retire-skipped", { workerId: retiredWorkerId, reason: "open dispatches" });
-        }
-      } catch (e) {
-        debugLog("stop-cleanup-retire", { error: e instanceof Error ? e.message : String(e) });
-      }
       // A stop drops the follow-on work that did not run yet. Only a killed
       // process leaves it queued for the next start.
       try {
@@ -2412,6 +2449,12 @@ async function stopAutoSession(
     }
 
     clearSessionModelOverrideForCommandSession(ctx);
+
+    // stopAuto() owns the terminal shutdown path too (for example /exit), but
+    // it clears AutoSession and closes the DB before returning. Use the saved
+    // worker id + exact DB path after kernelStop; if work is still active the
+    // guarded transition refuses and loop-exit cleanup gets one final attempt.
+    if (retiringWorkerId) finalizePendingWorkerStop(retiringWorkerId, true);
 
     // Reset all session state in one call
     s.resetAfterStop({ preserveCompletionSurface });
