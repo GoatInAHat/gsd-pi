@@ -1,6 +1,6 @@
 {
   "name": "@opengsd/open-gsd-openclaw",
-  "version": "1.21.1",
+  "version": "1.23.0",
   "description": "GSD Pi over MCP with native OpenClaw projects, embedded web UI, Workboard, and heartbeat synchronization",
   "license": "MIT",
   "repository": {
