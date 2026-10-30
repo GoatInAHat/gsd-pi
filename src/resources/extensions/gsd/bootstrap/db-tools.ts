@@ -4,7 +4,7 @@ import { StringEnum, Type } from "@gsd/pi-ai";
 import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import { Text } from "@gsd/pi-tui";
 import { SUMMARY_SAVE_CONTENT_MAX_LENGTH } from "@opengsd/contracts";
-import { existsSync, mkdirSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { getErrorMessage } from "../error-utils.js";
 import { piExecutionInvocation } from "../execution-invocation.js";
@@ -13,8 +13,6 @@ import { piPlanningInvocation } from "../planning-invocation.js";
 import { loadEffectiveGSDPreferences } from "../preferences.js";
 import type { DbAdapter } from "../db-adapter.js";
 import {
-	closeWorkflowDatabase,
-	openWorkflowDatabase,
 	openWorkflowDatabaseIsolated,
 	resolveProjectRootDbPath,
 } from "../db-workspace.js";
@@ -3722,80 +3720,11 @@ export function registerDbTools(pi: ExtensionAPI): void {
 		_onUpdate: unknown,
 		_ctx: unknown,
 	) => {
-		const basePath =
-			typeof params.projectDir === "string" && params.projectDir
-				? params.projectDir
-				: resolveCtxCwd(_ctx);
-		const gsdDir = join(basePath, ".gsd");
 		try {
-			if (!existsSync(basePath) || !statSync(basePath).isDirectory()) {
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: `Error: project directory not found: ${basePath}`,
-						},
-					],
-					details: {
-						operation: "project_init",
-						error: "project_dir_missing",
-					} as any,
-				};
-			}
-			if (!existsSync(gsdDir)) mkdirSync(gsdDir, { recursive: true });
-			// openWorkflowDatabase fails while a global handle points at another
-			// project — the documented pairing is close-then-open for ad-hoc switches.
-			try { closeWorkflowDatabase(); } catch { /* nothing open yet */ }
-			const opened = openWorkflowDatabase(basePath);
-			if (!opened.ok) {
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: `Error initializing GSD project state: ${opened.reason ?? "open failed"}`,
-						},
-					],
-					details: {
-						operation: "project_init",
-						error: "db_open_failed",
-						reason: opened.reason ?? "unknown",
-					} as any,
-				};
-			}
-			const result = {
-				ok: true,
-				created: opened.reason === "created-empty",
-				projectDir: basePath,
-				gsdDir,
-				dbPath: opened.location.projectDb,
-				gitRepo: existsSync(join(basePath, ".git")),
-			};
-			return {
-				content: [{ type: "text" as const, text: JSON.stringify(result) }],
-				details: {
-					operation: "project_init",
-					...result,
-				} as any,
-			};
+			const { executeProjectInit } = await loadWorkflowExecutors();
+			return await executeProjectInit(params, resolveCtxCwd(_ctx));
 		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			logError("tool", `gsd_project_init failed: ${msg}`, {
-				tool: "gsd_project_init",
-				error: String(err),
-			});
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: `Error initializing GSD project state: ${msg}`,
-					},
-				],
-				details: {
-					operation: "project_init",
-					error: "query_error",
-					message: msg,
-				} as any,
-			};
+			return formatWorkflowToolLoadError(err);
 		}
 	};
 

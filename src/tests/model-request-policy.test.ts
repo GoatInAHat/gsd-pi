@@ -3,8 +3,10 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { resolve } from 'node:path'
 
-const root = process.cwd()
-const hook = resolve(root, 'src/resources/extensions/gsd/tests/resolve-ts.mjs')
+const repositoryRoot = process.cwd()
+const compiled = import.meta.url.includes('/dist-test/')
+const root = compiled ? resolve(repositoryRoot, 'dist-test') : repositoryRoot
+const hook = resolve(repositoryRoot, compiled ? 'scripts/dist-test-resolve.mjs' : 'src/resources/extensions/gsd/tests/resolve-ts.mjs')
 const allowed = 'spark/fixture-model'
 function run(code: string, policy: string | null = JSON.stringify([allowed])) {
   const env = { ...process.env }
