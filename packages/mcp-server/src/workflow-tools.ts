@@ -2308,18 +2308,15 @@ async function handleHookVerdictSave(
   );
 }
 
-// projectDir is optional. When omitted, the server uses process.cwd(). This
-// prevents the agent from burning tokens reasoning about which absolute path
-// to pass (git root vs worktree vs symlink-resolved external state layout) —
-// the server already knows where it is running.
 const publicIdempotencyKeyParam = z.string().trim().min(1).optional().describe(
   "Client-owned replay key. Reuse for retries of the same logical mutation; use a new key for changed input. Optional only when the client supplies private request metadata.",
 );
 
+// A shared MCP server may run outside the selected project.
 const projectDirParam = z
   .string()
   .optional()
-  .describe("Optional. Omit this field — the server defaults to its current working directory, which is already the correct project or worktree root.");
+  .describe("Absolute project or worktree path on the server host. Defaults to the server working directory; supply explicitly when using a shared server or a different project.");
 
 const unknownRecord = z.record(z.string(), z.unknown());
 
