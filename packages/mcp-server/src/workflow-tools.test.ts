@@ -545,7 +545,7 @@ describe("workflow MCP tools", () => {
     assert.ok("reason" in taskReopen.params);
   });
 
-  it("registers exact task recovery resume inputs without public identity", () => {
+  it("registers replay keys for recovery without exposing actor identity", () => {
     const server = makeMockServer();
     registerWorkflowTools(server as any);
 
@@ -553,14 +553,15 @@ describe("workflow MCP tools", () => {
     assert.ok(tool);
     assert.deepEqual(Object.keys(tool.params).sort(), [
       "evidence",
+      "idempotencyKey",
       "projectDir",
       "recoveryActionId",
       "repairSummary",
     ]);
-    assert.ok(!("idempotencyKey" in tool.params));
+    assert.ok(!("actorId" in tool.params));
   });
 
-  it("keeps Milestone lifecycle invocation identity out of public schemas", () => {
+  it("exposes Milestone replay keys while keeping actor identity private", () => {
     const server = makeMockServer();
     registerWorkflowTools(server as any);
 
@@ -573,7 +574,7 @@ describe("workflow MCP tools", () => {
     ]) {
       const tool = server.tools.find((candidate) => candidate.name === name);
       assert.ok(tool, `${name} must be registered`);
-      assert.ok(!("idempotencyKey" in tool.params), `${name} identity must remain private`);
+      assert.ok("idempotencyKey" in tool.params, `${name} must accept a client-owned replay key`);
       assert.ok(!("actorId" in tool.params), `${name} actor identity must remain private`);
     }
   });
