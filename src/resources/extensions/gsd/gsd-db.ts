@@ -49,7 +49,7 @@ import { rowToSlice, rowToTask, type SliceRow, type TaskRow } from "./db-task-sl
 // primitives now live in the engine; re-export the full public surface so
 // existing `from "./gsd-db.js"` imports keep working.
 export * from "./db/engine.js";
-import { immediateTransaction, transaction, getDb, getDbOrNull, getDbPath } from "./db/engine.js";
+import { immediateTransaction, readTransaction, transaction, getDb, getDbOrNull, getDbPath } from "./db/engine.js";
 
 // ─── Single Writer Layer re-exports ──────────────────────────────────────
 // Domain write subsystems live in db/writers/*; re-exported here so callers
@@ -1068,6 +1068,30 @@ function rowToReworkFinding(row: Record<string, unknown>): ReworkBriefFindingRow
     evidence: String(row["evidence"] ?? ""),
     decision_ref: String(row["decision_ref"] ?? ""),
   };
+}
+
+/** Read saved briefs and all findings, including advisory/resolved findings. */
+export function readReworkBriefs(): Array<{
+  id: string; milestone_id: string; slice_id: string; task_id: string;
+  created_at: string; updated_at: string; findings: ReworkBriefFindingRow[];
+}> {
+  const db = getDbOrNull();
+  if (!db) throw new GSDError(GSD_STALE_STATE, "gsd-db: No database open");
+  return readTransaction(() => {
+    const briefs = db.prepare("SELECT * FROM rework_briefs ORDER BY id").all() as Array<{
+      id: string; milestone_id: string; slice_id: string; task_id: string;
+      created_at: string; updated_at: string;
+    }>;
+    const findings = db.prepare("SELECT * FROM rework_brief_findings ORDER BY brief_id, finding_id").all() as Array<Record<string, unknown>>;
+    const byBrief = new Map<string, ReworkBriefFindingRow[]>();
+    for (const row of findings) {
+      const finding = rowToReworkFinding(row);
+      const group = byBrief.get(finding.brief_id) ?? [];
+      group.push(finding);
+      byBrief.set(finding.brief_id, group);
+    }
+    return briefs.map((brief) => ({ ...brief, findings: byBrief.get(brief.id) ?? [] }));
+  });
 }
 
 export function saveReworkBrief(entry: {

@@ -1419,7 +1419,7 @@ function mcpInvocation(
     : stableExplicitKey;
   if (!stableKey) {
     throw new Error(
-      `${mutationKind} ${canonicalToolName} requires replay-stable private request metadata ` +
+      `${mutationKind} ${canonicalToolName} requires replay-stable idempotencyKey or private request metadata ` +
       `_meta["${MCP_IDEMPOTENCY_META_KEY}"] or _meta["${CLAUDE_CODE_TOOL_USE_META_KEY}"]. ` +
       `Retry with the same nonblank value.`,
     );
@@ -2308,14 +2308,15 @@ async function handleHookVerdictSave(
   );
 }
 
-// projectDir is optional. When omitted, the server uses process.cwd(). This
-// prevents the agent from burning tokens reasoning about which absolute path
-// to pass (git root vs worktree vs symlink-resolved external state layout) —
-// the server already knows where it is running.
+const publicIdempotencyKeyParam = z.string().trim().min(1).optional().describe(
+  "Client-owned replay key. Reuse for retries of the same logical mutation; use a new key for changed input. Optional only when the client supplies private request metadata.",
+);
+
+// A shared MCP server may run outside the selected project.
 const projectDirParam = z
   .string()
   .optional()
-  .describe("Optional. Omit this field — the server defaults to its current working directory, which is already the correct project or worktree root.");
+  .describe("Absolute project or worktree path on the server host. Defaults to the server working directory; supply explicitly when using a shared server or a different project.");
 
 const unknownRecord = z.record(z.string(), z.unknown());
 
@@ -2497,6 +2498,7 @@ const planMilestoneSliceSchema = z.object({
 });
 
 const planMilestoneParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M001)"),
   title: nonEmptyString("title").describe("Milestone title"),
@@ -2525,6 +2527,7 @@ const planMilestoneParams = {
 const planMilestoneSchema = z.object(planMilestoneParams);
 
 const planSliceParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M001)"),
   sliceId: nonEmptyString("sliceId").describe("Slice ID (e.g. S01)"),
@@ -2549,6 +2552,7 @@ const planSliceParams = {
 const planSliceSchema = z.object(planSliceParams);
 
 const completeMilestoneParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M001)"),
   title: nonEmptyString("title").describe("Milestone title"),
@@ -2569,6 +2573,7 @@ const completeMilestoneParams = {
 const completeMilestoneSchema = z.object(completeMilestoneParams);
 
 const validateMilestoneParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M001)"),
   verdict: z.enum(["pass", "needs-attention", "needs-remediation"]).describe("Validation verdict"),
@@ -2602,6 +2607,7 @@ const validateMilestoneParams = {
 const validateMilestoneSchema = z.object(validateMilestoneParams);
 
 const prepareMilestoneSubjectiveUatParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   milestoneId: nonEmptyString("milestoneId"),
   criterionKey: nonEmptyString("criterionKey").optional().describe("Criterion key to prepare; required unless supersedesCriterionId is given, in which case the replacement inherits the superseded criterion key"),
@@ -2627,6 +2633,7 @@ const roadmapSliceChangeSchema = z.object({
 });
 
 const reassessRoadmapParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M001)"),
   completedSliceId: nonEmptyString("completedSliceId").describe("Slice ID that just completed"),
@@ -2674,6 +2681,7 @@ const saveGateResultParams = {
 const saveGateResultSchema = z.object(saveGateResultParams);
 
 const hookVerdictSaveParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   hookName: nonEmptyString("hookName").describe("Configured post_unit_hooks entry name"),
   unitId: nonEmptyString("unitId").describe("Trigger unit id, e.g. M001/S01/T01 or M001"),
@@ -2683,6 +2691,7 @@ const hookVerdictSaveParams = {
 const hookVerdictSaveSchema = z.object(hookVerdictSaveParams);
 
 const saveGateResultIncomingParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   milestoneId: z.string().optional().describe("Milestone ID (e.g. M001). Required unless it can be inferred from the active worktree or pending gate row."),
   sliceId: z.string().optional().describe("Slice ID (e.g. S01). Required unless it can be inferred from the active pending gate row."),
@@ -2724,6 +2733,7 @@ const saveGateResultIncomingParams = {
 const saveGateResultIncomingSchema = z.object(saveGateResultIncomingParams);
 
 const replanSliceParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M001)"),
   sliceId: nonEmptyString("sliceId").describe("Slice ID (e.g. S01)"),
@@ -2747,6 +2757,7 @@ const replanSliceParams = {
 const replanSliceSchema = z.object(replanSliceParams);
 
 const replanTaskParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M001)"),
   sliceId: nonEmptyString("sliceId").describe("Slice ID (e.g. S01)"),
@@ -2774,6 +2785,7 @@ const reworkFindingSchema = z.object({
   decisionRef: z.string().optional(),
 });
 const reworkBriefSaveParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   briefId: z.string().optional().describe("Stable brief ID"),
   milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M001)"),
@@ -2784,6 +2796,7 @@ const reworkBriefSaveParams = {
 const reworkBriefSaveSchema = z.object(reworkBriefSaveParams);
 
 const checkpointSaveParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M001)"),
   sliceId: z.string().optional().describe("Slice ID (e.g. S01); omit for a milestone checkpoint"),
@@ -2797,6 +2810,7 @@ const checkpointSaveParams = {
 const checkpointSaveSchema = z.object(checkpointSaveParams);
 
 const sliceCompleteParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   sliceId: nonEmptyString("sliceId").describe("Slice ID (e.g. S01)"),
   milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M001)"),
@@ -2858,6 +2872,7 @@ const sliceCompleteSchema = z.object(sliceCompleteParams);
 export const _sliceCompleteSchemaForTest = sliceCompleteSchema;
 
 const summarySaveParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   milestone_id: z.string().optional().describe("Milestone ID (e.g. M001). Omit only for root-level PROJECT/PROJECT-DRAFT/REQUIREMENTS/REQUIREMENTS-DRAFT artifacts."),
   slice_id: z.string().optional().describe("Slice ID (e.g. S01)"),
@@ -2886,6 +2901,7 @@ const summarySaveSchema = z.object(summarySaveParams).superRefine((value, ctx) =
 export const _summarySaveSchemaForTest = summarySaveSchema;
 
 const decisionSaveParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   scope: z.string().describe("Scope of the decision (e.g. architecture, library, observability)"),
   decision: z.string().describe("What is being decided"),
@@ -2907,6 +2923,7 @@ const decisionSaveParams = {
 const decisionSaveSchema = z.object(decisionSaveParams);
 
 const requirementUpdateParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   id: z.string().describe("Requirement ID (e.g. R001)"),
   status: z.string().optional().describe("New status"),
@@ -2919,6 +2936,7 @@ const requirementUpdateParams = {
 const requirementUpdateSchema = z.object(requirementUpdateParams);
 
 const requirementSaveParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   class: z.string().describe("Requirement class: core-capability, primary-user-loop, launchability, continuity, failure-visibility, integration, quality-attribute, operability, admin/support, compliance/security, differentiator, constraint, or anti-feature"),
   description: z.string().describe("Short description of the requirement"),
@@ -2933,11 +2951,13 @@ const requirementSaveParams = {
 const requirementSaveSchema = z.object(requirementSaveParams);
 
 const milestoneGenerateIdParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
 };
 const milestoneGenerateIdSchema = z.object(milestoneGenerateIdParams);
 
 const planTaskParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M001)"),
   sliceId: nonEmptyString("sliceId").describe("Slice ID (e.g. S01)"),
@@ -2955,6 +2975,7 @@ const planTaskParams = {
 const planTaskSchema = z.object(planTaskParams);
 
 const skipSliceParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   sliceId: z.string().describe("Slice ID (e.g. S02)"),
   milestoneId: z.string().describe("Milestone ID (e.g. M003)"),
@@ -2963,6 +2984,7 @@ const skipSliceParams = {
 const skipSliceSchema = z.object(skipSliceParams);
 
 const taskCompleteParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   taskId: nonEmptyString("taskId").describe("Task ID (e.g. T01)"),
   sliceId: nonEmptyString("sliceId").describe("Slice ID (e.g. S01)"),
@@ -3003,6 +3025,7 @@ const taskCompleteParams = {
 const taskCompleteSchema = z.object(taskCompleteParams);
 
 const taskReopenParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   taskId: nonEmptyString("taskId").describe("Task ID (e.g. T01)"),
   sliceId: nonEmptyString("sliceId").describe("Slice ID (e.g. S01)"),
@@ -3014,6 +3037,7 @@ const taskReopenParams = {
 const taskReopenSchema = z.object(taskReopenParams);
 
 const taskRecoveryResumeParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   recoveryActionId: nonEmptyString("recoveryActionId").describe("Exact current abort or remediate Recovery Action ID"),
   repairSummary: nonEmptyString("repairSummary").describe("What was repaired and why retry is now safe"),
@@ -3025,6 +3049,7 @@ const taskRecoveryResumeParams = {
 const taskRecoveryResumeSchema = z.object(taskRecoveryResumeParams);
 
 const taskSettleParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M001)"),
   sliceId: nonEmptyString("sliceId").describe("Slice ID (e.g. S01)"),
@@ -3044,6 +3069,7 @@ const taskSettleParams = {
 const taskSettleSchema = z.object(taskSettleParams);
 
 const sliceReopenParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   sliceId: nonEmptyString("sliceId").describe("Slice ID (e.g. S01)"),
   milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M001)"),
@@ -3054,6 +3080,7 @@ const sliceReopenParams = {
 const sliceReopenSchema = z.object(sliceReopenParams);
 
 const milestoneReopenParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M001)"),
   reason: z.string().optional().describe("Why the milestone is being reopened"),
@@ -3064,6 +3091,7 @@ const milestoneReopenParams = {
 const milestoneReopenSchema = z.object(milestoneReopenParams);
 
 const milestoneParkParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M003)"),
   reason: nonEmptyString("reason").describe("Why the milestone is parked"),
@@ -3071,12 +3099,14 @@ const milestoneParkParams = {
 const milestoneParkSchema = z.object(milestoneParkParams);
 
 const milestoneUnparkParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M003)"),
 };
 const milestoneUnparkSchema = z.object(milestoneUnparkParams);
 
 const milestoneDiscardParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M003)"),
   reason: nonEmptyString("reason").describe("Why the milestone is discarded (recorded in the Waiver)"),
@@ -3084,12 +3114,14 @@ const milestoneDiscardParams = {
 const milestoneDiscardSchema = z.object(milestoneDiscardParams);
 
 const milestoneReorderParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   order: z.array(z.string()).min(1).describe("Open milestone IDs in execution order"),
 };
 const milestoneReorderSchema = z.object(milestoneReorderParams);
 
 const milestoneSetDependenciesParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M003)"),
   dependsOn: z.array(z.string()).describe("Milestone IDs that must be complete first; [] removes all"),
@@ -3097,12 +3129,14 @@ const milestoneSetDependenciesParams = {
 const milestoneSetDependenciesSchema = z.object(milestoneSetDependenciesParams);
 
 const researchDecisionSaveParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   decision: z.enum(["research", "skip"]).describe("research: run project research before milestone planning. skip: go straight to milestone work."),
 };
 const researchDecisionSaveSchema = z.object(researchDecisionSaveParams);
 
 const captureResolveParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   captureId: nonEmptyString("captureId").describe("Capture ID (e.g. CAP-1a2b3c4d)"),
   classification: z.enum(["quick-task", "inject", "defer", "replan", "note", "stop", "backtrack"]).describe("Confirmed classification"),
@@ -3112,6 +3146,7 @@ const captureResolveParams = {
 const captureResolveSchema = z.object(captureResolveParams);
 
 const captureCompleteParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   captureId: nonEmptyString("captureId").describe("Capture ID (e.g. CAP-1a2b3c4d)"),
   outcome: nonEmptyString("outcome").describe("What was changed, or why no change was needed"),
@@ -3215,6 +3250,7 @@ const uatPresentationSchema = z.object({
   notes: z.string().optional(),
 });
 const uatResultSaveParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
   projectDir: projectDirParam,
   milestoneId: nonEmptyString("milestoneId").describe("Milestone ID (e.g. M001)"),
   sliceId: nonEmptyString("sliceId").describe("Slice ID (e.g. S01)"),
@@ -3267,6 +3303,17 @@ function wrapServerWithErrorHandler(realServer: McpToolServer): McpToolServer {
     tool(name, description, params, handler) {
       return realServer.tool(name, description, params, async (args, extra) => {
         try {
+          // Keep replay identity out of domain payloads and preserve transport metadata.
+          if ("idempotencyKey" in params && args.idempotencyKey !== undefined) {
+            const key = publicIdempotencyKeyParam.parse(args.idempotencyKey)!;
+            const privateKey = extra?._meta?.[MCP_IDEMPOTENCY_META_KEY];
+            if (privateKey !== undefined && privateKey !== key) {
+              throw new Error("idempotencyKey conflicts with private request metadata");
+            }
+            extra = { ...extra, _meta: { ...extra?._meta, [MCP_IDEMPOTENCY_META_KEY]: key } };
+            const { idempotencyKey: _key, ...payload } = args;
+            args = payload;
+          }
           // A mutation is checked against the revision that this MCP session last read.
           const { runInToolSession } = await getWorkflowToolExecutors();
           return await runInToolSession(`mcp:${extra?.sessionId ?? "default"}`, () => handler(args, extra));
@@ -3311,9 +3358,15 @@ export type ProjectInitResult = {
  * MCP-only clients need a scriptable subset, which this provides.
  */
 export async function initProjectWorkflowState(rawProjectDir: string): Promise<ProjectInitResult> {
+  return runSerializedWorkflowOperation(() => initProjectWorkflowStateInQueue(rawProjectDir));
+}
+
+async function initProjectWorkflowStateInQueue(rawProjectDir: string): Promise<ProjectInitResult> {
   const projectDir = resolve(rawProjectDir);
-  const gsdDir = join(projectDir, ".gsd");
-  const dbPath = join(gsdDir, "gsd.db");
+  const { resolveGsdPathContract } = await importWorkflowRuntimeModule<{
+    resolveGsdPathContract: (root: string) => { projectGsd: string; projectDb: string };
+  }>("../../../src/resources/extensions/gsd/paths.js");
+  const { projectGsd: gsdDir, projectDb: dbPath } = resolveGsdPathContract(projectDir);
   const gitRepo = existsSync(join(projectDir, ".git"));
   if (!existsSync(projectDir) || !statSync(projectDir).isDirectory()) {
     return { ok: false, created: false, projectDir, gsdDir, dbPath, gitRepo, reason: "project_dir_missing" };
@@ -4650,6 +4703,7 @@ export function registerWorkflowTools(
     structuredFields: z.record(z.string(), z.unknown()).optional(),
   });
   const captureThoughtParams = {
+  idempotencyKey: publicIdempotencyKeyParam,
     projectDir: z.string().optional().describe("Absolute path to the project directory (defaults to MCP server cwd)"),
     category: MEMORY_CATEGORY.describe("Memory category"),
     content: z.string().describe("Memory text (1-3 sentences, no secrets)"),
