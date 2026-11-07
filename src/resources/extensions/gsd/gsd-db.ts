@@ -49,7 +49,7 @@ import { rowToSlice, rowToTask, type SliceRow, type TaskRow } from "./db-task-sl
 // primitives now live in the engine; re-export the full public surface so
 // existing `from "./gsd-db.js"` imports keep working.
 export * from "./db/engine.js";
-import { immediateTransaction, transaction, getDb, getDbOrNull, getDbPath } from "./db/engine.js";
+import { immediateTransaction, readTransaction, transaction, getDb, getDbOrNull, getDbPath } from "./db/engine.js";
 
 // ─── Single Writer Layer re-exports ──────────────────────────────────────
 // Domain write subsystems live in db/writers/*; re-exported here so callers
