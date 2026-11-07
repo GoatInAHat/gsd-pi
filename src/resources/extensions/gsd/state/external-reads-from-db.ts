@@ -8,7 +8,7 @@ import { deriveState, invalidateStateCache } from "./derive/index.js";
 import { ensureExistingWorkflowDbOpen } from "./derive/db-open.js";
 import { queryProject, queryRequirements } from "../context-store.js";
 import { generateRequirementsMd } from "../db-writer.js";
-import { isDbAvailable, readTransaction } from "../gsd-db.js";
+import { isDbAvailable, readTransaction, readReworkBriefs } from "../gsd-db.js";
 import {
   readMilestones,
   readMilestoneSlices,
@@ -95,7 +95,7 @@ export function readRoadmapFromDb(basePath: string, milestoneId?: string): DbRoa
 
 // ─── Project query ──────────────────────────────────────────────────────────
 
-export type ProjectQueryField = "state" | "project" | "requirements" | "milestones";
+export type ProjectQueryField = "state" | "project" | "requirements" | "milestones" | "rework";
 
 /**
  * The fields of the MCP `gsd_query` result. `state`, `project` and
@@ -103,6 +103,7 @@ export type ProjectQueryField = "state" | "project" | "requirements" | "mileston
  * text is built from database rows.
  */
 export interface DbProjectQueryResult {
+  rework?: ReturnType<typeof readReworkBriefs>;
   state?: string;
   project?: string | null;
   requirements?: string | null;
@@ -123,6 +124,7 @@ export async function readProjectQueryFromDb(
     invalidateStateCache();
     result.state = renderStateContent(await deriveState(basePath));
   }
+  if (wanted.has("rework")) result.rework = readReworkBriefs();
   if (wanted.has("project")) result.project = queryProject();
   if (wanted.has("requirements")) {
     const requirements = queryRequirements();

@@ -69,3 +69,21 @@ describe('initProjectWorkflowState', () => {
     }
   });
 });
+
+for (const layout of ['.gsd-worktrees', '.gsd/worktrees']) {
+  test(`initializes canonical authority from ${layout} without a second database`, async () => {
+    const dir = makeTempProject();
+    const worktree = join(dir, layout, 'M001');
+    mkdirSync(worktree, { recursive: true });
+    try {
+      const result = await initProjectWorkflowState(worktree);
+      assert.equal(result.ok, true, result.reason);
+      assert.equal(result.gsdDir, join(dir, '.gsd'));
+      assert.equal(result.dbPath, join(dir, '.gsd', 'gsd.db'));
+      assert.equal(existsSync(join(worktree, '.gsd', 'gsd.db')), false);
+      assert.equal((await initProjectWorkflowState(worktree)).created, false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}

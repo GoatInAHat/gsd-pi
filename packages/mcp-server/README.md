@@ -365,3 +365,31 @@ Remote secrets pushed by `secure_env_collect` to Vercel or Convex are not hydrat
 ## License
 
 MIT
+
+## Portable workflow retries and readback
+
+Workflow mutations advertise an optional `idempotencyKey` argument so any MCP
+client can use them without private transport metadata. Persist a unique key per
+logical mutation, reuse it with the same input after timeouts/disconnects, and use
+a new key for a different mutation. Changed input with the same key is rejected
+by the existing domain-operation journal; retries do not create a second effect.
+Keys are scoped to the project and canonical tool (aliases share that scope).
+Do not derive keys from a request counter that restarts in each client session.
+
+Existing request `_meta["io.opengsd/idempotency-key"]` and
+`_meta["claudecode/toolUseId"]` remain supported. A public key conflicting with an
+explicit private key is rejected. Reserved Claude transport keys remain forbidden
+as caller keys. Native Pi tool-call identity remains host-owned. A public replay
+key grants no authority and does not bypass workflow gates or revision fencing.
+
+For example, pass `idempotencyKey: "review-42-rework-1"` alongside the ordinary
+`gsd_rework_brief_save` arguments. Then call `gsd_query` with the same absolute
+`projectDir` and `query: "rework"` to retrieve saved brief IDs, scope, timestamps,
+and all findings (including advisory and resolved findings). This explicit query
+reads the database only and fails when it is unavailable; it never substitutes an
+empty projection result. The default `all` query is unchanged.
+
+`gsd_project_init` is inherently idempotent and needs no key. It initializes the
+canonical owning-project workflow database, including when given a GSD worktree,
+and reports that authority's `gsdDir` and `dbPath` rather than creating a second
+worktree-local authority. Always pass the project path when using a shared server.
