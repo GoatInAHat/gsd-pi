@@ -31,9 +31,14 @@ test('generic MCP client initializes, plans, saves, reads and safely replays', a
     };
     const listed = await client.listTools();
     assert.ok(listed.tools.find((t) => t.name === 'gsd_plan_milestone')!.inputSchema.properties!.idempotencyKey);
+    assert.equal((await call('gsd_query', { query: 'rework' })).isError, true);
     ok(await call('gsd_project_init', {}));
     assert.equal(json(await call('gsd_project_init', {})).created, false);
-    const plan = { milestoneId: 'M001', title: 'Portable MCP', vision: 'Replay-safe planning', slices: [] };
+    const plan = { milestoneId: 'M001', title: 'Portable MCP', vision: 'Replay-safe planning', slices: [{
+      sliceId: 'S01', title: 'Replay proof', risk: 'low', depends: [], demo: 'One durable effect',
+      goal: 'Prove client-owned retry identity', successCriteria: 'Replay does not duplicate',
+      proofLevel: 'integration', integrationClosure: 'Real MCP to workflow DB', observabilityImpact: 'Readback and ledger',
+    }] };
     assert.equal((await call('gsd_plan_milestone', plan)).isError, true);
     assert.equal((await call('gsd_plan_milestone', { ...plan, idempotencyKey: ' ' })).isError, true);
     const planned = ok(await call('gsd_plan_milestone', { ...plan, idempotencyKey: 'plan-1' }));
