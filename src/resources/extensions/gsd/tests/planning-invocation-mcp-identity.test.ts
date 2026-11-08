@@ -117,7 +117,9 @@ test("MCP canonical and alias planning calls replay one explicit private request
     registerWorkflowTools(server as Parameters<typeof registerWorkflowTools>[0]);
     const canonical = tool(server, "gsd_plan_milestone");
     const alias = tool(server, "gsd_milestone_plan");
-    assert.equal(canonical.params["idempotencyKey"], undefined);
+    assert.ok(canonical.params["idempotencyKey"], "generic clients must be able to supply replay identity");
+    assert.ok(alias.params["idempotencyKey"], "aliases must expose the same replay contract");
+    assert.equal(canonical.params["actorId"], undefined);
     assert.equal(canonical.params["expectedRevision"], undefined);
 
     const meta = { "io.opengsd/idempotency-key": "planning-retry-42" };
@@ -227,7 +229,7 @@ test("native and packaged MCP identities allow independent planning writes in th
   }
 });
 
-test("MCP planning without explicit private request identity fails before mutation", async () => {
+test("MCP planning without replay-stable request identity fails before mutation", async () => {
   const base = makeBase();
   try {
     const server = makeServer();
@@ -240,7 +242,7 @@ test("MCP planning without explicit private request identity fails before mutati
     });
 
     assert.equal(result["isError"], true);
-    assert.match(JSON.stringify(result), /requires replay-stable private request metadata/i);
+    assert.match(JSON.stringify(result), /requires replay-stable idempotencyKey or private request metadata/i);
     assert.deepEqual(operations(), [cutoverOperation()], "the tool must not commit any operation");
   } finally {
     cleanup(base);
@@ -263,7 +265,7 @@ test("MCP planning rejects malformed explicit identity instead of falling back t
         },
       });
       assert.equal(result["isError"], true);
-      assert.match(JSON.stringify(result), /requires replay-stable private request metadata/i);
+      assert.match(JSON.stringify(result), /requires replay-stable idempotencyKey or private request metadata/i);
     }
     assert.deepEqual(operations(), [cutoverOperation()], "the tool must not commit any operation");
   } finally {

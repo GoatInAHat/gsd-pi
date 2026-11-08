@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -17,7 +17,7 @@ function makeParentRepo(): string {
   execFileSync("git", ["init"], { cwd: parent, stdio: "ignore" });
   execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: parent });
   execFileSync("git", ["config", "user.name", "Test"], { cwd: parent });
-  return parent;
+  return realpathSync(parent);
 }
 
 test("resolveProjectRoot prefers nearest bootstrapped .gsd before parent git root", () => {
@@ -108,4 +108,42 @@ test("resolveProjectRoot keeps the nearest bootstrapped .gsd when the only git r
   assert.equal(resolveProjectRoot(src), foo);
   assert.equal(gsdRoot(src), join(foo, ".gsd"));
   assert.equal(resolveProjectRoot(other), other, "the home folder is never adopted as a project root");
+});
+
+
+test("symlink resolution follows physical project boundaries, not the link's parent repository", (t) => {
+  const fixture = realpathSync(mkdtempSync(join(tmpdir(), "gsd-root-symlink-")));
+  t.after(() => rmSync(fixture, { recursive: true, force: true }));
+  const host = join(fixture, "host");
+  const owner = join(fixture, "owner");
+  const nested = join(owner, "app");
+  const subdir = join(nested, "src");
+  mkdirSync(join(host, ".git"), { recursive: true });
+  mkdirSync(join(host, ".gsd"));
+  writeFileSync(join(host, ".gsd", "PREFERENCES.md"), "---\n---\n");
+  mkdirSync(join(owner, ".git"), { recursive: true });
+  mkdirSync(subdir, { recursive: true });
+  const link = join(host, "linked-src");
+  symlinkSync(subdir, link, "junction");
+
+  assert.equal(resolveProjectRoot(link), owner, "do not adopt the link's lexical repository");
+  mkdirSync(join(nested, ".gsd"));
+  writeFileSync(join(nested, ".gsd", "PREFERENCES.md"), "---\n---\n");
+  assert.equal(resolveProjectRoot(link), nested, "keep the nearest bootstrapped physical project");
+  mkdirSync(join(subdir, ".git"));
+  assert.equal(resolveProjectRoot(link), subdir, "do not cross a nested git boundary");
+});
+
+test("a symlink outside git does not adopt its lexical parent's project", (t) => {
+  const fixture = realpathSync(mkdtempSync(join(tmpdir(), "gsd-root-symlink-no-git-")));
+  t.after(() => rmSync(fixture, { recursive: true, force: true }));
+  const host = join(fixture, "host");
+  const target = join(fixture, "target");
+  mkdirSync(join(host, ".git"), { recursive: true });
+  mkdirSync(join(host, ".gsd"));
+  writeFileSync(join(host, ".gsd", "PREFERENCES.md"), "---\n---\n");
+  mkdirSync(target);
+  const link = join(host, "link");
+  symlinkSync(target, link, "junction");
+  assert.equal(realpathSync(resolveProjectRoot(link)), target);
 });

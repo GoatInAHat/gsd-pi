@@ -723,7 +723,7 @@ test("gsd_resolve_blocker does not resolve the escalation for a request with no 
 
   const result: ToolResult = await tool.handler({ projectDir, response: "accept" }, {});
   assert.equal(result.isError, true);
-  assert.match(result.content[0]!.text, /requires replay-stable private request metadata/);
+  assert.match(result.content[0]!.text, /requires replay-stable idempotencyKey or private request metadata/);
 
   assertEscalationStillOpen(projectDir);
 });
