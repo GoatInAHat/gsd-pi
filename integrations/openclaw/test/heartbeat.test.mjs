@@ -206,6 +206,7 @@ test('notifications stay passive on hosts without a heartbeat wake', async (t) =
   const { default: plugin } = await import('../dist/index.js');
   const { ProjectSync } = await import('../dist/sync.js');
   const { ProjectEvents } = await import('../dist/discovery.js');
+  const hooks = new Map();
   const notifications = [];
   const warnings = [];
   const failures = [];
@@ -217,7 +218,7 @@ test('notifications stay passive on hosts without a heartbeat wake', async (t) =
   t.mock.method(ProjectEvents.prototype, 'start', () => {});
   t.mock.method(ProjectEvents.prototype, 'add', async () => {});
   t.mock.method(ProjectEvents.prototype, 'stop', async () => {});
-  t.mock.method(ProjectSync.prototype, 'snapshots', () => []);
+  t.mock.method(ProjectSync.prototype, 'snapshots', () => [{ projectDir: '/fixture', status: 'running' }]);
   t.mock.method(ProjectSync.prototype, 'restore', async function () {
     this.host.notify('fixture-key', 'fixture fact', '/fixture');
     return [];
@@ -225,7 +226,7 @@ test('notifications stay passive on hosts without a heartbeat wake', async (t) =
   plugin.register({
     config: cfg, logger: { warn: (message) => warnings.push(message) },
     registerService: (value) => { if (value.id === 'gsd-project-sync') service = value; },
-    on() {},
+    on: (name, handler) => hooks.set(name, handler),
     registerHttpRoute() {}, registerControlUiDescriptor() {}, registerGatewayMethod() {},
     runtime: {
       agent: { resolveAgentWorkspaceDir: () => '/workspace', session: { listSessionEntries: () => [] } },
@@ -235,7 +236,13 @@ test('notifications stay passive on hosts without a heartbeat wake', async (t) =
   t.after(() => service.stop());
   service.start({ config: cfg, serviceHealth: { reportFailure: (error) => failures.push(error), clearFailure() {} } });
   await delay(0);
+  // The plugin's part ends at the queue: one replaceable event per project for the
+  // destination. Which turns read passive events is host behavior.
   assert.deepEqual(notifications, [{ text: 'fixture fact', sessionKey: oversight, contextKey: 'fixture-key', replace: true }]);
   assert.deepEqual(warnings, []);
   assert.deepEqual(failures, []);
+  // Converted proactive automations in the destination still get current project facts.
+  const contribute = hooks.get('heartbeat_prompt_contribution');
+  assert.deepEqual(JSON.parse(contribute({ sessionKey: oversight }).appendContext).projects.map((p) => p.projectDir), ['/fixture']);
+  assert.equal(contribute({ sessionKey: 'agent:main:main' }), undefined);
 });

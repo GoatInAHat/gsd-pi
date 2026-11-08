@@ -100,20 +100,25 @@ binding is fabricated. Archived cards remain untouched. User notes outside the
 managed block are preserved.
 
 Heartbeat receives current project facts through a native context-contribution
-hook in the configured notification session. The default destination is
+hook in the configured notification session. OpenClaw 2026.11.5 and later run
+that hook only for the proactive automations Doctor creates or converts from
+heartbeat config, not for other scheduled jobs. The default destination is
 `plugins.entries["open-gsd-openclaw"].config.notificationSession`, then the
-system owner's legacy heartbeat session, then its main session. The owner follows `agents.defaults.systemAgent.agentId`;
-an ambiguous multi-agent configuration without an owner fails closed.
-Significant changes enqueue
-factual system events and, where the host still provides it, request a native
-heartbeat wake, after a successful Workboard write. OpenClaw 2026.11.5 and later
-have no heartbeat wake; the event stays passive and the destination session's
-next automation turn receives it as a pending session notice. With Workboard disabled, the adapter keeps observations only in
+system owner's legacy heartbeat session, then its main session. The owner
+follows `agents.defaults.systemAgent.agentId`; an ambiguous multi-agent
+configuration without an owner fails closed. Significant changes enqueue a
+factual system event for that destination after a successful Workboard write,
+replacing the project's previous unread event, and request a native heartbeat
+wake where the host still provides one. OpenClaw 2026.11.5 and later have no
+heartbeat wake, and their scheduled automation turns don't read passive events,
+so the event waits for the destination session's next ordinary turn. A session
+that only runs automations never reads it; the Workboard card still carries
+the status. With Workboard disabled, the adapter keeps observations only in
 memory and backfills cards when enabled again; it creates no replacement ledger.
 Memory-only observations do not survive Gateway restarts. Heartbeat enablement,
 delivery policy, and model availability remain OpenClaw settings.
 
-The optional default notification session and exact-project routes belong in plugin config:
+Optional default and exact-project routes belong in plugin config:
 
 ```json
 {
@@ -125,11 +130,11 @@ The optional default notification session and exact-project routes belong in plu
 ```
 
 These routes select the destination for that project's events and context only.
-Use the canonical selected checkout path; unrelated paths retain the native
-default notification destination. The agent is derived from the session key, not assumed to
-be main. Invalid or duplicate routes are rejected; removal takes effect on
-service restart. Routing does not change the destination's model or the native
-heartbeat model, delivery, enablement, or cadence.
+Use the canonical selected checkout path; unrelated paths retain the default
+notification destination. The agent is derived from the session key, not
+assumed to be main. Invalid or duplicate routes are rejected; removal takes
+effect on service restart. Routing does not change the destination's model or
+the native heartbeat model, delivery, enablement, or cadence.
 
 ## Execution binding and connection lifetime
 

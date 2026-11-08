@@ -41,7 +41,7 @@ const configSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    notificationSession: { type: "string", minLength: 1, description: "Default destination for factual status events and heartbeat context. Overrides the legacy agent heartbeat session; otherwise falls back to the agent main session." },
+    notificationSession: { type: "string", minLength: 1, description: "Default destination for factual status events and heartbeat context. Without it, the legacy agent heartbeat session is used, then the agent main session." },
     projectSessions: {
       type: "array",
       description: "Optional per-project destinations for factual status events and heartbeat context. Otherwise follows notificationSession, the legacy agent heartbeat session, or the agent main session.",
@@ -174,8 +174,8 @@ const gsdPluginEntry = definePluginEntry({
           notify: (key, text, projectDir) => {
             const { sessionKey, agentId } = routes.forProject(projectDir);
             if (api.runtime.system.enqueueSystemEvent(text, { sessionKey, contextKey: key, replace: true })) {
-              // OpenClaw 2026.11.5 retired heartbeat config and removed requestHeartbeat. There the
-              // event stays passive: the session's next automation turn receives it as a pending notice.
+              // OpenClaw 2026.11.5 removed requestHeartbeat. There the event stays passive until the
+              // destination session's next ordinary turn; scheduled automation turns don't read it.
               api.runtime.system.requestHeartbeat?.({ source: "other", intent: "event", reason: "gsd-project-changed", sessionKey, agentId });
             }
           },
