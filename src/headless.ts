@@ -33,6 +33,7 @@ import {
   FIRE_AND_FORGET_METHODS,
   IDLE_TIMEOUT_MS,
   NEW_MILESTONE_IDLE_TIMEOUT_MS,
+  resolveTaskIdleTimeoutMs,
   isInteractiveHeadlessTool,
   shouldArmHeadlessIdleTimeout,
   shouldRestartHeadlessRun,
@@ -676,7 +677,9 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
     ? NEW_MILESTONE_IDLE_TIMEOUT_MS
     : isAutoMode
       ? 0
-      : IDLE_TIMEOUT_MS
+      : isQuickCmd
+        ? IDLE_TIMEOUT_MS
+        : resolveTaskIdleTimeoutMs()
 
   function resetIdleTimer(): void {
     if (idleTimer) clearTimeout(idleTimer)

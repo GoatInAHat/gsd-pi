@@ -92,6 +92,20 @@ export const IDLE_TIMEOUT_MS = 15_000
 // between tool calls (e.g. after mkdir, before writing files). Use a
 // longer idle timeout to avoid killing the session prematurely (#808).
 export const NEW_MILESTONE_IDLE_TIMEOUT_MS = 120_000
+// Task runs (quick tasks and auto units) can spend far longer than 15s in a
+// single model prefill without emitting a tool event, especially on local or
+// slow providers. The 15s idle fallback exists for short extension-layer
+// commands that never enter the model loop, so it must not govern task runs.
+export const TASK_IDLE_TIMEOUT_MS = 120_000
+export const TASK_IDLE_TIMEOUT_ENV = 'GSD_HEADLESS_TASK_IDLE_TIMEOUT_MS'
+
+/** Task idle timeout, with an explicit escape hatch for slow local models. */
+export function resolveTaskIdleTimeoutMs(env: Record<string, string | undefined> = process.env): number {
+  const raw = env[TASK_IDLE_TIMEOUT_ENV]?.trim()
+  if (!raw || !/^\d+$/.test(raw)) return TASK_IDLE_TIMEOUT_MS
+  const parsed = Number.parseInt(raw, 10)
+  return parsed > 0 ? parsed : TASK_IDLE_TIMEOUT_MS
+}
 const INTERACTIVE_HEADLESS_TOOLS = new Set(['ask_user_questions', 'secure_env_collect'])
 
 // Delegates to the shared normalizer seam (engine-hook-contract.ts) instead of
