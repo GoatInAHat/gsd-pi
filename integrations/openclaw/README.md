@@ -101,8 +101,10 @@ managed block are preserved.
 
 Heartbeat receives current project facts through a native context-contribution
 hook in the configured notification session. OpenClaw 2026.11.5 and later run
-that hook only for the proactive automations Doctor creates or converts from
-heartbeat config, not for other scheduled jobs. The default destination is
+that hook only for receipt-owned proactive automation jobs: those Doctor creates
+or converts from heartbeat config, and the system owner's default proactive job
+from setup or agent creation. Other scheduled jobs don't get it.
+The default destination is
 `plugins.entries["open-gsd-openclaw"].config.notificationSession`, then the
 system owner's legacy heartbeat session, then its main session. The owner
 follows `agents.defaults.systemAgent.agentId`; an ambiguous multi-agent
@@ -111,12 +113,13 @@ factual system event for that destination after a successful Workboard write,
 replacing the project's previous unread event, and request a native heartbeat
 wake where the host still provides one. OpenClaw 2026.11.5 and later have no
 heartbeat wake, and their scheduled automation turns don't read passive events,
-so the event waits for the destination session's next ordinary turn. A session
-that only runs automations never reads it; the Workboard card still carries
-the status. With Workboard disabled, the adapter keeps observations only in
-memory and backfills cards when enabled again; it creates no replacement ledger.
-Memory-only observations do not survive Gateway restarts. Heartbeat enablement,
-delivery policy, and model availability remain OpenClaw settings.
+so the event waits for the destination session's next ordinary turn, which
+receives it as timestamped `System:` lines. A session that only runs automations
+never reads it; the Workboard card still carries the status. With Workboard
+disabled, the adapter keeps observations only in memory and backfills cards when
+enabled again; it creates no replacement ledger. Memory-only observations do not
+survive Gateway restarts. Heartbeat enablement, delivery policy, and model
+availability remain OpenClaw settings.
 
 Optional default and exact-project routes belong in plugin config:
 
