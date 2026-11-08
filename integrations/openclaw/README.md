@@ -105,8 +105,10 @@ hook in the configured notification session. The default destination is
 system owner's legacy heartbeat session, then its main session. The owner follows `agents.defaults.systemAgent.agentId`;
 an ambiguous multi-agent configuration without an owner fails closed.
 Significant changes enqueue
-factual system events and request a native heartbeat wake, after a successful
-Workboard write. With Workboard disabled, the adapter keeps observations only in
+factual system events and, where the host still provides it, request a native
+heartbeat wake, after a successful Workboard write. OpenClaw 2026.11.5 and later
+have no heartbeat wake; the event stays passive and the destination session's
+next automation turn receives it as a pending session notice. With Workboard disabled, the adapter keeps observations only in
 memory and backfills cards when enabled again; it creates no replacement ledger.
 Memory-only observations do not survive Gateway restarts. Heartbeat enablement,
 delivery policy, and model availability remain OpenClaw settings.

@@ -195,3 +195,47 @@ test('notification routing isolates project events and context and refreshes on 
   assert.equal(contribute({ sessionKey: oversight }), undefined);
   assert.deepEqual(JSON.parse(contribute({ sessionKey: heartbeat }).appendContext).projects.map(p => p.projectDir), ['/fixture', '/other']);
 });
+
+test('notifications stay passive on hosts without a heartbeat wake', async (t) => {
+  assert.ok(process.env.OPENCLAW_BIN, 'Set OPENCLAW_BIN to the isolated OpenClaw host');
+  const require = createRequire(await realpath(process.env.OPENCLAW_BIN));
+  const sdk = new Map(['plugin-entry', 'gateway-runtime', 'agent-scope-runtime', 'routing', 'tool-plugin']
+    .map((name) => [`openclaw/plugin-sdk/${name}`, require.resolve(`openclaw/plugin-sdk/${name}`)]));
+  const loader = registerHooks({ resolve(specifier, context, next) { return next(sdk.get(specifier) ?? specifier, context); } });
+  t.after(() => loader.deregister());
+  const { default: plugin } = await import('../dist/index.js');
+  const { ProjectSync } = await import('../dist/sync.js');
+  const { ProjectEvents } = await import('../dist/discovery.js');
+  const notifications = [];
+  const warnings = [];
+  const failures = [];
+  let service;
+  const oversight = 'agent:main:dashboard:oversight';
+  // OpenClaw 2026.11.5 retires agents.*.heartbeat and the runtime's requestHeartbeat.
+  const cfg = { agents: { defaults: { systemAgent: { agentId: 'main' } }, entries: { main: {} } },
+    plugins: { entries: { 'open-gsd-openclaw': { config: { notificationSession: oversight } } } } };
+  t.mock.method(ProjectEvents.prototype, 'start', () => {});
+  t.mock.method(ProjectEvents.prototype, 'add', async () => {});
+  t.mock.method(ProjectEvents.prototype, 'stop', async () => {});
+  t.mock.method(ProjectSync.prototype, 'snapshots', () => []);
+  t.mock.method(ProjectSync.prototype, 'restore', async function () {
+    this.host.notify('fixture-key', 'fixture fact', '/fixture');
+    return [];
+  });
+  plugin.register({
+    config: cfg, logger: { warn: (message) => warnings.push(message) },
+    registerService: (value) => { if (value.id === 'gsd-project-sync') service = value; },
+    on() {},
+    registerHttpRoute() {}, registerControlUiDescriptor() {}, registerGatewayMethod() {},
+    runtime: {
+      agent: { resolveAgentWorkspaceDir: () => '/workspace', session: { listSessionEntries: () => [] } },
+      system: { enqueueSystemEvent: (text, options) => { notifications.push({ text, ...options }); return true; } },
+    },
+  });
+  t.after(() => service.stop());
+  service.start({ config: cfg, serviceHealth: { reportFailure: (error) => failures.push(error), clearFailure() {} } });
+  await delay(0);
+  assert.deepEqual(notifications, [{ text: 'fixture fact', sessionKey: oversight, contextKey: 'fixture-key', replace: true }]);
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(failures, []);
+});

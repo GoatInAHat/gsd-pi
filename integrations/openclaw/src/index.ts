@@ -174,7 +174,9 @@ const gsdPluginEntry = definePluginEntry({
           notify: (key, text, projectDir) => {
             const { sessionKey, agentId } = routes.forProject(projectDir);
             if (api.runtime.system.enqueueSystemEvent(text, { sessionKey, contextKey: key, replace: true })) {
-              api.runtime.system.requestHeartbeat({ source: "other", intent: "event", reason: "gsd-project-changed", sessionKey, agentId });
+              // OpenClaw 2026.11.5 retired heartbeat config and removed requestHeartbeat. There the
+              // event stays passive: the session's next automation turn receives it as a pending notice.
+              api.runtime.system.requestHeartbeat?.({ source: "other", intent: "event", reason: "gsd-project-changed", sessionKey, agentId });
             }
           },
         }, env, fail, () => context.serviceHealth?.clearFailure());
