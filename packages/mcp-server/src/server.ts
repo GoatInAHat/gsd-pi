@@ -278,6 +278,7 @@ const QUERY_FIELDS = {
   project: ['project'] as const,
   requirements: ['requirements'] as const,
   milestones: ['milestones'] as const,
+  rework: ['rework'] as const,
 } as const;
 
 type QueryCategory = keyof typeof QUERY_FIELDS;
@@ -328,6 +329,7 @@ async function readProjectState(projectDir: string, query: string | undefined): 
     const fromDb = await readProjectQueryViaBridge(projectDir, QUERY_FIELDS[category]);
     if (fromDb !== null) return { ...result, ...fromDb };
   }
+  if (wanted.has('rework')) throw new Error('Rework readback requires the workflow database; no projection fallback is available.');
   result.readMetadata = { source: 'projection', authority: 'projection-fallback' };
 
   if (wanted.has('state')) {
@@ -1404,11 +1406,11 @@ export async function createMcpServer(
   // -----------------------------------------------------------------------
   server.tool(
     'gsd_query',
-    'Query GSD project state. By default returns the state, project and requirements documents and the milestone listing with status, plus readMetadata provenance. Pass `query` to narrow the response (accepted: "state"/"status", "project", "requirements", "milestones", "all"). Does not require an active session — reads the workflow database (the workflow authority) when the GSD runtime is available, .gsd/ projections otherwise.',
+    'Query GSD project state. By default returns the state, project and requirements documents and the milestone listing with status, plus readMetadata provenance. Pass `query` to narrow the response (accepted: "state"/"status", "project", "requirements", "milestones", "rework", "all"). Rework returns saved briefs with all findings from the database only. Does not require an active session — reads the workflow database (the workflow authority) when the GSD runtime is available, .gsd/ projections otherwise.',
     {
       projectDir: z.string().describe('Absolute path to the project directory'),
       query: z
-        .enum(['all', 'state', 'status', 'project', 'requirements', 'milestones'])
+        .enum(['all', 'state', 'status', 'project', 'requirements', 'milestones', 'rework'])
         .optional()
         .describe('Narrow the response to a single field (default: "all")'),
     },

@@ -180,9 +180,18 @@ function resolveProjectRootFromPath(path: string): string {
     // project root: without a git boundary the walk adopts an unrelated
     // ancestor project, and init then runs `git init` and writes setup files
     // in a folder the user never opened.
-    const gitRoot = resolveGitWorkingTreeRoot(path);
+    // Parent traversal must start from the physical directory: resolving `..`
+    // from a symlink walks the link's ancestors, not the target's repository.
+    // Keep the recognized lexical worktree layouts above intact (external .gsd
+    // state may itself be symlinked), just as probeGsdRoot does in paths.ts.
+    let searchPath = path;
+    try { searchPath = realpathSync.native(path); } catch { /* retain missing-path fallback */ }
+    if (searchPath !== path && isGsdWorktreePath(searchPath)) {
+      return resolveProjectRootFromPath(searchPath);
+    }
+    const gitRoot = resolveGitWorkingTreeRoot(searchPath);
     if (!gitRoot) return path;
-    const nearest = resolveNearestBootstrappedGsdRoot(path);
+    const nearest = resolveNearestBootstrappedGsdRoot(searchPath);
     if (nearest) return nearest;
     const externalStateParent = normalizeWorktreePathForCompare(resolve(gsdHome(), ".."));
     return normalizeWorktreePathForCompare(gitRoot) === externalStateParent ? path : gitRoot;

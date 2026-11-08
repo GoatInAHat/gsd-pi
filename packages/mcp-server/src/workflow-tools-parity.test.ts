@@ -652,7 +652,7 @@ describe("ADR-008 parity: shared workflow write tools native vs MCP", () => {
       assert.equal(outputText(replay), "Saved decision D001", "MCP replay must return the original id");
       const unkeyed = await tool.handler(args, {});
       assert.equal((unkeyed as { isError?: boolean }).isError, true, "an MCP mutation without a stable key must be refused");
-      assert.match(outputText(unkeyed), /requires replay-stable private request metadata/);
+      assert.match(outputText(unkeyed), /requires replay-stable idempotencyKey or private request metadata/);
       assert.deepEqual(counts(), { operations: 1, decisions: 1, projectionWork: 1 });
     } finally {
       cleanup(mcpBase);
